@@ -1129,7 +1129,7 @@
           "type": "array"
         },
         "output_reservation_tokens": {
-          "default": 512,
+          "default": 0,
           "title": "Output Reservation Tokens",
           "type": "integer"
         },
@@ -2205,6 +2205,137 @@
       "title": "RelatedFile",
       "type": "object"
     },
+    "ResponseBudgetBinding": {
+      "properties": {
+        "bound_at": {
+          "title": "Bound At",
+          "type": "string"
+        },
+        "capacity_tokens": {
+          "title": "Capacity Tokens",
+          "type": "integer"
+        },
+        "margin_tokens": {
+          "title": "Margin Tokens",
+          "type": "integer"
+        },
+        "model_identity": {
+          "title": "Model Identity",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "total_tokens": {
+          "title": "Total Tokens",
+          "type": "integer"
+        },
+        "version": {
+          "default": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total_tokens",
+        "capacity_tokens",
+        "margin_tokens",
+        "source",
+        "model_identity",
+        "bound_at"
+      ],
+      "title": "ResponseBudgetBinding",
+      "type": "object"
+    },
+    "ResponseBudgetPolicy": {
+      "properties": {
+        "mode": {
+          "default": "workbench_auto",
+          "enum": [
+            "explicit",
+            "publisher",
+            "workbench_auto"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "source": {
+          "default": "Workbench Auto",
+          "title": "Source",
+          "type": "string"
+        },
+        "thinking": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thinking"
+        },
+        "total_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total Tokens"
+        },
+        "version": {
+          "default": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "title": "ResponseBudgetPolicy",
+      "type": "object"
+    },
+    "ResponseRecipeOrigin": {
+      "properties": {
+        "card_sha256": {
+          "title": "Card Sha256",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "recipe_id": {
+          "title": "Recipe Id",
+          "type": "string"
+        },
+        "section": {
+          "title": "Section",
+          "type": "string"
+        },
+        "source_repo_id": {
+          "title": "Source Repo Id",
+          "type": "string"
+        },
+        "source_revision": {
+          "title": "Source Revision",
+          "type": "string"
+        }
+      },
+      "required": [
+        "recipe_id",
+        "name",
+        "source_repo_id",
+        "source_revision",
+        "card_sha256",
+        "section"
+      ],
+      "title": "ResponseRecipeOrigin",
+      "type": "object"
+    },
     "ReviewConfiguration": {
       "additionalProperties": false,
       "properties": {
@@ -2355,12 +2486,45 @@
           "title": "Applied",
           "type": "object"
         },
+        "output_budget_binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResponseBudgetBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "output_budget_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResponseBudgetPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "overridden": {
           "items": {
             "$ref": "#/$defs/SettingNote"
           },
           "title": "Overridden",
           "type": "array"
+        },
+        "recipe_origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResponseRecipeOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "requested": {
           "additionalProperties": true,
@@ -2401,6 +2565,18 @@
     },
     "SettingsBags": {
       "properties": {
+        "accepted_loading_identity": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Accepted Loading Identity"
+        },
         "agent": {
           "$ref": "#/$defs/SettingsBag"
         },

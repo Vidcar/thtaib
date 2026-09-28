@@ -52,7 +52,7 @@ Requested, selected, transmitted, loaded, applied, overridden, unsupported and u
 
 - **WHEN** Chat selects a model configuration
 - **THEN** its response defaults and explicit conversation overrides resolve through the shared backend with instruction composition from the agent/project/chat owners
-- **AND** Apply remains local, Save to model explicitly updates the configuration, and neither action rewrites a queued turn or historical loaded snapshot.
+- **AND** Thinking and context adjustments remain chat-local, only Models saves a named setup, and no adjustment rewrites a queued turn or historical loaded snapshot.
 
 ### Requirement: MOD-004 - Track real deployments
 
@@ -279,7 +279,7 @@ Reasoning replay capability SHALL be distinct from preservation of earlier user 
 - **THEN** that setting SHALL NOT erase reasoning needed to continue the current tool cycle or silently change its history-preservation policy.
 
 
-The product SHALL offer explicit Balanced (medium effort, 2048 thinking tokens, 8192 total output tokens) and Deep (extra-high effort, 8192 thinking tokens, 16384 total output tokens) presets separate from publisher recipes. Balanced SHALL remain an available explicit model-configuration choice. Ordinary new Chat use SHALL start from its selected model's saved defaults rather than silently replacing them with a response preset. Unsupported independent thinking limits SHALL be labelled as response-limit-only; startup settings and saved publisher recipes SHALL remain distinct.
+The product SHALL use compatible pinned-card recommendations and template-effective Thinking choices without invented response bundles. Explicit total-output limits remain unchanged; otherwise a compatible publisher total-output recommendation wins. Absent that, versioned Workbench Auto guidance reserves half the usable context when Thinking is enabled or unknown, or one quarter when disabled, after the existing eight-percent margin. The allowance includes Thinking plus answer and SHALL NOT promise an answer length. Admission freezes the policy, and each execution role records its numeric allowance once on binding to verified loaded capacity. Wire requests, replay and compaction use that recorded allowance; an incompatible later capacity requires deliberate recovery.
 
 #### Scenario: Duplicate reasoning representation
 - **WHEN** one reasoning string exists in both native content and additional metadata
@@ -309,7 +309,7 @@ Reusable probes SHALL exercise shared-adapter streaming, a harmless real tool ro
 
 ### Requirement: MOD-021 - Report known defaults and their source
 
-Model controls SHALL show the effective value and source when configuration, server properties or a recognized selected-template default establishes it. Omitted request values MUST remain omitted unless explicitly overridden. Configured, transmitted, observed and template-derived facts MUST remain distinguishable. Unknown defaults remain unknown. Following a configuration default, using the model default and choosing explicit None SHALL remain distinct operations. Each available default-following action SHALL name its actual target and expose its known resolved value rather than saying Inherited.
+Model controls SHALL show the effective value and source when configuration, server properties or a recognized selected-template default establishes it. Omitted request values MUST remain omitted unless explicitly overridden or a frozen automatic output policy supplies its once-recorded allowance. Configured, transmitted, observed and template-derived facts MUST remain distinguishable. Unknown defaults remain unknown. Following a configuration default, using the model default and choosing explicit None SHALL remain distinct operations. Each available default-following action SHALL name its actual target and expose its known resolved value rather than saying Inherited.
 
 #### Scenario: Known thinking default
 - **WHEN** the selected template establishes Xhigh as the omitted effort default
@@ -322,12 +322,12 @@ Model controls SHALL show the effective value and source when configuration, ser
 
 ### Requirement: MOD-022 - Apply managed configuration changes safely
 
-Idle managed configurations SHALL support validated reconfiguration with expected-version and retained-history compatibility checks. Startup edits SHALL preserve the current launch snapshot until an explicit safe reload; active, queued, waiting, cancelling, Lab and helper consumers SHALL block a configuration binding change with named reasons. An explicit response-only configuration switch MAY update the existing deployment binding without reloading only when the selected configuration and requested operation match its frozen launch identity, the owned process still matches and fresh runtime observations confirm health. Automatic listen ports SHALL use the established configuration identity normalization; the actual frozen startup and process identity SHALL remain unchanged. Saved publisher recipes SHALL not be repurposed as product presets.
+Idle managed configurations SHALL support validated reconfiguration with expected-version and retained-history compatibility checks. Startup edits SHALL preserve the current launch snapshot until an explicit safe reload; active, queued, waiting, cancelling, Lab and helper consumers SHALL block a configuration binding change with named reasons. Response-only configuration selection SHALL reuse a compatible healthy child without rewriting its originating setup identity; each accepted request resolves its selected setup independently. Saving or preparing a startup draft SHALL remain possible during active work. Only loading/reloading changes require existing resource admission and consumer protections. Automatic listen ports SHALL use the established configuration identity normalization; the actual frozen startup and process identity SHALL remain unchanged. Saved publisher recipes SHALL not be repurposed as product presets.
 
-Capacity-driven eviction of an idle model instance MAY occur between calls, including during an alternate-model helper handoff, provided no in-flight inference request is interrupted and the next call can reload its exact selected configuration. Adding a separately frozen queued preset SHALL NOT be treated as an edit to an unchanged existing preset merely because a section separator moved; an actual edit to a referenced preset SHALL retain its active/queued-consumer guard. Automatic child ports SHALL be allocated and checked at launch; fixed-port conflicts fail before spawn. Ownership and observed readiness SHALL precede committing loaded values. Failure SHALL preserve prior and attempted configurations, attempt at most one safe restoration and report truthful stopped/failed state; restart SHALL reconcile interrupted changes. Connected endpoints SHALL not grant reload authority.
+Capacity-driven eviction of an idle model instance MAY occur between calls, including during an alternate-model helper handoff, provided no in-flight inference request is interrupted and the next call can reload its exact selected configuration. Adding a separately frozen queued preset SHALL NOT be treated as an edit to an unchanged existing preset merely because a section separator moved; a later save SHALL preserve existing accepted snapshots while future inputs resolve the new revision. Automatic child ports SHALL be allocated and checked at launch; fixed-port conflicts fail before spawn. Ownership and observed readiness SHALL precede committing loaded values. Failure SHALL preserve prior and attempted configurations, attempt at most one safe restoration and report truthful stopped/failed state; restart SHALL reconcile interrupted changes. Connected endpoints SHALL not grant reload authority.
 
 #### Scenario: Response-only Balanced selection
-- **WHEN** an idle healthy owned model selects a separate saved Balanced configuration with the same frozen launch identity
+- **WHEN** an idle healthy owned model selects a separate named saved configuration with the same frozen launch identity
 - **THEN** the same deployment and process SHALL use that configuration's response values for the next request without stop or start
 - **AND** actual startup, model files, publisher recipe configuration and its provenance SHALL remain unchanged.
 
@@ -552,7 +552,7 @@ Automatic capability checks SHALL retain their outcomes as setup evidence withou
 
 ### Requirement: MOD-035 - Bound managed model residency
 
-The application SHALL save one positive maximum-loaded-model count for managed llama.cpp configurations. A fresh installation SHALL default to one. Every loaded launch configuration SHALL consume one slot, even when two configurations use the same weights; the count SHALL remain distinct from each model's parallel request slots. Connected endpoints SHALL remain outside this owned count. A different or unloaded requested model SHALL load on explicit idle model/configuration selection, idle fixed-model agent selection, or the first accepted input that needs that selection. A selection made during active work SHALL stage the next submission and SHALL load only through that input's safe admission; it MUST NOT warm merely because a draft changed. Re-selecting the exact healthy loaded configuration SHALL not request another model start. Successive turns on an already loaded configuration SHALL avoid reading the complete weight file again while still checking its saved identity; an evicted configuration SHALL undergo full bundle verification before it loads again. Application launch, chat restoration, passive status reads and navigation SHALL NOT warm or load a model. Loading SHALL show pending, loaded or failed state, and MUST NOT silently substitute weights, quantization, device or settings.
+The application SHALL save one positive maximum-loaded-model count for managed llama.cpp configurations. A fresh installation SHALL default to one. Each distinct loaded runtime/artifact/loading identity SHALL consume one residency slot; response-only saved setups sharing that identity SHALL reuse the child; the count SHALL remain distinct from each model's parallel request slots. Connected endpoints SHALL remain outside this owned count. A different or unloaded requested model SHALL load on explicit idle model/configuration selection, idle fixed-model agent selection, or the first accepted input that needs that selection. A selection made during active work SHALL stage the next submission and SHALL load only through that input's safe admission; it MUST NOT warm merely because a draft changed. Re-selecting the exact healthy loaded configuration SHALL not request another model start. Successive turns on an already loaded configuration SHALL avoid reading the complete weight file again while still checking its saved identity; an evicted configuration SHALL undergo full bundle verification before it loads again. Application launch, chat restoration, passive status reads and navigation SHALL NOT warm or load a model. Loading SHALL show pending, loaded or failed state, and MUST NOT silently substitute weights, quantization, device or settings.
 
 #### Scenario: One-slot model switch
 - **WHEN** the limit is one and a different configuration is explicitly selected while idle
@@ -603,18 +603,35 @@ For supported timing streams, inference SHALL retain actual cached and newly pro
 
 ### Requirement: MOD-036 - Estimate model hardware use without restricting user choice
 
-Choose options and initial model configuration SHALL offer a condensed advisory hardware estimate driven by the complete selected model files and available metadata, supported KV precision/location, context and detected GPU/RAM memory. It SHALL show known model/disk size, hardware total/available memory and freshness, estimated weights, KV cache and runtime overhead, a qualified approximate context marker, and likely GPU/RAM placement where calculable. An upper-bound context marker that excludes unknown overhead SHALL NOT claim verified fit. Weight/layer offloading and KV-cache placement in RAM SHALL remain distinguishable. Unknown sizes, unsupported architecture calculations or unavailable hardware SHALL remain unknown with inspectable assumptions; filename quantization hints or disk size alone MUST NOT be reported as verified VRAM fit. Per-device memory SHALL NOT silently be treated as one pooled budget.
+Choose, import review, Models and Chat context candidates SHALL consume the shared non-disruptive hardware preview. Installed-model allocation calculation SHALL use a bounded subprocess compiled against the exact pinned llama.cpp native APIs. It SHALL match server preprocessing for four default parallel slots, unified context, embeddings and speculation; measure target, selected projector and draft/MTP together; and count shared MTP weights once. The helper protocol, digest and native compatibility SHALL be recorded in the runtime manifest. It SHALL NOT start or stop a deployment or replace the running inference process.
 
-Estimates SHALL be labelled approximate and remain separate from observed native runtime memory, applied settings and actual admission/load outcomes. After download/loading, available verified metadata and runtime fit information SHALL refine the estimate without silently overwriting the chosen settings. Alternative contexts, quantizations or KV options SHALL be comparable but SHALL require deliberate selection. Chosen context, precision and placement SHALL use the same canonical configuration/launch contract as Models, preserving requested versus applied facts.
+Results SHALL expose per-device estimates, evaluated placement, shared context, per-request capacity, slots, plan identity, calculation time and complete/partial/unavailable status. Native context allocations SHALL be labelled Cache and model state; projector totals SHALL NOT invent an internal breakdown. Requested Auto values remain distinct from evaluated results. Dynamic driver, host cache and operating-system costs SHALL remain unknown or separately budgeted. Missing facts MUST NOT become zero or a green fits claim. Observed memory SHALL be labelled Observed, timestamped and associated only with the exact loaded identity; cached estimates retain their original time.
 
-An estimated shortage or unknown fit MUST NOT disable saving, downloading or loading a supported valid configuration, and MUST NOT silently reduce context, precision or selected placement. Actual invalid file/configuration/permission conditions SHALL retain their established validation. Actual load failures SHALL identify the attempted configuration, preserve chosen settings and provide adjustment/recovery.
+Remote discovery SHALL retain bounded revision/file metadata estimates with exact shards/projector selection and explicit unknowns until installed native measurement is available. Ignored byte ranges SHALL fail before body consumption. Predictions SHALL remain advisory, preserve settings and downloaded weights, and never block valid Save, Download or Load merely because estimated memory is insufficient.
 
-Before import, dense cache calculations SHALL use verified scalar architecture metadata and native quantization block sizes; unsupported hybrid/sliding-window/MoE/MLA/multimodal/layout components and compute overhead SHALL remain unknown. Explicit layer-count placement SHALL remain unknown without native tensor placement evidence and SHALL NOT supply a full-GPU context marker. Remote metadata inspection SHALL cap aggregate range bytes, requests and elapsed time and cache by immutable revision/file identity; ignored ranges SHALL fail before their body is consumed. After install, the pinned native no-model-allocation predictor SHALL be preferred independently of the bounded metadata result, with bounded process time/output/concurrency. Native Auto results SHALL be hypothetical evaluated values alongside unchanged selected values. When server automatic parallel slots are unresolved, the estimator SHALL explicitly record its evaluated one-slot setting, qualify full server allocation as unknown and suppress the native Auto context marker. Explicit parallel slots SHALL be passed through. Separate native device rows and actual loaded observations SHALL remain inspectable; excluded projector/draft/driver allocations SHALL be qualified. Cached predictions SHALL retain their original calculation time.
+#### Scenario: Native target, vision and speculation parity
+- **WHEN** the selected plan includes a projector and shared MTP or a separate draft
+- **THEN** the helper measures all selected components using native allocation APIs with server-equivalent preprocessing
+- **AND** shared weights are counted once, the shared context pool is truthful and projector internals remain undisclosed.
+
+#### Scenario: Unavailable or timed-out measurement
+- **WHEN** helper compatibility, hardware facts or native measurement are unavailable or timeout
+- **THEN** the result is explicitly partial or unavailable with missing components and an actionable reason
+- **AND** existing inference continues without interruption and missing bytes do not establish a fit.
+
+#### Scenario: Candidate differs from the loaded plan
+- **WHEN** context, placement, artifacts or loading settings differ from the loaded identity
+- **THEN** candidate estimates and loaded observations remain separately labelled with their identities and times
+- **AND** stale observations cannot establish current candidate fit.
+
+#### Scenario: Runtime contradicts prediction
+- **WHEN** native loading reports a different actual allocation or fails
+- **THEN** actual observations and failure are authoritative, with the attempted candidate retained for adjustment.
 
 #### Scenario: Native helper defaults differ from automatic server slots
-- **WHEN** a configuration leaves parallel slots Automatic and the native helper predicts one sequence
-- **THEN** evaluated startup SHALL explicitly show one slot, requested startup SHALL stay unchanged and full server allocation SHALL remain unresolved
-- **AND** that incomplete prediction SHALL NOT establish a native Auto context marker or an exact launch-memory match.
+- **WHEN** a legacy helper cannot reproduce the selected native server slots and unified context
+- **THEN** its prediction SHALL remain partial or unavailable and SHALL NOT establish an exact launch-memory match
+- **AND** the pinned adapter SHALL evaluate server-equivalent slots and shared context before offering complete selected-component totals.
 
 #### Scenario: Native prediction can inspect an unsupported dense estimate
 - **WHEN** an installed model uses a hybrid architecture or has a directory exceeding the remote metadata budget, and the pinned native predictor is available
@@ -648,7 +665,7 @@ Before import, dense cache calculations SHALL use verified scalar architecture m
 
 ### Requirement: MOD-037 - Preview the selected model candidate faithfully
 
-Models readouts SHALL resolve the selected model, configuration and unsaved draft through the existing model-capable resolver boundary. Application-default editing SHALL remain access-only. Chat tuning preview and Apply SHALL use the same candidate, including removed overrides, and default labels SHALL use the correct parent/model value and source. Editing SHALL remain available during validation, while Apply SHALL require the latest matching valid result. Readiness SHALL use the resolver's exact selected live configuration identity and distinguish quantization/configuration labels.
+Models readouts SHALL resolve the selected model, configuration and unsaved draft through the existing model-capable resolver boundary. Application-default editing SHALL remain access-only. Chat context preview and Reload SHALL use the same candidate, including removed overrides, and default labels SHALL use the correct parent/model value and source. Editing SHALL remain available during validation, while context Reload SHALL require the latest matching valid result. Readiness SHALL use the resolver's exact selected live configuration identity and distinguish quantization/configuration labels.
 
 #### Scenario: Preview advanced startup edits
 - **WHEN** the selected configuration requests All GPU layers, memory fitting Off and q4_0 key precision, then edits and resets them
@@ -656,7 +673,7 @@ Models readouts SHALL resolve the selected model, configuration and unsaved draf
 
 #### Scenario: Preview completes out of order
 - **WHEN** typing changes the candidate while an earlier check completes
-- **THEN** editing stays uninterrupted and that earlier result cannot enable Apply for the newer candidate.
+- **THEN** editing stays uninterrupted and that earlier result cannot enable Reload for the newer candidate.
 
 ### Requirement: MOD-038 - Keep import choices and estimates truthful
 
@@ -669,3 +686,55 @@ Model import SHALL retain Find, Choose and Review/download stages; Back and fail
 #### Scenario: Incomplete estimate
 - **WHEN** device availability or overhead is unknown
 - **THEN** the estimate describes the unknown component without claiming a verified fit or blocking a valid download.
+
+### Requirement: MOD-039 - Share validated model controls and effective Thinking
+
+Model import, save, preview and execution SHALL use one definition of supported control domains, units, dependencies, named defaults, provenance and apply timing. Numeric inputs SHALL reject nonfinite values and enforce whole counts where required. Slider spans SHALL remain distinguishable from actual supported bounds. Normal controls SHALL use named Auto/Off/inheritance states, not raw sentinel numbers. Thinking SHALL offer only template-effective modes/levels and deduplicate aliases; unknown models SHALL remain usable with truthful unknown/default support. Invented generic Balanced/Deep response bundles SHALL be removed. Chat Thinking SHALL preserve explicit saved sampling choices; paired response recipes SHALL be deliberately selected in Models.
+
+#### Scenario: Same choice across boundaries
+- **WHEN** the same control is imported, saved, previewed and transmitted
+- **THEN** its domain, source and effective setting agree and an invalid value fails before disruptive loading.
+
+#### Scenario: Effective template levels
+- **WHEN** a template supports binary Thinking or aliases High to Extra high
+- **THEN** the normal control offers only effective distinct positions and no generic unsupported level.
+
+### Requirement: MOD-040 - Reuse native instances independently from response choices
+
+Native residency SHALL identify the exact runtime, weights, selected template/projector and normalized loading settings. Equivalent saved setups and response recipes SHALL reuse a compatible healthy instance; response defaults or setup ID SHALL NOT force another native child. Each accepted run SHALL resolve its own response values and SHALL NOT inherit another setup's response snapshot from that child. Save and record preparation SHALL remain possible while active work exists and SHALL NOT start or modify resident processes. Loading/replacement SHALL retain existing admission and ownership protections.
+
+#### Scenario: Same loading plan and different response recipes
+- **WHEN** two saved setups share one loading plan and differ in Thinking, sampling or output allowance
+- **THEN** they reuse the child while each request transmits its own frozen settings.
+
+#### Scenario: Prepare during generation
+- **WHEN** a future setup is saved/prepared during active generation
+- **THEN** preparation succeeds without replacing the active child's settings or process.
+
+### Requirement: MOD-041 - Resolve model-aware response allowances once
+
+Explicit saved/chat total-output allowances SHALL remain exact. Otherwise a compatible exact recipe/publisher total allowance SHALL be preferred; when absent, visible Workbench Auto SHALL select a finite allowance from the observed per-slot capacity and Thinking policy. Thinking and answer SHALL share this allowance; it SHALL NOT promise answer length or completion. Authored policy/source/version SHALL freeze at acceptance; each role SHALL atomically record its resulting numeric allowance and capacity provenance before its first model request, then reuse it for subsequent calls, retries and resumes. Wire limits, context guards and existing compaction SHALL agree without double reservation. Later incompatible capacity SHALL require recovery rather than recalculation or silent clamping.
+
+#### Scenario: Cold helper with automatic allowance
+- **WHEN** an accepted helper first binds to its exact cold model
+- **THEN** its frozen policy resolves once against loaded capacity before the model call and survives later setup edits.
+
+#### Scenario: Explicit limit cannot fit
+- **WHEN** the selected explicit allowance cannot coexist with necessary input and safety margin
+- **THEN** an actionable capacity/allowance conflict is shown without changing that explicit setting.
+
+### Requirement: MOD-042 - Preview complete selected native allocations
+
+Installed-model preview SHALL use the exact pinned runtime's native allocation APIs without loading model weights or disrupting inference. It SHALL account for selected target, projector and draft/MTP allocations, including shared MTP weights once, server slot/pool preprocessing and per-device placement. The result SHALL identify the selected plan, evaluated settings, effective context/slots, timestamp and completeness. Dynamic driver/operating-system/host-cache overhead SHALL remain unknown or separately budgeted. A failed selected component SHALL remain unknown/partial, never zero or a verified fit. Actual loaded observations SHALL match the exact residency identity and remain separately authoritative. Missing/unsupported/crashed/timed-out helpers SHALL leave inference usable.
+
+#### Scenario: Vision and MTP plan
+- **WHEN** an installed plan includes a projector and embedded MTP
+- **THEN** the preview includes their native device allocations without counting shared weights twice.
+
+#### Scenario: Concurrent context pool
+- **WHEN** four requests share unified KV
+- **THEN** the preview distinguishes the total pool and maximum per-chat capacity without promising four reserved full contexts.
+
+#### Scenario: Predictor failure
+- **WHEN** measurement fails or the adapter times out
+- **THEN** the result is partial/unavailable with its reason and the existing model remains running.

@@ -174,14 +174,15 @@ class EffectiveSetupResolverTests(unittest.TestCase):
         def resolve(*, selected=profile, overrides=None):
             return resolve_effective_setup(deployment=deployment, profile=selected, knowledge_refs=KnowledgeRefs(),
                 knowledge_versions=[], surface_system_prompt=None, default_system_prompt=DEFAULT_SYSTEM_PROMPT,
-                per_request_overrides=overrides)
+                per_request_overrides=overrides, inherit_deployment_settings=selected is not None)
 
-        for selected in (None, profile):
-            with self.subTest(source="deployment" if selected is None else "preset"):
-                with self.assertRaises(HarnessError) as raised:
-                    resolve(selected=selected)
-                self.assertEqual(raised.exception.code, "model_reasoning_effort_unsupported")
-                self.assertEqual(raised.exception.details["supported"], ["low", "medium", "xhigh"])
+        # A resident child's originating response snapshot is not an implicit
+        # selected setup. An explicitly selected invalid saved setup still fails.
+        self.assertNotIn("reasoning_effort", resolve(selected=None).bags.per_request.applied)
+        with self.assertRaises(HarnessError) as raised:
+            resolve(selected=profile)
+        self.assertEqual(raised.exception.code, "model_reasoning_effort_unsupported")
+        self.assertEqual(raised.exception.details["supported"], ["low", "medium", "xhigh"])
         for value in ("low", "medium", "xhigh", "high", "default"):
             with self.subTest(effort=value):
                 setup = resolve(overrides={"reasoning_effort": value})

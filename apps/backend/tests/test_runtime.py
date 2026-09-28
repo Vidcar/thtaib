@@ -221,12 +221,14 @@ class RuntimePinTests(unittest.TestCase):
             ManagedDeploymentRequest(bundle_id=job.bundle_id or "", auto_start=False)
         )
         self.assertNotIn("ctx_size", deployment.applied_startup)
-        self.assertEqual(deployment.applied_startup["n_gpu_layers"], -1)
-        self.assertEqual(deployment.applied_startup["flash_attn"], "on")
+        self.assertEqual(deployment.applied_startup["n_gpu_layers"], "auto")
+        self.assertEqual(deployment.applied_startup["flash_attn"], "auto")
+        self.assertEqual(deployment.applied_startup["parallel"], 4)
+        self.assertTrue(deployment.applied_startup["kv_unified"])
         args = startup_cli_args(deployment.applied_startup)
         self.assertNotIn("--ctx-size", args)
         flash_at = args.index("--flash-attn")
-        self.assertEqual(args[flash_at + 1], "on")
+        self.assertEqual(args[flash_at + 1], "auto")
         self.assertNotEqual(deployment.requested_startup, {"startup": {}})
 
     def test_pin_while_running_is_rejected_without_half_pin(self) -> None:

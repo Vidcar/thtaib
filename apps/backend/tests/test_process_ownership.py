@@ -213,6 +213,7 @@ class ProcessOwnershipTests(unittest.TestCase):
         self.assertIsNotNone(results[0].pid)
 
     def test_dead_launch_with_foreign_health_is_not_owned(self) -> None:
+        self.manager.pin_runtime(PinRuntimeRequest(local_executable=self._dying_script()))
         created = self.manager.create_managed(
             ManagedDeploymentRequest(
                 bundle_id=self.bundle_id,
@@ -222,7 +223,6 @@ class ProcessOwnershipTests(unittest.TestCase):
         )
         port = int(created.applied_startup["port"])
         self._occupy("127.0.0.1", port)
-        self.manager.pin_runtime(PinRuntimeRequest(local_executable=self._dying_script()))
         # Simulate a foreign listener winning the race after port preflight.
         # Ownership must still reject an endpoint answered by another process.
         with patch("workbench_backend.inference.deployments._port_available", return_value=True):

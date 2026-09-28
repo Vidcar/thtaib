@@ -103,6 +103,9 @@ class DeploymentService:
                 and not _python_fixture(Path(manifest.executable)))
 
     def create_managed(self, request: ManagedDeploymentRequest) -> Deployment:
+        if not request.auto_start:
+            with self.store.configuration_lock():
+                return self._create_managed_checked(request)
         with self.lifecycle.mutate(
             "create_managed",
             profile_ids={request.profile_id} if request.profile_id else set(),
@@ -399,19 +402,18 @@ class DeploymentService:
                 code="bundle_not_deployable",
                 status_code=409,
             )
-        requested_bags = resolve_bags(startup=deployment.requested_startup)
-        _require_valid_managed_startup(requested_bags.startup)
+        # Reload the frozen launch, retaining the defaults that actually applied
+        # when this historical record was prepared. Only the listen address is
+        # allocated again; a global default change is not a setup edit.
+        _require_valid_managed_startup(resolve_bags(startup=deployment.requested_startup).startup)
+        startup = deployment.settings.startup.model_copy(update={"applied": dict(deployment.applied_startup)}, deep=True)
+        _require_valid_managed_startup(startup)
         host, port, startup_overrides = self._allocate_listen(
-            requested_bags.startup.applied,
+            startup.applied,
             fixed=deployment.requested_startup.get("port") is not None,
         )
-        bags = resolve_bags(
-            startup=deployment.requested_startup,
-            per_request=deployment.settings.per_request.requested,
-            agent=deployment.settings.agent.requested,
-            startup_overrides=startup_overrides,
-            per_request_defaults=deployment.publisher_request_defaults,
-        )
+        startup.applied.update(startup_overrides)
+        bags = deployment.settings.model_copy(update={"startup": startup}, deep=True)
         _require_valid_managed_startup(bags.startup)
         endpoint = f"http://{host}:{port}/v1"
         if (bags.startup.applied != deployment.applied_startup or bags != deployment.settings

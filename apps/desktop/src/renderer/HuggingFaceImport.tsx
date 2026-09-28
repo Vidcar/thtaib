@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { api, request } from "./api";
+import { useEffect, useRef, useState } from "react";
+import { api } from "./api";
 import { formatBytes } from "./display";
 import { errorMessage } from "./errors";
 import { Help } from "./ModelControls";
@@ -7,6 +7,8 @@ import { Icon } from "./Icon";
 import { Notice } from "./Notice";
 import { presentVariant, variantFamilies } from "./modelVariantPresentation";
 import { ModelHardwareEstimate } from "./ModelHardwareEstimate";
+import { CompactSlider, SettingRow, SettingSection } from "./CompactControls";
+import { tokenLabel } from "./ModelControls";
 import type { ImportJob, ResponseRecipe } from "./types";
 import type { SchemaHubRepository } from "../generated/shared-contracts/openapi";
 import "./HuggingFaceImport.css";
@@ -19,6 +21,7 @@ type InspectedRepository = Omit<SchemaHubRepository, "response_recipes"> & {
 const recipeFields = new Set([
   "temperature", "top_p", "top_k", "min_p", "typical_p",
   "presence_penalty", "frequency_penalty", "repeat_penalty",
+  "max_tokens", "reasoning_budget_tokens",
 ]);
 
 function usableRecipe(value: unknown): ResponseRecipe | null {
@@ -56,9 +59,9 @@ export function HuggingFaceImport({ onStarted, active = true }: { onStarted: (jo
   const [query, setQuery] = useState("");
   const [step, setStep] = useState<0 | 1 | 2>(0);
   const [context, setContext] = useState("");
-  const [keyPrecision, setKeyPrecision] = useState("f16");
-  const [valuePrecision, setValuePrecision] = useState("f16");
-  const [kvOffload, setKvOffload] = useState(true);
+  const [keyPrecision, setKeyPrecision] = useState("");
+  const [valuePrecision, setValuePrecision] = useState("");
+  const [kvOffload, setKvOffload] = useState<boolean | null>(null);
   const [metadataContextMaximum, setMetadataContextMaximum] = useState<number | null>(null);
   const [results, setResults] = useState<Array<{ repo_id: string; downloads: number | null }>>([]);
   const [selectedRepo, setSelectedRepo] = useState("");
@@ -66,7 +69,7 @@ export function HuggingFaceImport({ onStarted, active = true }: { onStarted: (jo
   const [variant, setVariant] = useState("");
   const [projector, setProjector] = useState("");
   const [recipeIds, setRecipeIds] = useState<string[]>([]);
-  const [defaultRecipeId, setDefaultRecipeId] = useState("");
+  const [initialRecipeId, setInitialRecipeId] = useState("");
   const [bitFilter, setBitFilter] = useState<number | "all" | "unknown">("all");
   const [sizeOrder, setSizeOrder] = useState<"asc" | "desc">("asc");
   const [busy, setBusy] = useState<"search" | "inspect" | "download" | "">("");
@@ -86,9 +89,9 @@ export function HuggingFaceImport({ onStarted, active = true }: { onStarted: (jo
     }
     const current = ++generation.current;
     setSelectedRepo(repo); setHub(null); setVariant(""); setProjector(""); setBitFilter("all");
-    setRecipeIds([]); setDefaultRecipeId("");
+    setRecipeIds([]); setInitialRecipeId("");
     setError(""); setMessage(""); setBusy("inspect");
-    setContext(""); setKeyPrecision("f16"); setValuePrecision("f16"); setKvOffload(true); setMetadataContextMaximum(null);
+    setContext(""); setKeyPrecision(""); setValuePrecision(""); setKvOffload(null); setMetadataContextMaximum(null);
     try {
       const next = inspectedRepository(await api.inspectHf(repo));
       if (current !== generation.current) return;
@@ -132,17 +135,22 @@ export function HuggingFaceImport({ onStarted, active = true }: { onStarted: (jo
   const families = variantFamilies(hub?.variants ?? [], bitFilter, sizeOrder);
   const recipes = hub?.response_recipes ?? [];
   const selectedRecipes = recipes.filter(recipe => recipeIds.includes(recipe.id));
-  const startup: Record<string, unknown> = { cache_type_k: keyPrecision, cache_type_v: valuePrecision, kv_offload: kvOffload };
-  if (context && Number.isSafeInteger(Number(context)) && Number(context) > 0) startup.ctx_size = Number(context);
-  const validContext = context === "" || (Number.isSafeInteger(Number(context)) && Number(context) > 0);
+  const initialRecipe = recipes.find(recipe => recipe.id === initialRecipeId);
+  const initialResponse = initialRecipe ? { ...initialRecipe.per_request, ...(initialRecipe.reasoning === "preserve" ? {} : { reasoning: initialRecipe.reasoning }) } : {};
+  const startup: Record<string, unknown> = {};
+  if (keyPrecision) startup.cache_type_k = keyPrecision;
+  if (valuePrecision) startup.cache_type_v = valuePrecision;
+  if (kvOffload !== null) startup.kv_offload = kvOffload;
+  if (context && Number.isSafeInteger(Number(context)) && Number(context) >= 0) startup.ctx_size = Number(context);
+  const validContext = context === "" || (Number.isSafeInteger(Number(context)) && Number(context) >= 0 && (!metadataContextMaximum || Number(context) <= metadataContextMaximum));
   const canReview = Boolean(selectedVariant?.complete && projector && validContext);
   const contextMaximum = Math.max(1024, metadataContextMaximum ?? 262144);
-  const contextPosition = context && validContext ? Math.max(1024, Math.min(contextMaximum, Number(context))) : 1024;
-  const contextFill = context && validContext ? Math.max(0, Math.min(100, (contextPosition - 1024) / Math.max(1, contextMaximum - 1024) * 100)) : 0;
+  const contextChoices: number[] = [];
+  for (let size = 2048; size <= contextMaximum; size *= 2) contextChoices.push(size);
+  if (metadataContextMaximum && !contextChoices.includes(metadataContextMaximum)) contextChoices.push(metadataContextMaximum);
 
   function toggleRecipe(id: string, checked: boolean) {
     setRecipeIds(current => checked ? [...current, id] : current.filter(item => item !== id));
-    if (!checked && defaultRecipeId === id) setDefaultRecipeId("");
   }
 
   async function download() {
@@ -152,10 +160,7 @@ export function HuggingFaceImport({ onStarted, active = true }: { onStarted: (jo
     setBusy("download"); setError(""); setMessage("");
     try {
       const exactFiles = files.map(file => file.replaceAll("[", "[[]").replaceAll("?", "[?]").replaceAll("*", "[*]"));
-      const job = await request<ImportJob>("/v1/imports/huggingface", { method: "POST", body: JSON.stringify({
-        repo_id: hub.repo_id, revision: hub.resolved_revision, allow_patterns: exactFiles,
-        recipe_ids: recipeIds, default_recipe_id: defaultRecipeId || null, initial_startup: startup,
-      }) });
+      const job = await api.importHf(hub.repo_id, hub.resolved_revision, exactFiles, recipeIds, null, { startup, ...(initialRecipe ? { recipe_id: initialRecipe.id, per_request: initialResponse } : {}) });
       if (current !== generation.current) return;
       setMessage(job.error ? `Download ${job.status}: ${job.error}` : job.status === "complete" ? "Model added to your library." : "Download started. Track progress in Downloads.");
       await onStarted(job);
@@ -196,19 +201,23 @@ export function HuggingFaceImport({ onStarted, active = true }: { onStarted: (jo
         </li>)}</ul> : <p className="hint">No GGUF conversion declared this exact publisher model. Search by model name to inspect other repositories.</p>}</>}
       {hub.warnings.length ? <details className="technical-details"><summary>Repository notes ({hub.warnings.length})</summary>{hub.warnings.map(warning => <p key={warning}>{warning}</p>)}</details> : null}
       {hub.auxiliary_ggufs?.length ? <details className="technical-details auxiliary-files"><summary>Auxiliary GGUF files <span>{hub.auxiliary_ggufs.length}</span></summary><p className="hint">MTP and imatrix files are separate from primary model weights. Listing an MTP file does not establish draft-head compatibility.</p><ul>{hub.auxiliary_ggufs.map(item => <li key={item.name}>{item.name} · {item.size_bytes == null ? "size unknown" : formatBytes(item.size_bytes)}{item.complete ? "" : " · missing shards"}</li>)}</ul></details> : null}
-      {recipes.length ? <fieldset className="response-recipe-choices"><legend>Response recipes</legend><p className="hint">Optional model-card recommendations. Choose recipes to create saved Model configurations when the download completes.</p>{recipes.map(recipe => <label key={recipe.id}><input type="checkbox" checked={recipeIds.includes(recipe.id)} disabled={Boolean(busy)} onChange={event => toggleRecipe(recipe.id, event.target.checked)} /><span><strong>{recipe.name}</strong><small>{recipeSummary(recipe)}</small><small>From {recipe.source_repo_id} · {recipe.section} · revision {recipe.source_revision.slice(0, 8)}</small>{recipe.notes?.length ? <small>{recipe.notes.join(" · ")}</small> : null}</span></label>)}{selectedRecipes.length ? <fieldset><legend>Default Model configuration</legend><label><input type="radio" name="recipe-default" value="" checked={!defaultRecipeId} disabled={Boolean(busy)} onChange={() => setDefaultRecipeId("")} />Keep the current default</label>{selectedRecipes.map(recipe => <label key={recipe.id}><input type="radio" name="recipe-default" value={recipe.id} checked={defaultRecipeId === recipe.id} disabled={Boolean(busy)} onChange={() => setDefaultRecipeId(recipe.id)} />{recipe.name}</label>)}</fieldset> : null}</fieldset> : null}
-      {selectedVariant ? <fieldset className="model-import-settings"><legend>Initial settings</legend>
-        <label>Context <span className="hint">{context ? `${Number(context).toLocaleString()} tokens` : "Automatic · engine chooses on load"}</span><div className="field-group"><input type="range" aria-label="Import context slider" aria-valuetext={context || "Automatic"} data-unknown={!context || undefined} min={1024} max={contextMaximum} step={1024} value={contextPosition} style={{ "--range-fill": `${contextFill}%` } as CSSProperties} disabled={Boolean(busy)} onChange={event => setContext(event.target.value)} /><input type="number" aria-label="Import context tokens" min={1} value={context} placeholder="Automatic" disabled={Boolean(busy)} onChange={event => setContext(event.target.value)} /><button type="button" onClick={() => setContext("")} disabled={Boolean(busy)}>Automatic</button></div></label>
-        <div className="field-group"><label>K cache<select aria-label="Import key cache precision" value={keyPrecision} onChange={event => setKeyPrecision(event.target.value)} disabled={Boolean(busy)}>{["f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "bf16", "f32", "iq4_nl"].map(value => <option key={value}>{value}</option>)}</select></label>
-        <label>V cache<select aria-label="Import value cache precision" value={valuePrecision} onChange={event => setValuePrecision(event.target.value)} disabled={Boolean(busy)}>{["f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "bf16", "f32", "iq4_nl"].map(value => <option key={value}>{value}</option>)}</select></label>
-        <label>Cache location<select aria-label="Import cache location" value={kvOffload ? "gpu" : "cpu"} onChange={event => setKvOffload(event.target.value === "gpu")} disabled={Boolean(busy)}><option value="gpu">GPU</option><option value="cpu">CPU / RAM</option></select></label></div>
+      {recipes.length ? <SettingSection title="Response" description="Optional guidance for the first saved setup. Customize it in Models after preparation."><SettingRow label="Recipe" htmlFor="import-initial-recipe" provenance={initialRecipe ? `${initialRecipe.source_repo_id} · ${initialRecipe.source_revision.slice(0, 8)}` : "Model defaults"} hint={initialRecipe ? recipeSummary(initialRecipe) : "Thinking remains at the model template's default."}><select id="import-initial-recipe" value={initialRecipeId} disabled={Boolean(busy)} onChange={event => setInitialRecipeId(event.target.value)}><option value="">Model defaults</option>{recipes.map(recipe => <option key={recipe.id} value={recipe.id}>{recipe.name}</option>)}</select></SettingRow><details className="technical-details response-recipe-choices"><summary>Create additional setups</summary><p className="hint">Choose other pinned recipes to create separate named setups. Compatibility is checked after download; weights stay installed if a setup needs attention.</p>{recipes.map(recipe => <label key={recipe.id}><input type="checkbox" checked={recipeIds.includes(recipe.id)} disabled={Boolean(busy)} onChange={event => toggleRecipe(recipe.id, event.target.checked)} /><span><strong>{recipe.name}</strong><small>{recipeSummary(recipe)}</small><small>From {recipe.source_repo_id} · {recipe.section} · revision {recipe.source_revision.slice(0, 8)}</small>{recipe.notes?.length ? <small>{recipe.notes.join(" · ")}</small> : null}</span></label>)}</details></SettingSection> : null}
+      {selectedVariant ? <SettingSection title="Memory &amp; performance" description="Start with native fitting and automatic placement. Prepare settings without loading the model.">
+        <SettingRow label="Conversation capacity" help="Auto omits a fixed context value and lets native fitting choose capacity. Simultaneous requests share the total context pool." provenance={context ? `${Number(context).toLocaleString()} tokens · Custom` : "Auto · native fitting"} onReset={context ? () => setContext("") : undefined} resetLabel="Reset">
+          <div className="model-context-control"><select aria-label="Import capacity mode" value={!context ? "auto" : context === "0" ? "full" : "custom"} disabled={Boolean(busy)} onChange={event => setContext(event.target.value === "auto" ? "" : event.target.value === "full" ? "0" : "32768")}><option value="auto">Auto</option><option value="full" disabled={!metadataContextMaximum}>Full · {metadataContextMaximum ? `${tokenLabel(metadataContextMaximum)} tokens` : "metadata required"}</option><option value="custom">Custom</option></select><div className="slider-field"><CompactSlider hideHeading label="Import context slider" value={context === "0" ? metadataContextMaximum : context && validContext ? Number(context) : null} values={contextChoices} formatValue={value => `${tokenLabel(value)} tokens`} inherited={!context} disabled={Boolean(busy)} onChange={value => setContext(String(value))} /><span className="number-field"><input type="number" aria-label="Import context tokens" min={1} max={metadataContextMaximum ?? undefined} step={1} value={context === "0" ? metadataContextMaximum ?? "" : context} placeholder="Auto" disabled={Boolean(busy)} onChange={event => setContext(event.target.value)} /><span className="field-unit">tokens</span></span></div></div>
+        </SettingRow>
+        <details className="technical-details"><summary>Cache precision &amp; placement</summary><div className="setting-rows">
+          <SettingRow label="Key cache precision"><select aria-label="Import key cache precision" value={keyPrecision} onChange={event => setKeyPrecision(event.target.value)} disabled={Boolean(busy)}><option value="">Native default</option>{["f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "bf16", "f32", "iq4_nl"].map(value => <option key={value}>{value}</option>)}</select></SettingRow>
+          <SettingRow label="Value cache precision"><select aria-label="Import value cache precision" value={valuePrecision} onChange={event => setValuePrecision(event.target.value)} disabled={Boolean(busy)}><option value="">Native default</option>{["f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "bf16", "f32", "iq4_nl"].map(value => <option key={value}>{value}</option>)}</select></SettingRow>
+          <SettingRow label="Cache location"><select aria-label="Import cache location" value={kvOffload === null ? "" : kvOffload ? "gpu" : "cpu"} onChange={event => setKvOffload(event.target.value === "" ? null : event.target.value === "gpu")} disabled={Boolean(busy)}><option value="">Native default</option><option value="gpu">GPU</option><option value="cpu">CPU / RAM</option></select></SettingRow>
+        </div></details>
         {validContext && projector ? <ModelHardwareEstimate active={active && step === 1} selection={{ repo_id: hub.repo_id, revision: hub.resolved_revision, primary_files: selectedVariant.files, projector_files: selectedProjector?.files ?? [], startup }} onEstimate={estimate => setMetadataContextMaximum(estimate.context_maximum ?? null)} /> : null}
-      </fieldset> : null}
+      </SettingSection> : null}
       <div className="actions"><button type="button" className="primary-button" disabled={Boolean(busy) || !canReview} onClick={() => setStep(2)}>Review download</button></div>
       </> : null}
       {step === 2 && selectedVariant ? <><div className="model-download-footer"><span className="hint">{size == null ? "Size unknown" : formatBytes(size)} · {selectedVariant.files.length} model file{selectedVariant.files.length === 1 ? "" : "s"}{selectedProjector ? " + vision file" : ""}</span><Help label="Download and vision files">Allow room for temporary and installed copies, roughly twice the selected size. Vision compatibility is checked after loading the model; a file being listed does not prove it is compatible.</Help><button type="button" className="primary-button" disabled={Boolean(busy) || !canReview} onClick={() => void download()}><Icon name="download" size={15} />{busy === "download" ? "Starting…" : "Download model"}</button></div>
-        <p>Context: {context || "Automatic"} · K: {keyPrecision} · V: {valuePrecision} · KV: {kvOffload ? "GPU" : "CPU / RAM"}</p>
-        <div className="selected-download-files"><strong>Download selection: {selectedPresentation?.quant} · {selectedPresentation?.flavour}</strong><span className="hint">Pinned revision <code>{hub.resolved_revision}</code></span><ul>{files.map(file => <li key={file}>{file}</li>)}{hub.source?.verified ? (hub.source.guidance_files ?? []).map(file => <li key={`source-${file}`}>{hub.source?.repo_id} / {file}</li>) : null}</ul>{selectedRecipes.length ? <p className="hint">Create {selectedRecipes.length} Model configuration{selectedRecipes.length === 1 ? "" : "s"}: {selectedRecipes.map(item => item.name).join(", ")}. Default: {selectedRecipes.find(item => item.id === defaultRecipeId)?.name ?? "keep current"}.</p> : null}</div></> : null}
+        <p className="hint">Capacity: {context || "Auto"} · key/value cache: {keyPrecision || "native"} / {valuePrecision || "native"} · cache location: {kvOffload === null ? "native" : kvOffload ? "GPU" : "CPU / RAM"}</p>
+        <div className="selected-download-files"><strong>Download selection: {selectedPresentation?.quant} · {selectedPresentation?.flavour}</strong><span className="hint">Pinned revision <code>{hub.resolved_revision}</code></span><ul>{files.map(file => <li key={file}>{file}</li>)}{hub.source?.verified ? (hub.source.guidance_files ?? []).map(file => <li key={`source-${file}`}>{hub.source?.repo_id} / {file}</li>) : null}</ul>{selectedRecipes.length ? <p className="hint">Create {selectedRecipes.length} additional setup{selectedRecipes.length === 1 ? "" : "s"}: {selectedRecipes.map(item => item.name).join(", ")}. First setup recipe: {initialRecipe?.name ?? "model defaults"}.</p> : null}</div></> : null}
     </section> : null}
     {message ? <p role="status">{message}</p> : null}
   </section>;

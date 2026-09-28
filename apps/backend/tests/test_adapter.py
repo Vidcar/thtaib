@@ -550,6 +550,23 @@ class AdapterTests(unittest.TestCase):
                     self.assertEqual(body["chat_template_kwargs"], {"enable_thinking": enabled})
                     self.assertIs(body["chat_template_kwargs"]["enable_thinking"], enabled)
 
+    def test_native_none_is_transmitted_outside_closed_template_effort_literals(self) -> None:
+        # Native b11045 consumes this top-level value, sets enable_thinking=false,
+        # and removes the effort kwarg before Jinja sees its closed allowed set.
+        props = ServerProperties(fetched="now", source_url="fixture", n_ctx=8192,
+            chat_template="{% set effort = reasoning_effort|default('low') %}{% if effort not in ('low', 'xhigh') %}{{ raise_exception('Invalid') }}{% endif %}",
+            chat_template_caps={"supports_reasoning_effort": True})
+        model = chat_model_for_deployment(self._deployment(server_props=props),
+            per_request=resolve_bags(per_request={"reasoning_effort": "none"}).per_request)
+        try:
+            self.assertEqual(model.invoke([HumanMessage(content="ping")]).content, "pong")
+            body = _RecordingHandler.requests[-1]["body"]
+            self.assertEqual(body["reasoning_effort"], "none")
+            self.assertNotIn("reasoning_effort", body.get("chat_template_kwargs", {}))
+            self.assertEqual(body["max_tokens"], (8192 - int(8192 * .08)) // 4)
+        finally:
+            model.close()
+
     def test_known_unsupported_inherited_effort_and_invalid_thinking_fail_before_network(self) -> None:
         props = ServerProperties(fetched=utc_now(), source_url=f"{self.endpoint}/props",
             chat_template_caps={"supports_reasoning_effort": False})

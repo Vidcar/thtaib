@@ -37,4 +37,18 @@
 .model-state-dot.is-loading {background: var(--warn);}
 .model-state-dot.is-attention {background: var(--danger);}
 .chat-tuning .menu-popover-trigger {padding-inline: var(--pad-tight); color: var(--muted);}
-.menu-popover-panel.chat-tuning-panel {width: min(320px, calc(100vw - 24px));}
+.menu-popover-panel.chat-tuning-panel {display: flex; flex-direction: column; width: min(440px, calc(100vw - 24px)); overflow: hidden;}
+.chat-tuning-body {display: grid; gap: var(--space-compact); flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable;}
+.chat-tuning-heading {display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-tight) var(--space-compact);}
+.chat-tuning-heading > strong {font-weight: var(--weight-medium); color: var(--text);}
+.chat-tuning-heading > .hint {margin-left: auto; font-size: var(--text-small);}
+.chat-capacity-settings {border-top: var(--line-hairline) solid var(--border); padding-top: var(--pad-compact); min-width: 0;}
+.chat-capacity-settings .setting-row {grid-template-columns: minmax(0, 1fr); gap: var(--space-compact);}
+.chat-capacity-settings .model-context-control {display: grid; width: 100%; gap: var(--space-compact);}
+.chat-capacity-state {display: flex; flex-wrap: wrap; gap: var(--space-compact); margin: var(--space-compact) 0; padding-block: var(--pad-compact); border-block: var(--line-hairline) solid var(--border);}
+.chat-capacity-state > div {display: grid; gap: var(--space-tight); flex: 1; min-width: calc(var(--control-height) * 2);}
+.chat-capacity-state dt {color: var(--muted); font-size: var(--text-small);}
+.chat-capacity-state dd {margin: 0; color: var(--text); font-size: var(--text-small); font-variant-numeric: tabular-nums;}
+.chat-capacity-state > div[data-pending] dd {color: var(--accent);}
+.chat-capacity-settings p.hint {margin: var(--space-tight) 0; font-size: var(--text-small);}
+.chat-tuning-panel .chat-model-controls-actions {flex: 0 0 auto; background: var(--bg-panel);}

@@ -336,7 +336,7 @@ function makeHarness(options = {}) {
           json(res, 200, await options.knowledgeVersion(knowledgeVersionMatch[1]));
           return;
         }
-        if (req.method === "GET" && url.pathname.match(/^\/v1\/bundles\/[^/]+\/configuration-options$/)) {
+        if (["GET", "POST"].includes(req.method) && url.pathname.match(/^\/v1\/bundles\/[^/]+\/configuration-options$/)) {
           json(res, 200, options.configurationOptions?.(url) ?? {
             startup: {},
             per_request: {},
@@ -914,8 +914,8 @@ function approvalModeButton(renderer, label) {
   return found[0];
 }
 
-function thinkingEffortControl(renderer) {
-  return renderer.root.findAll(node => node.type === "select" && node.props["aria-label"] === "Thinking level")[0];
+function thinkingEffortControl(renderer, value = "high") {
+  return renderer.root.findAll(node => node.type === "input" && node.props.type === "radio" && node.props.value === value)[0];
 }
 
 async function openModelPicker(renderer) {
@@ -925,9 +925,7 @@ async function openModelPicker(renderer) {
 }
 
 async function applyModelChanges(renderer) {
-  await waitFor(() => assert.equal(button(renderer, "Apply").props.disabled, false), "staged model preview ready");
-  await act(async () => button(renderer, "Apply").props.onClick());
-  await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "applied model setup ready for submission");
+  await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "Thinking selection applied without a reload action");
 }
 
 function testFile(name, content, type = "text/plain") {
@@ -1848,7 +1846,7 @@ async function testAttachmentOnlySdkSubmitKeepsMetadata(vite) {
       approvalModeButton(renderer, "Full access").props.onClick();
     });
     await openModelPicker(renderer);
-    await waitFor(() => assert.equal(thinkingEffortControl(renderer)?.props.disabled, false), "thinking preview ready after access change");
+    await waitFor(() => assert.ok(thinkingEffortControl(renderer) && !thinkingEffortControl(renderer).props.disabled), "thinking preview ready after access change");
     await act(async () => {
       thinkingEffortControl(renderer).props.onChange({ target: { value: "high" } });
       await Promise.resolve();
@@ -2043,9 +2041,9 @@ async function testQueuedSubmitKeepsAttachmentsToolsAndOverrides(vite) {
       approvalModeButton(renderer, "Full access").props.onClick();
     });
     await openModelPicker(renderer);
-    await waitFor(() => assert.equal(thinkingEffortControl(renderer)?.props.disabled, false), "queued thinking preview ready");
+    await waitFor(() => assert.ok(thinkingEffortControl(renderer) && !thinkingEffortControl(renderer).props.disabled), "queued thinking preview ready");
     await act(async () => {
-      thinkingEffortControl(renderer).props.onChange({ target: { value: "medium" } });
+      thinkingEffortControl(renderer, "medium").props.onChange();
       await Promise.resolve();
     });
     await applyModelChanges(renderer);
@@ -2128,7 +2126,7 @@ async function testPersistedDraftRestoresAttachmentsAndIntendedConfig(vite) {
     assert.equal(harness.state.requests.assetLists.at(-1)?.sessionId, "conv_a", "draft restore lists assets for the selected conversation");
     assert.equal(approvalModeButton(renderer, "Full access").props["aria-checked"], true, "draft intended config restores the approval mode");
     await openModelPicker(renderer);
-    await waitFor(() => assert.equal(thinkingEffortControl(renderer)?.props.value, "high"), "draft intended config restores per-message reasoning choice");
+    await waitFor(() => assert.equal(thinkingEffortControl(renderer)?.props.checked, true), "draft intended config restores per-message reasoning choice");
     await act(async () => {
       textarea(renderer).props.onChange({ target: { value: "restored draft text plus edit" } });
       await Promise.resolve();

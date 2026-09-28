@@ -74,6 +74,7 @@ class RecipeWorkflowTests(unittest.TestCase):
         self.digest = sha256_file(self.card)
         self.recipes = parse_model_card_recipes(CARD, repo_id=REPO, revision=REVISION, sha256=self.digest)
         self.base = RunProfile(id="config_base", display_name="Default", bundle_id="bundle",
+            settings_schema_version=2,
             bags=resolve_bags(
                 startup={"ctx_size": 8192, "n_gpu_layers": 8},
                 per_request={"max_tokens": 128, "temperature": 0.2}),

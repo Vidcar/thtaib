@@ -152,30 +152,22 @@ class ResponseBudgetTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(HarnessError):
                 validate_model_reasoning(deployment(), SettingsBag(applied={"reasoning_budget_tokens": invalid}))
 
-    def test_presets_respect_template_levels_and_expose_capability_uncertainty(self):
+    def test_template_controls_do_not_invent_response_bundles(self):
         unknown = bundle_configuration_options(None, GgufRuntimeMetadata())
-        self.assertIsNone(unknown.response_presets[0].thinking_limit_supported)
-        self.assertNotIn("reasoning_effort", unknown.response_presets[0].per_request)
+        self.assertEqual(unknown.response_presets, [])
         known = bundle_configuration_options(None, GgufRuntimeMetadata(), deployment=deployment(
             build_info="b11045-2b1847030", chat_template="{% if reasoning_effort == 'medium' %}medium{% elif reasoning_effort == 'xhigh' %}deep{% endif %}"))
-        balanced, deep = known.response_presets
-        self.assertEqual(balanced.per_request, {"max_tokens": 8192, "reasoning_budget_tokens": 2048, "reasoning_effort": "medium"})
-        self.assertEqual(deep.per_request, {"max_tokens": 16384, "reasoning_budget_tokens": 8192, "reasoning_effort": "xhigh"})
-        self.assertTrue(deep.thinking_limit_supported)
+        self.assertEqual(known.response_presets, [])
         unsupported = bundle_configuration_options(None, GgufRuntimeMetadata(), deployment=deployment(chat_template_caps={"supports_reasoning_budget": False}))
-        self.assertNotIn("reasoning_budget_tokens", unsupported.response_presets[0].per_request)
-        self.assertFalse(unsupported.response_presets[0].thinking_limit_supported)
+        self.assertEqual(unsupported.response_presets, [])
         toggle = bundle_configuration_options(None, GgufRuntimeMetadata(chat_template="{% if enable_thinking %}think{% endif %}"))
-        self.assertTrue(all(preset.per_request["reasoning"] == "on" for preset in toggle.response_presets))
-        self.assertNotIn("reasoning", unknown.response_presets[0].per_request)
-        self.assertNotIn("reasoning", known.response_presets[0].per_request)
+        self.assertEqual(toggle.response_presets, [])
         from workbench_backend.inference.schemas import HuggingFaceConfiguration
         publisher = bundle_configuration_options(None, GgufRuntimeMetadata(chat_template="{{ messages }}"),
             huggingface_configuration=HuggingFaceConfiguration(generation_defaults={"reasoning_effort": "xhigh", "reasoning": "off"}))
         self.assertIs(publisher.per_request_defaults["reasoning_effort"].supported, False)
         self.assertEqual(publisher.per_request_defaults["reasoning_effort"].options, [])
-        self.assertNotIn("reasoning_effort", publisher.response_presets[0].per_request)
-        self.assertNotIn("reasoning", publisher.response_presets[0].per_request)
+        self.assertEqual(publisher.response_presets, [])
 
 
 class PurposeTelemetryTests(unittest.TestCase):

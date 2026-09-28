@@ -8,6 +8,7 @@ Neither path starts a deployment, rewrites settings or establishes residency.
 from __future__ import annotations
 
 from collections import OrderedDict
+import json
 import math
 from pathlib import Path
 import re
@@ -24,8 +25,10 @@ from huggingface_hub import get_token, hf_hub_url
 
 from workbench_backend.errors import ManagerError
 from workbench_backend.inference.bundles import mmproj_companion
+from workbench_backend.inference.configurations import loading_startup_settings, loaded_model_identity
 from workbench_backend.inference.hardware import HardwareObserver
 from workbench_backend.inference.ids import utc_now
+from workbench_backend.inference.native_memory import COMMIT, PROTOCOL, preview_environment, require_planner
 from workbench_backend.inference.schemas import ModelEstimateRequest, ModelMemoryEstimate
 from workbench_backend.inference.settings import resolve_bags, startup_cli_args
 
@@ -161,6 +164,7 @@ def dense_kv_bytes(fields: dict[str, Any], context: int, key_type: str, value_ty
 def _bounded_native(args: list[str], timeout: float = NATIVE_DEADLINE) -> str:
     """Drain both pipes with a shared cap; no log files or service process."""
     process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env=preview_environment(), cwd=Path(args[0]).resolve().parent,
         creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
     output: list[bytes] = []
     stderr: list[bytes] = []
@@ -238,11 +242,19 @@ class MemoryEstimator:
             try:
                 self._native_prediction(bundle, request, result)
             except (OSError, ValueError, ManagerError) as exc:
+                result.completeness = "unavailable"
                 result.unknown_reasons.append(str(exc) if not isinstance(exc, ManagerError) else exc.message)
+            # A different setup, slot policy or cache on the same weights is
+            # not an observation of this candidate. Response choices are absent
+            # from the canonical native residency identity.
+            plan_identity = loaded_model_identity(self.manager.runtime.current(), bundle, bags)
+            result.plan_identity = plan_identity
             live = next((item for item in self.manager.store.list_deployments() if item.bundle_id == bundle.id
-                and item.status.value == "running" and item.health and item.health.healthy), None)
+                and item.status.value == "running" and item.health and item.health.healthy
+                and item.loaded_model_identity == plan_identity), None)
             if live:
                 result.observed_runtime = {"deployment_id": live.id, "observed_at": live.updated_at,
+                    "plan_identity": plan_identity, "kind": "observed",
                     "startup": live.applied_startup, "resource_usage": live.resource_usage.model_dump(mode="json") if live.resource_usage else None}
         elif request.repo_id:
             repository_key = f"{request.repo_id}@{request.revision}"
@@ -384,20 +396,13 @@ class MemoryEstimator:
 
     def _native_prediction(self, bundle, request, result):
         manifest = self.manager.runtime.current()
-        if manifest is None or manifest.status != "ready" or manifest.release_tag != "b11045":
-            raise ValueError("Pinned native memory predictor is unavailable.")
-        executable = Path(manifest.executable).with_name("llama-fit-params.exe" if sys.platform == "win32" else "llama-fit-params")
-        if not executable.is_file():
-            raise ValueError("Pinned native memory predictor is unavailable.")
-        applied = resolve_bags(startup=request.startup).startup.applied
-        allowed = {"ctx_size", "n_gpu_layers", "flash_attn", "cache_type_k", "cache_type_v", "kv_offload", "parallel", "batch_size", "ubatch_size", "threads", "threads_batch"}
-        selected = {key: value for key, value in applied.items() if key in allowed}
-        # The helper defaults to one sequence; server Auto chooses its own slot
-        # count. Make the evaluated value explicit rather than imply a match.
-        server_parallel_auto = "parallel" not in selected
-        selected.setdefault("parallel", 1)
-        # Native automatic fit may return a hypothetical choice; it is display data only.
-        import json
+        executable = require_planner(manifest)
+        bags = resolve_bags(startup=request.startup)
+        selected = loading_startup_settings(bags)
+        # Operational endpoints and aliases cannot affect allocation. They are
+        # neither needed nor passed to the subprocess's real server parser.
+        for key in ("host", "port", "alias"):
+            selected.pop(key, None)
         identities = []
         for file in bundle.files:
             if not file.name.lower().endswith(".gguf"):
@@ -406,7 +411,16 @@ class MemoryEstimator:
             if stat.st_size != file.size_bytes:
                 raise ValueError("Model files changed; verify them in Models before predicting memory.")
             identities.append((file.path, file.size_bytes, file.sha256, stat.st_mtime_ns))
-        key = json.dumps([manifest.executable, manifest.sha256, executable.stat().st_mtime_ns, bundle.id, identities, selected], sort_keys=True)
+        draft = selected.get("spec_draft_model")
+        if draft:
+            from workbench_backend.inference.hashes import cached_sha256_file
+            path = Path(draft)
+            if not path.is_file():
+                raise ValueError("The selected draft model is unavailable; its allocation is unknown.")
+            stat = path.stat()
+            identities.append((str(path), stat.st_size, cached_sha256_file(path), stat.st_mtime_ns))
+        key = json.dumps([manifest.executable, manifest.sha256, manifest.memory_planner_sha256,
+                          manifest.memory_planner_native_fingerprint, identities, selected], sort_keys=True)
         with self._lock:
             cached = self._native.get(key)
         if cached and not request.refresh and time.monotonic() - cached[0] < 30:
@@ -415,29 +429,13 @@ class MemoryEstimator:
             if not self._worker.acquire(timeout=0.1):
                 raise ValueError("Native memory prediction is busy; retry shortly.")
             try:
-                deadline = time.monotonic() + NATIVE_DEADLINE
-                predicted = dict(selected)
-                if predicted.get("n_gpu_layers") in {None, -1, "auto"} or not predicted.get("ctx_size"):
-                    automatic = dict(predicted)
-                    if automatic.get("n_gpu_layers") in {-1, "auto"}:
-                        automatic.pop("n_gpu_layers", None)
-                    text = _bounded_native([str(executable), "-m", bundle.primary_path, *startup_cli_args(automatic)], max(0.1, deadline - time.monotonic()))
-                    fitted = re.search(r"-c (\d+) -ngl (-?\d+)", text)
-                    if not fitted:
-                        raise ValueError("Native automatic placement could not be read.")
-                    predicted.update(ctx_size=int(fitted[1]), n_gpu_layers=int(fitted[2]))
-                    if "-ts " in text or "-ot " in text:
-                        raise ValueError("Native multi-device/tensor placement requires additional mapping; prediction is unavailable.")
-                output = _bounded_native([str(executable), "-m", bundle.primary_path, "--fit-print", "on", *startup_cli_args(predicted)], max(0.1, deadline - time.monotonic()))
-                rows = []
-                for line in output.splitlines():
-                    match = re.fullmatch(r"(\S+) (\d+) (\d+) (\d+)\s*", line)
-                    if match:
-                        rows.append({"id": match[1], "weights_bytes": int(match[2]) * 1024**2,
-                            "kv_bytes": int(match[3]) * 1024**2, "runtime_overhead_bytes": int(match[4]) * 1024**2})
-                if not rows or not any(row["id"] == "Host" for row in rows):
-                    raise ValueError("Native memory prediction returned no usable breakdown.")
-                prediction = {"rows": rows, "evaluated": predicted, "estimated_at": utc_now()}
+                arguments = [str(executable), "-m", bundle.primary_path, *startup_cli_args(selected)]
+                projector = mmproj_companion(bundle)
+                if projector:
+                    arguments.extend(["--mmproj", projector.path])
+                prediction = self._validate_native(json.loads(_bounded_native(arguments)), manifest)
+                prediction["evaluated_startup"] = {**selected, **prediction["evaluated_startup"]}
+                prediction["estimated_at"] = utc_now()
                 with self._lock:
                     self._native[key] = time.monotonic(), prediction
                     while len(self._native) > 32:
@@ -446,23 +444,77 @@ class MemoryEstimator:
                 self._worker.release()
         result.source = "native_prediction"
         result.estimated_at = prediction["estimated_at"]
-        result.evaluated_startup = prediction["evaluated"]
-        result.devices = prediction["rows"]
+        result.evaluated_startup = prediction["evaluated_startup"]
+        result.devices = prediction["devices"]
+        result.completeness = prediction["completeness"]
+        for key in ("effective_context", "effective_context_per_slot", "effective_parallel", "kv_unified", "context_maximum"):
+            setattr(result, key, prediction[key])
+        result.plan_identity = loaded_model_identity(manifest, bundle, bags)
         result.weights_bytes = sum(row["weights_bytes"] for row in result.devices)
         result.kv_bytes = sum(row["kv_bytes"] for row in result.devices)
         result.runtime_overhead_bytes = sum(row["runtime_overhead_bytes"] for row in result.devices)
-        result.gpu_bytes = sum(sum(row[key] for key in ("weights_bytes", "kv_bytes", "runtime_overhead_bytes")) for row in result.devices if row["id"] != "Host")
-        result.ram_bytes = sum(sum(row[key] for key in ("weights_bytes", "kv_bytes", "runtime_overhead_bytes")) for row in result.devices if row["id"] == "Host")
-        result.assumptions.append("Pinned native no-weight-allocation prediction, rounded to MiB; actual allocation remains authoritative.")
+        projector_measured = prediction["components"]["projector"] != "unavailable"
+        speculation_measured = prediction["components"]["speculation"] != "unavailable"
+        result.projector_bytes = sum(row["projector_bytes"] for row in result.devices) if projector_measured else None
+        result.speculation_bytes = sum(row["speculation_bytes"] for row in result.devices) if speculation_measured else None
+        if not speculation_measured:
+            result.weights_bytes = result.kv_bytes = result.runtime_overhead_bytes = None
+        if result.completeness == "complete":
+            result.gpu_bytes = sum(row["total_bytes"] for row in result.devices if row["id"] != "Host")
+            result.ram_bytes = sum(row["total_bytes"] for row in result.devices if row["id"] == "Host")
+        else:
+            result.gpu_bytes = result.ram_bytes = None
+        result.unknown_reasons.extend(prediction["unknown_reasons"])
+        result.assumptions.append("Estimated with the exact pinned native no-allocation APIs; actual loaded allocation remains authoritative.")
         result.assumptions.append("Native context memory includes KV cache and architecture-specific state; compute excludes unknown driver overhead.")
-        if server_parallel_auto:
-            result.unknown_reasons.append("Server automatic slot allocation is unresolved; native prediction evaluates one slot and does not establish full server memory use.")
-        if prediction["evaluated"] != selected:
+        result.unknown_reasons.append("Dynamic driver, operating-system, host output-buffer and prompt-cache memory is not included in the native allocation estimate.")
+        if result.kv_unified and result.effective_parallel > 1:
+            result.assumptions.append("Simultaneous requests share the total context pool; the per-chat maximum is not reserved for every slot.")
+        if result.evaluated_startup != selected:
             result.assumptions.append("Automatic placement/context were evaluated hypothetically; your requested settings remain unchanged.")
-            if not selected.get("ctx_size") and not server_parallel_auto:
-                result.context_marker = prediction["evaluated"].get("ctx_size")
+            if "ctx_size" not in selected and result.completeness == "complete":
+                result.context_marker = result.effective_context_per_slot
                 result.context_marker_kind = "native_prediction"
-        if result.projector_disk_bytes:
-            result.unknown_reasons.append("Native prediction excludes the vision projector's runtime allocation.")
-        if applied.get("spec_type") not in {None, "none"} or applied.get("spec_draft_model"):
-            result.unknown_reasons.append("Native prediction excludes additional speculative decoding/draft allocation.")
+
+    @staticmethod
+    def _validate_native(payload, manifest):
+        if (not isinstance(payload, dict) or payload.get("protocol") != PROTOCOL
+                or payload.get("native_build") != 11045 or payload.get("native_commit") != COMMIT
+                or payload.get("native_fingerprint") != manifest.memory_planner_native_fingerprint
+                or payload.get("completeness") not in {"complete", "partial"}):
+            raise ValueError("The native allocation result does not match the selected runtime.")
+        rows = payload.get("devices")
+        if not isinstance(rows, list) or not rows or not any(row.get("id") == "Host" for row in rows if isinstance(row, dict)):
+            raise ValueError("The native allocation result contains no usable device breakdown.")
+        components = payload.get("components")
+        if (not isinstance(payload.get("evaluated_startup"), dict) or not isinstance(components, dict)
+                or components.get("target") != "measured" or any(components.get(key) not in
+                    {"measured", "not_selected", "unavailable"} for key in ("projector", "speculation"))):
+            raise ValueError("The native component allocation status is invalid.")
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+                raise ValueError("The native allocation device breakdown is invalid.")
+            for key in ("weights_bytes", "kv_bytes", "runtime_overhead_bytes", "projector_bytes", "speculation_bytes", "total_bytes"):
+                unknown = ((key == "projector_bytes" and components["projector"] == "unavailable") or
+                           (key == "speculation_bytes" and components["speculation"] == "unavailable") or
+                           (key == "total_bytes" and "unavailable" in components.values()))
+                if unknown and row.get(key) is None:
+                    continue
+                if unknown:
+                    raise ValueError("The native allocation result incorrectly assigns a number to unknown memory.")
+                if type(row.get(key)) is not int or not 0 <= row[key] < 2**63:
+                    raise ValueError("The native allocation device breakdown is invalid.")
+            if row["total_bytes"] is not None and row["total_bytes"] != sum(row[key] for key in ("weights_bytes", "kv_bytes", "runtime_overhead_bytes", "projector_bytes")):
+                raise ValueError("The native allocation totals are inconsistent.")
+        for key in ("effective_context", "effective_context_per_slot", "effective_parallel", "context_maximum"):
+            if type(payload.get(key)) is not int or not 0 < payload[key] < 2**32:
+                raise ValueError("The native context capacity is invalid.")
+        if type(payload.get("kv_unified")) is not bool:
+            raise ValueError("The native context policy is invalid.")
+        if payload["effective_context_per_slot"] > min(payload["effective_context"], payload["context_maximum"]):
+            raise ValueError("The native per-chat capacity exceeds the available context pool.")
+        if payload["completeness"] == "complete" and "unavailable" in components.values():
+            raise ValueError("The native allocation result incorrectly marks unknown memory as complete.")
+        if not isinstance(payload.get("unknown_reasons"), list) or any(not isinstance(reason, str) for reason in payload["unknown_reasons"]):
+            raise ValueError("The native allocation diagnostics are invalid.")
+        return payload

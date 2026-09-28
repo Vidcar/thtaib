@@ -244,7 +244,7 @@ class ContextBudgetHarnessTests(unittest.TestCase):
     def test_smaller_context_continues_retained_history_through_native_compaction(self) -> None:
         thread_id = "thread-reducible-smaller-context"
         self._set_context(n_ctx=32768, vision=True)
-        first = self._start(thread_id=thread_id, task="Preserve the important details. " + "older detail " * 1000,
+        first = self._start(thread_id=thread_id, task="Preserve the important details. " + "older detail " * 400,
             presented_tools=[])
         self.assertEqual(first.status_code, 200, first.text)
         completed = self._complete(first.json())
@@ -252,7 +252,7 @@ class ContextBudgetHarnessTests(unittest.TestCase):
         before = conversation_state(self.manager.paths.checkpoints_db, thread_id)
         retained_ids = [message.id for message in before["messages"]]
         self._set_context(n_ctx=8192, vision=True)
-        second = self._start(thread_id=thread_id, task="Continue and retain the important facts. " + "recent detail " * 900,
+        second = self._start(thread_id=thread_id, task="Continue and retain the important facts. " + "recent detail " * 450,
             presented_tools=[])
         self.assertEqual(second.status_code, 200, second.text)
         reduced = self._complete(second.json())
@@ -292,7 +292,7 @@ class ContextBudgetHarnessTests(unittest.TestCase):
         }
         capacity = 4096
         output_reservation = 300
-        per_request = SettingsBag(applied={"max_completion_tokens": output_reservation})
+        per_request = SettingsBag(applied={"max_tokens": output_reservation})
         observation = observe_context(
             deployment=deployment.model_copy(update={"server_props": deployment.server_props.model_copy(update={"n_ctx": capacity})}),
             per_request=per_request,
@@ -486,15 +486,15 @@ class ContextBudgetHarnessTests(unittest.TestCase):
 
         self._mock_openai = endpoint
         thread_id = "thread-long-reasoning"
-        first_run = self._complete(self._start(thread_id=thread_id, task="original-history-marker", presented_tools=["echo"]).json())
+        first_run = self._complete(self._start(thread_id=thread_id, task="original-history-marker", presented_tools=["echo"], per_request_overrides={"max_tokens": 512}).json())
         self.assertEqual(first_run["status"], "completed", first_run.get("error"))
-        second_run = self._complete(self._start(thread_id=thread_id, task="Continue briefly.", presented_tools=["echo"]).json())
+        second_run = self._complete(self._start(thread_id=thread_id, task="Continue briefly.", presented_tools=["echo"], per_request_overrides={"max_tokens": 512}).json())
         self.assertEqual(second_run["status"], "completed", second_run.get("error"))
         self.assertFalse(any(event["kind"] == "context_compacted" for event in second_run["events"]))
         self.assertLess(second_run["context_observation"]["estimated_input_tokens"], 50000)
         self.assertEqual(sum(json.dumps(payload).count(reason) for payload in self.chat_payloads), 1)
         third_run = self._complete(self._start(thread_id=thread_id, task="new material " * 14000,
-                                              presented_tools=["echo"]).json())
+                                              presented_tools=["echo"], per_request_overrides={"max_tokens": 512}).json())
         self.assertEqual(third_run["status"], "completed", third_run.get("error"))
         compacted = [event for event in third_run["events"] if event["kind"] == "context_compacted"]
         self.assertEqual(len(compacted), 1)

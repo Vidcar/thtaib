@@ -13,6 +13,7 @@ import json
 from typing import Any
 
 import psutil
+from jinja2 import Environment, TemplateSyntaxError, nodes
 from workbench_backend.errors import HarnessError
 
 from workbench_backend.inference.schemas import (
@@ -25,7 +26,10 @@ from workbench_backend.inference.schemas import (
     ResponsePreset,
     SettingsBag,
 )
-from workbench_backend.inference.settings import DEFAULT_GPU_PROFILE, STARTUP_ENUMS
+from workbench_backend.inference.settings import (
+    DEFAULT_GPU_PROFILE, STARTUP_ENUMS, STARTUP_KEYS, PER_REQUEST_KEYS,
+    REQUEST_STARTUP_ALIASES, control_facts,
+)
 
 SMALL_CONTEXT_VALUES = (1024, 2048, 4096, 8192, 16384)
 MIN_LARGE_CONTEXT_OPTION = 32 * 1024
@@ -39,6 +43,7 @@ def bundle_configuration_options(
     deployment: Deployment | None = None,
     recommended_threads: int | None = None,
     huggingface_configuration: HuggingFaceConfiguration | None = None,
+    selected_template_source: str | None = None,
 ) -> BundleConfigurationOptions:
     """Build controls from read-only bundle metadata and optional live props."""
 
@@ -47,7 +52,16 @@ def bundle_configuration_options(
         if deployment is not None and deployment.server_props is not None
         else None
     )
-    per_request_defaults = _per_request_defaults(metadata, deployment)
+    per_request_defaults = {**_request_catalogue(native_defaults=bundle_id is not None), **_per_request_defaults(metadata, deployment,
+        selected_template_source=selected_template_source)}
+    selected_source = selected_template_source or (f"{huggingface_configuration.template_origin}_template"
+        if huggingface_configuration and huggingface_configuration.template_file else None)
+    if selected_source:
+        for descriptor in per_request_defaults.values():
+            if descriptor.source == "gguf_template":
+                descriptor.source = selected_source
+            if descriptor.default_source == "gguf_template":
+                descriptor.default_source = selected_source
     if huggingface_configuration is not None:
         source = (f"Hugging Face {huggingface_configuration.source_repo_id}"
             if huggingface_configuration.source_verified else "Hugging Face GGUF repository")
@@ -67,13 +81,30 @@ def bundle_configuration_options(
                     default_value=value, default_source=source,
                     supported=True,
                 )
+    startup_defaults = {**_startup_catalogue(), **_startup_defaults(recommended_threads=recommended_threads), **_speculative_descriptors(metadata)}
+    history = reasoning_history_descriptor(metadata, deployment)
+    if selected_source and history.source == "gguf_template":
+        history.source = selected_source
+        if history.default_source == "gguf_template":
+            history.default_source = selected_source
+    per_request_defaults["reasoning_preserve"] = history
+    # Preserve the descriptor alias for reading old saved configurations. Its
+    # shared timing still tells every editor that this is a request choice.
+    startup_defaults["reasoning_preserve"] = history
+    for key, descriptor in startup_defaults.items():
+        descriptor = descriptor.model_copy(update=control_facts(key, per_request=key in REQUEST_STARTUP_ALIASES))
+        startup_defaults[key] = descriptor
+    for key, descriptor in per_request_defaults.items():
+        facts = control_facts(key, per_request=True)
+        if descriptor.maximum is not None:
+            facts.pop("maximum", None)
+        per_request_defaults[key] = descriptor.model_copy(update=facts)
     return BundleConfigurationOptions(
         bundle_id=bundle_id,
         deployment_id=deployment.id if deployment is not None else None,
-        context_size=_context_descriptor(metadata.context_length, observed_context),
-        gpu_layers=_gpu_layers_descriptor(metadata.block_count),
-        startup_defaults={**_startup_defaults(recommended_threads=recommended_threads), **_speculative_descriptors(metadata),
-                          "reasoning_preserve": reasoning_history_descriptor(metadata, deployment)},
+        context_size=_context_descriptor(metadata.context_length, observed_context).model_copy(update=control_facts("ctx_size")),
+        gpu_layers=_gpu_layers_descriptor(metadata.block_count).model_copy(update=control_facts("n_gpu_layers")),
+        startup_defaults=startup_defaults,
         per_request_defaults=per_request_defaults,
         response_presets=response_presets(per_request_defaults),
         metadata={
@@ -87,10 +118,11 @@ def bundle_configuration_options(
     )
 
 
-def _per_request_defaults(metadata: GgufRuntimeMetadata, deployment: Deployment | None) -> dict[str, RuntimeControlDescriptor]:
+def _per_request_defaults(metadata: GgufRuntimeMetadata, deployment: Deployment | None, *, selected_template_source: str | None = None) -> dict[str, RuntimeControlDescriptor]:
     props = deployment.server_props if deployment is not None else None
     template = props.chat_template if props is not None and props.chat_template else metadata.chat_template or ""
-    if deployment is not None and not (props and props.chat_template) and any(
+    template = re.sub(r"\{#.*?#\}", "", template, flags=re.DOTALL)
+    if selected_template_source is None and deployment is not None and not (props and props.chat_template) and any(
         deployment.applied_startup.get(key) for key in ("chat_template", "chat_template_file")
     ):
         template = ""
@@ -98,17 +130,19 @@ def _per_request_defaults(metadata: GgufRuntimeMetadata, deployment: Deployment 
     # Extract literal constraints from the selected template. A runtime accepting
     # an enum does not mean that a template understands or accepts its values.
     literals, accepted, closed = _template_efforts(template)
-    efforts = [value for value in _ordered_reasoning_efforts() if value != "default" and value in literals]
+    efforts = [value for value in _ordered_reasoning_efforts(literals) if value != "default" and value in literals]
     known_unsupported = bool(props is not None and props.chat_template_caps.get("supports_reasoning_effort") is False)
     if known_unsupported:
         efforts = []
     elif template and not re.search(r"\breasoning_(?:effort|strength)\b", template):
         known_unsupported = True
-    thinking_toggle = "enable_thinking" in template
+    thinking_toggle = _template_uses(template, "enable_thinking")
     effort_default = _literal_template_default(template, "reasoning_effort")
-    thinking_default = _literal_template_default(template, "enable_thinking")
-    if thinking_default is None and re.search(r"\benable_thinking\s+is\s+undefined\s+or\s+enable_thinking\s+is\s+true\b", template):
-        thinking_default = True
+    # Native Auto probes the selected template, then always injects its
+    # enable_thinking boolean. A Jinja undefined/default branch does not prove
+    # the native probe result; keep that result unknown without observed facts.
+    thinking_default = props.chat_template_caps.get("supports_thinking") if props is not None else None
+    thinking_default = thinking_default if isinstance(thinking_default, bool) else None
     defaults = {
         "reasoning_effort": RuntimeControlDescriptor(
             key="reasoning_effort",
@@ -140,7 +174,7 @@ def _per_request_defaults(metadata: GgufRuntimeMetadata, deployment: Deployment 
             key="reasoning", label="Thinking", description="Enable or disable thinking for this model's template.",
             source=source if thinking_toggle else "unavailable", supported=thinking_toggle if template else None, applied="auto",
             default_value=("on" if thinking_default else "off") if isinstance(thinking_default, bool) else None,
-            default_source=source if isinstance(thinking_default, bool) else None,
+            default_source="server_properties" if isinstance(thinking_default, bool) else None,
             options=[RuntimeControlOption(value=value, label=label) for value, label in
                      ([('auto', 'Model default'), ('on', 'On'), ('off', 'Off')] if thinking_toggle else [])],
         ),
@@ -173,8 +207,43 @@ def _per_request_defaults(metadata: GgufRuntimeMetadata, deployment: Deployment 
             if value is not None and value not in ("default", "auto"):
                 defaults[key].default_value = value
                 defaults[key].default_source = "loaded_startup"
-    defaults["reasoning_budget_tokens"] = reasoning_budget_descriptor(deployment)
+    defaults["reasoning_budget_tokens"] = reasoning_budget_descriptor(deployment, metadata)
     return defaults
+
+
+def _request_catalogue(*, native_defaults: bool) -> dict[str, RuntimeControlDescriptor]:
+    native = {"temperature": 0.8, "top_k": 40, "top_p": 0.95, "min_p": 0.05,
+              "typical_p": 1.0, "repeat_penalty": 1.0, "presence_penalty": 0.0, "frequency_penalty": 0.0} if native_defaults else {}
+    result = {}
+    for key in sorted(PER_REQUEST_KEYS):
+        value = native.get(key)
+        result[key] = RuntimeControlDescriptor(
+            key=key, label="Response allowance" if key == "max_tokens" else key.replace("_", " ").title(),
+            description=("Total allowance for Thinking and the answer. Workbench Auto binds a finite allowance to the loaded model's capacity."
+                         if key == "max_tokens" else "Saved response setting, applied to the next accepted request."),
+            source="workbench_guidance" if key == "max_tokens" else "pinned_runtime_default" if key in native else "pinned_runtime_schema",
+            default_value=value, default_source="pinned_runtime_default" if key in native else None,
+            supported=None if key.startswith("reasoning") else True,
+            options=[RuntimeControlOption(value=None, label="Workbench Auto")] if key == "max_tokens" else [],
+        )
+    result["reasoning_format"].options = [RuntimeControlOption(value=value, label=value.replace("-", " ").title())
+                                         for value in sorted(STARTUP_ENUMS["reasoning_format"])]
+    return result
+
+
+def _startup_catalogue() -> dict[str, RuntimeControlDescriptor]:
+    native = {"parallel": 4, "kv_unified": True, "batch_size": 2048, "ubatch_size": 512,
+              "op_offload": True, "mmproj_use_gpu": True, "spec_draft_n_min": 0,
+              "spec_draft_p_min": 0.75, "spec_draft_p_split": 0.1}
+    return {key: RuntimeControlDescriptor(
+        key=key, flag=flag, label=key.replace("_", " ").title(),
+        description=("Simultaneous requests share one context pool; each chat's capacity is a maximum, not a reserved full context."
+                     if key in {"parallel", "kv_unified"} else "Saved loading setting; a resident model requires a deliberate reload."),
+        source="workbench_default" if key in {"parallel", "kv_unified"} else "pinned_runtime_default" if key in native else "pinned_runtime_schema",
+        applied=native.get(key), default_value=native.get(key), supported=True,
+        options=[RuntimeControlOption(value=value, label=value.replace("-", " ").title())
+                 for value in sorted(STARTUP_ENUMS.get(key, ()))],
+    ) for key, flag in STARTUP_KEYS.items() if key not in REQUEST_STARTUP_ALIASES and key not in {"host", "port", "alias"}}
 
 
 def _literal_template_default(template: str, variable: str):
@@ -182,6 +251,14 @@ def _literal_template_default(template: str, variable: str):
     matches = re.findall(r"\b" + re.escape(variable) + r"\s*\|\s*default\s*\(\s*(['\"][a-z]+['\"]|true|false)\s*\)", template)
     values = {True if value == "true" else False if value == "false" else value[1:-1] for value in matches}
     return next(iter(values)) if len(values) == 1 else None
+
+
+def _template_uses(template: str, variable: str) -> bool:
+    try:
+        parsed = Environment(extensions=["jinja2.ext.loopcontrols"]).parse(template)
+        return any(node.name == variable and node.ctx == "load" for node in parsed.find_all(nodes.Name))
+    except TemplateSyntaxError:
+        return False
 
 
 def reasoning_history_descriptor(metadata: GgufRuntimeMetadata, deployment: Deployment | None = None) -> RuntimeControlDescriptor:
@@ -192,38 +269,42 @@ def reasoning_history_descriptor(metadata: GgufRuntimeMetadata, deployment: Depl
     """
     props = deployment.server_props if deployment is not None else None
     template = props.chat_template if props is not None and props.chat_template else metadata.chat_template or ""
+    template = re.sub(r"\{#.*?#\}", "", template, flags=re.DOTALL)
     if deployment is not None and not (props and props.chat_template) and any(
         deployment.applied_startup.get(key) for key in ("chat_template", "chat_template_file")
     ):
         template = ""
     caps = props.chat_template_caps if props is not None else {}
-    declared = bool(re.search(r"\bpreserve_thinking\b", template))
+    declared = _template_uses(template, "preserve_thinking") or _template_uses(template, "preserve_reasoning")
     supported = caps.get("supports_preserve_reasoning")
     if supported is not False:
         supported = True if declared or supported is True else False if template else None
     default = _literal_template_default(template, "preserve_thinking")
+    if default is None:
+        default = _literal_template_default(template, "preserve_reasoning")
     if default is None and re.search(
-        r"\bpreserve_thinking\s+is\s+undefined\s+or\s+preserve_thinking\s+is\s+true\b", template
+        r"\bpreserve_(?:thinking|reasoning)\s+is\s+undefined\s+or\s+preserve_(?:thinking|reasoning)\s+is\s+true\b", template
     ):
         default = True
     if default is None and re.search(
-        r"\bpreserve_thinking\s+is\s+defined\s+and\s+preserve_thinking\s+is\s+true\b", template
+        r"\bpreserve_(?:thinking|reasoning)\s+is\s+defined\s+and\s+preserve_(?:thinking|reasoning)\s+is\s+true\b", template
     ):
         default = False
     if supported is not True or not isinstance(default, bool):
         default = None
     return RuntimeControlDescriptor(
-        key="reasoning_preserve", flag="--reasoning-preserve", label="Thinking history",
+        key="reasoning_preserve", label="Thinking history",
         description="Keep or drop earlier thinking in later ordinary turns when the model template supports it.",
         source="server_template" if props is not None and props.chat_template else "gguf_template" if template else "unavailable",
         supported=supported, applied=None, default_value=default,
         default_source=("server_template" if props is not None and props.chat_template else "gguf_template") if default is not None else None,
         options=[RuntimeControlOption(value=value, label=label) for value, label in
-                 (("default", "Default"), ("keep", "Keep"), ("drop", "Drop"))] if supported else [],
+                 ((None, "Default"), (True, "Keep"), (False, "Drop"))] if supported else [],
     )
 
 
 def _template_efforts(template: str) -> tuple[set[str], set[str], bool]:
+    template = re.sub(r"\{#.*?#\}", "", template, flags=re.DOTALL)
     variable = r"\b\w*reasoning_(?:effort|strength)\b"
     groups = re.findall(variable + r"\s+(?:not\s+)?in\s*[\[(]([^\])]+)[\])]", template)
     canonical = {value for group in groups for value in re.findall(r"['\"]([a-z]+)['\"]", group)}
@@ -241,7 +322,7 @@ def _template_efforts(template: str) -> tuple[set[str], set[str], bool]:
     return canonical, canonical | aliases, closed
 
 
-def reasoning_budget_descriptor(deployment: Deployment | None) -> RuntimeControlDescriptor:
+def reasoning_budget_descriptor(deployment: Deployment | None, metadata: GgufRuntimeMetadata | None = None) -> RuntimeControlDescriptor:
     props = deployment.server_props if deployment is not None else None
     params = props.default_generation_settings.get("params", {}) if props else {}
     params = params if isinstance(params, dict) else {}
@@ -250,7 +331,10 @@ def reasoning_budget_descriptor(deployment: Deployment | None) -> RuntimeControl
         observed = props.default_generation_settings.get("reasoning_budget_tokens")
     explicit = props.chat_template_caps.get("supports_reasoning_budget") if props else None
     pinned_runtime = bool(props and props.build_info and props.build_info.startswith("b11045-"))
-    supported = explicit if isinstance(explicit, bool) else True if type(observed) is int or pinned_runtime else None
+    template = props.chat_template if props and props.chat_template else metadata.chat_template if metadata else ""
+    known_tags = bool(template and re.search(r"</think>|\[/THINK\]|<\|channel\|>analysis|<\|im_sep\|>.*analysis", template))
+    no_thinking = bool(props and props.chat_template_caps.get("supports_thinking") is False)
+    supported = explicit if isinstance(explicit, bool) else False if no_thinking else True if known_tags and (pinned_runtime or deployment is None) else None
     return RuntimeControlDescriptor(
         key="reasoning_budget_tokens", label="Thinking limit",
         description=("Maximum thinking tokens per response; the total response limit includes thinking and the answer."
@@ -259,42 +343,14 @@ def reasoning_budget_descriptor(deployment: Deployment | None) -> RuntimeControl
         source="pinned_runtime" if pinned_runtime and explicit is None and observed is None else "server_properties" if supported is not None else "unavailable",
         supported=supported, observed=observed, default_value=observed,
         default_source="server_properties" if type(observed) is int else None,
-        options=[RuntimeControlOption(value=2048, label="Balanced · 2,048 tokens"),
-                 RuntimeControlOption(value=8192, label="Deep · 8,192 tokens")] if supported is not False else [],
+        options=[RuntimeControlOption(value=None, label="Model default"),
+                 RuntimeControlOption(value=-1, label="No separate limit")] if supported is not False else [],
     )
 
 
 def response_presets(descriptors: dict[str, RuntimeControlDescriptor]) -> list[ResponsePreset]:
-    effort = descriptors["reasoning_effort"]
-    limit = descriptors["reasoning_budget_tokens"]
-    presets = []
-    for ident, label, desired, budget, output in (("balanced", "Balanced", "medium", 2048, 8192),
-                                                 ("deep", "Deep", "xhigh", 8192, 16384)):
-        values: dict[str, Any] = {"max_tokens": output}
-        if descriptors["reasoning"].supported is True:
-            values["reasoning"] = "on"
-        notes: list[str] = []
-        if limit.supported is not False:
-            values["reasoning_budget_tokens"] = budget
-        if limit.supported is not True:
-            notes.append(limit.description)
-        declared = [str(option.value) for option in effort.options if option.value != "default"]
-        if desired in declared:
-            values["reasoning_effort"] = desired
-        elif declared:
-            ordering = _ordered_reasoning_efforts()
-            below = [value for value in declared if value in ordering and ordering.index(value) <= ordering.index(desired)]
-            effective = below[-1] if below else declared[0]
-            values["reasoning_effort"] = effective
-            notes.append(f"This template uses {effective} thinking for {label}.")
-        elif effort.supported is False:
-            notes.append("This template has no adjustable thinking levels; its default is retained.")
-        else:
-            notes.append("Thinking levels are unverified; the model default is retained.")
-        presets.append(ResponsePreset(id=ident, label=label,
-            description="Bounded everyday responses." if ident == "balanced" else "More thinking and output for complex tasks.",
-            per_request=values, thinking_limit_supported=limit.supported, notes=notes))
-    return presets
+    """Generic response bundles were not publisher/model recommendations."""
+    return []
 
 
 def validate_model_reasoning(deployment: Deployment, bag: SettingsBag) -> None:
@@ -303,6 +359,12 @@ def validate_model_reasoning(deployment: Deployment, bag: SettingsBag) -> None:
     Unknown templates stay usable with the bag's existing unverified marker.
     Do not silently lower effort or rewrite a frozen preset/run snapshot.
     """
+    invalid = [key for key in bag.unsupported if key in PER_REQUEST_KEYS]
+    if invalid:
+        key = invalid[0]
+        code = "invalid_reasoning_setting" if key == "reasoning" else "invalid_reasoning_budget" if key == "reasoning_budget_tokens" else "invalid_request_settings"
+        raise HarnessError("Correct invalid response control values before sending.", code=code, status_code=422,
+                           details={"keys": invalid})
     budget = bag.applied.get("reasoning_budget_tokens")
     if budget is not None:
         if type(budget) is not int or budget < -1:
@@ -316,7 +378,10 @@ def validate_model_reasoning(deployment: Deployment, bag: SettingsBag) -> None:
     inherited_startup = value is None or value == "default"
     if inherited_startup:
         value = deployment.applied_startup.get("reasoning_effort")
-    if value is None or value == "default":
+    # b11045 server-common.cpp:1346-1353 consumes top-level none as a
+    # Thinking switch and erases reasoning_effort before Jinja evaluation.
+    # It is not one of the selected template's constrained effort literals.
+    if value is None or value in {"default", "none"}:
         return
     props = deployment.server_props
     if props is None:
@@ -359,9 +424,9 @@ def _speculative_descriptors(metadata: GgufRuntimeMetadata) -> dict[str, Runtime
     }
 
 
-def _ordered_reasoning_efforts() -> list[str]:
+def _ordered_reasoning_efforts(supported: set[str] | None = None) -> list[str]:
     preferred = ["default", "minimal", "low", "medium", "high", "xhigh", "max"]
-    supported = STARTUP_ENUMS["reasoning_effort"]
+    supported = supported if supported is not None else set(preferred)
     ordered = [value for value in preferred if value in supported]
     ordered.extend(sorted(supported - set(ordered)))
     return ordered
@@ -377,7 +442,8 @@ def _context_descriptor(maximum: int | None, observed: int | None) -> RuntimeCon
             value=None,
             label="Automatic fit",
             description="Let llama.cpp choose the largest context that fits this start.",
-        )
+        ),
+        RuntimeControlOption(value=0, label="Full model context", description="Use the model's full context; automatic fit cannot shrink it."),
     ]
     options.extend(
         RuntimeControlOption(
@@ -392,7 +458,7 @@ def _context_descriptor(maximum: int | None, observed: int | None) -> RuntimeCon
         flag="--ctx-size",
         label="Context size",
         description=(
-            "Maximum tokens available to a conversation. Automatic fit leaves "
+            "Maximum tokens available to a chat; simultaneous requests share the context pool. Automatic fit leaves "
             "--ctx-size unset; the observed value is recorded from /props once a "
             "server is healthy."
         ),
@@ -407,9 +473,9 @@ def _context_descriptor(maximum: int | None, observed: int | None) -> RuntimeCon
 def _gpu_layers_descriptor(block_count: int | None) -> RuntimeControlDescriptor:
     maximum = block_count + 1 if block_count is not None and block_count >= 0 else None
     if maximum is None:
-        layer_values = ["auto", "all", -1, 0]
+        layer_values = ["auto", "all", 0]
     else:
-        layer_values = ["auto", "all", -1, *range(0, maximum + 1)]
+        layer_values = ["auto", "all", *range(0, maximum + 1)]
     return RuntimeControlDescriptor(
         key="n_gpu_layers",
         flag="--n-gpu-layers",
@@ -424,7 +490,7 @@ def _gpu_layers_descriptor(block_count: int | None) -> RuntimeControlDescriptor:
         options=[
             RuntimeControlOption(
                 value=value,
-                label="Automatic (legacy)" if value == -1 else "Automatic" if value == "auto" else "All" if value == "all" else str(value),
+                label="Automatic" if value == "auto" else "All" if value == "all" else "CPU" if value == 0 else str(value),
                 description=(
                     "Start llama-server with --n-gpu-layers -1."
                     if value == -1
@@ -451,7 +517,7 @@ def _startup_defaults(*, recommended_threads: int | None) -> dict[str, RuntimeCo
             key="flash_attn",
             flag="--flash-attn",
             label="Flash attention",
-            description="Workbench enables flash attention for managed GPU deployments by default.",
+            description="Workbench lets the pinned runtime choose compatible flash attention by default.",
             source="workbench_default",
             applied=DEFAULT_GPU_PROFILE["flash_attn"],
             options=[
@@ -524,7 +590,8 @@ def _threads_descriptor(recommended_threads: int | None) -> RuntimeControlDescri
         applied=None,
         recommended=recommended,
         observed=None,
-        maximum=recommended,
+        maximum=None,
+        suggested_maximum=recommended,
         options=[
             RuntimeControlOption(
                 value=None,

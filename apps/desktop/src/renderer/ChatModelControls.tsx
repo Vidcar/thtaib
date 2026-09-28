@@ -3,7 +3,10 @@ import { api } from "./api";
 import { Icon } from "./Icon";
 import { MenuPopover } from "./MenuPopover";
 import { Notice } from "./Notice";
-import { HoverHelp } from "./HoverHelp";
+import { CompactSlider, CompactSwitch, SegmentedChoice, SettingRow } from "./CompactControls";
+import { tokenLabel } from "./ModelControls";
+import { ModelHardwareEstimate } from "./ModelHardwareEstimate";
+import { mergedStartup } from "./deploymentSettings";
 import { errorMessage } from "./errors";
 import { defaultSettingDisplay, useSetupPreview } from "./effectiveSettings";
 import { workspaceApi } from "./workspaceApi";
@@ -100,6 +103,7 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   const [busy, setBusy] = useState(false);
   const [loadingChoice, setLoadingChoice] = useState("");
   const [error, setError] = useState("");
+  const contextDrafts = useRef(new Map<string, { context: number | null; base: number | null }>());
   const pending = useRef(false);
   const ownerKey = [conversationId, projectId, agentSetupVersionId, configuration.model_configuration_id ?? selectedConfigurationId].join(":");
   const owner = useRef({ key: ownerKey, generation: 0 });
@@ -109,7 +113,13 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   latest.current = { configuration, onApply, onReloaded, runtimeBusy };
   const incomingThinking = JSON.stringify(thinkingSettings(configuration));
   const incomingContext = typeof configuration.startup_overrides?.ctx_size === "number" ? configuration.startup_overrides.ctx_size : null;
-  useEffect(() => { setThinking(JSON.parse(incomingThinking) as Record<string, unknown>); setContext(incomingContext); setError(""); }, [incomingThinking, incomingContext, conversationId, selectedConfigurationId]);
+  useEffect(() => {
+    setThinking(JSON.parse(incomingThinking) as Record<string, unknown>);
+    const draft = contextDrafts.current.get(ownerKey);
+    const next = draft && draft.context !== draft.base ? draft.context : incomingContext;
+    contextDrafts.current.set(ownerKey, { context: next, base: incomingContext }); setContext(next); setError("");
+  }, [incomingThinking, incomingContext, ownerKey]);
+  function stageContext(next: number | null) { contextDrafts.current.set(ownerKey, { context: next, base: incomingContext }); setContext(next); setError(""); }
 
   const selectedProfile = profiles.find(item => item.id === (configuration.model_configuration_id ?? selectedConfigurationId));
   const selectedDeployment = deployments.find(item => item.id === selectedDeploymentId);
@@ -135,12 +145,13 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   const previewConfiguration = chatTuningCandidate(configuration, thinking, context);
   const preview = useSetupPreview(previewConfiguration, projectId, agentSetupVersionId, "conversation", "", tuningOpen);
   const facts = preview.data?.effective_values ?? {};
-  const optionKey = [selectedBundleId, selectedDeployment?.id].join(":");
+  const optionStartup = JSON.stringify(previewConfiguration.startup_overrides ?? {});
+  const optionKey = JSON.stringify([selectedBundleId, selectedProfile?.id, selectedProfile?.revision, selectedDeployment?.id, optionStartup]);
   const [optionsResult, setOptionsResult] = useState<{ key: string; data: BundleConfigurationOptions } | null>(null);
   useEffect(() => {
     if (!tuningOpen || (!selectedBundleId && !selectedDeployment?.id)) return;
     let cancelled = false;
-    const request = selectedBundleId ? api.modelConfiguration(selectedBundleId, selectedDeployment?.id)
+    const request = selectedBundleId ? api.modelConfiguration(selectedBundleId, selectedDeployment?.id, false, { configuration_id: selectedProfile?.id, startup: JSON.parse(optionStartup) as Record<string, unknown> })
       : api.deploymentConfiguration(selectedDeployment!.id);
     void request.then(data => { if (!cancelled) setOptionsResult({ key: optionKey, data }); }).catch(failure => { if (!cancelled) setError(errorMessage(failure)); });
     return () => { cancelled = true; };
@@ -199,18 +210,29 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
     } finally { pending.current = false; setBusy(false); setLoadingChoice(""); }
   }
 
+  async function applyThinking(nextThinking: Record<string, unknown>) {
+    if (pending.current) return;
+    pending.current = true; setBusy(true); setThinking(nextThinking); setError("");
+    try {
+      const current = latest.current.configuration;
+      const currentContext = typeof current.startup_overrides?.ctx_size === "number" ? current.startup_overrides.ctx_size : null;
+      const next = chatTuningCandidate(current, nextThinking, currentContext);
+      const key = selectedBundleId ?? selectedDeployment?.id;
+      if (key) Object.assign(next, { model_overrides: { ...remembered(current), [key]: { model_configuration_id: selectedProfile?.id ?? null, startup_overrides: next.startup_overrides, per_request_overrides: next.per_request_overrides } } });
+      await latest.current.onApply(next);
+    } catch (failure) { if (owner.current.generation === currentGeneration) { setThinking(thinkingSettings(latest.current.configuration)); setError(errorMessage(failure)); } }
+    finally { pending.current = false; setBusy(false); }
+  }
   async function applyTuning(close: () => void) {
-    if (pending.current || preview.loading || preview.error || !preview.data || (context !== null && (!Number.isInteger(context) || context < 1))) return;
+    if (pending.current || preview.loading || preview.error || !preview.data || (context !== null && (!Number.isInteger(context) || context < 0))) return;
     pending.current = true; setBusy(true); setError("");
-    let attempted: SetupConfiguration | null = null;
     try {
       const current = latest.current.configuration;
       const next = chatTuningCandidate(current, thinking, context);
       const startup = next.startup_overrides ?? {};
-      attempted = next;
       const key = selectedBundleId ?? selectedDeployment?.id;
       if (key) Object.assign(next, { model_overrides: { ...remembered(current), [key]: { model_configuration_id: selectedProfile?.id ?? null, startup_overrides: startup, per_request_overrides: next.per_request_overrides } } });
-      if (incomingContext !== context && !latest.current.runtimeBusy && selectedProfile?.bundle_id) {
+      if (!latest.current.runtimeBusy && selectedProfile?.bundle_id) {
         const loaded = await api.startManaged(selectedProfile.bundle_id, selectedProfile.id, startup);
         if (!loaded.health?.healthy || loaded.status !== "running") throw new Error(loaded.error ?? "Model did not become ready.");
         next.deployment_id = loaded.id;
@@ -219,9 +241,9 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
       }
       if (owner.current.generation !== currentGeneration) return;
       await latest.current.onApply(next);
+      contextDrafts.current.set(ownerKey, { context, base: context });
       close();
     } catch (failure) {
-      if (owner.current.generation === currentGeneration && attempted) await Promise.resolve(latest.current.onApply(attempted)).catch(() => {});
       if (owner.current.generation === currentGeneration) setError(errorMessage(failure));
       await latest.current.onReloaded().catch(() => {});
     }
@@ -247,9 +269,21 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   const contextSupported = Boolean(selectedProfile?.bundle_id) && options?.context_size.supported !== false;
   const modes = options?.per_request_defaults.reasoning;
   const efforts = options?.per_request_defaults.reasoning_effort;
-  const tuningChanged = JSON.stringify(thinking) !== incomingThinking || context !== incomingContext;
+  const tuningChanged = context !== incomingContext;
   const defaults = (key: string, target: "configuration" | "model" = "configuration") => defaultSettingDisplay(facts["per_request." + key], target, key);
   const contextDefault = defaultSettingDisplay(facts["startup.ctx_size"], "configuration", "ctx_size");
+  const thinkingFacts = residency.data?.effective_values ?? facts;
+  const effectiveThinking = thinking.reasoning ?? thinkingFacts["per_request.reasoning"]?.value;
+  const thinkingLevels = (efforts?.options ?? []).filter(item => typeof item.value === "string" && !["default", "auto"].includes(String(item.value)));
+  const thinkingChoice = thinking.reasoning === "off" ? "off" : String(thinking.reasoning_effort ?? "");
+  const loadedContext = selectedDeployment?.server_props?.n_ctx;
+  const selectedContext = typeof baseContext === "number" ? baseContext : selectedProfile?.bags.startup.requested.ctx_size;
+  const contextMaximum = options?.context_size.maximum;
+  const capacitySteps = (options?.context_size.options ?? []).map(item => Number(item.value)).filter(item => Number.isSafeInteger(item) && item > 0 && (!contextMaximum || item <= contextMaximum));
+  if (capacitySteps.length < 2) { for (let size = 2048; size <= (contextMaximum ?? 131072); size *= 2) capacitySteps.push(size); if (contextMaximum && !capacitySteps.includes(contextMaximum)) capacitySteps.push(contextMaximum); }
+  const capacityLabel = (size: unknown) => size === 0 ? contextMaximum ? `Full · ${tokenLabel(contextMaximum)} tokens` : "Full model capacity" : typeof size === "number" && size > 0 ? `${tokenLabel(size)} tokens` : "Auto";
+  const displayedContext = context === 0 ? contextMaximum ?? null : context ?? (selectedContext === 0 ? contextMaximum ?? null : typeof selectedContext === "number" ? selectedContext : null);
+  const needsReload = tuningChanged || !runtimeBusy && selectedState.tone !== "ready";
   const term = search.trim().toLocaleLowerCase();
   const visibleBundles = availableBundles.filter(item => (item.status === "ready" || item.disk_matches) && [modelLabel(item, availableBundles), modelDetails(item), ...profiles.filter(profile => profile.bundle_id === item.id).map(profile => profile.display_name)].join(" ").toLocaleLowerCase().includes(term));
   const visibleConnected = connectedChoices.filter(item => item.display_name.toLocaleLowerCase().includes(term));
@@ -290,12 +324,24 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
     </MenuPopover>
     <MenuPopover label="Tune model" trigger={<Icon name="tune" size={16} />} className="chat-tuning" panelClassName="chat-model-controls-panel chat-tuning-panel" disabled={disabled || (!selectedProfile && !selectedDeployment)} onOpenChange={setTuningOpen}>
       {close => <>
-        {modes?.supported ? <label>Thinking<select aria-label="Thinking" disabled={busy} title={thinking.reasoning == null ? defaults("reasoning").title : undefined} value={String(thinking.reasoning ?? "")} onChange={event => { const next = { ...thinking }; if (event.target.value) next.reasoning = event.target.value; else delete next.reasoning; setThinking(next); }}><option value="">{defaults("reasoning").value} · {defaults("reasoning").source}</option>{(modes.options?.length ? modes.options : [{ value: "on", label: "On" }, { value: "off", label: "Off" }]).map(item => <option key={String(item.value)} value={String(item.value)}>{item.value === "auto" ? defaults("reasoning", "model").value + " · " + defaults("reasoning", "model").source : item.label}</option>)}</select><small>{thinking.reasoning == null ? defaults("reasoning").source : "This chat"}</small></label> : options ? <span className="hint">Thinking {modes?.supported === false ? "unavailable" : "unverified"}</span> : null}
-        {efforts?.supported ? <label>Effort<select aria-label="Thinking level" disabled={busy || thinking.reasoning === "off"} title={thinking.reasoning_effort == null ? defaults("reasoning_effort").title : undefined} value={String(thinking.reasoning_effort ?? "")} onChange={event => { const next = { ...thinking }; if (event.target.value) next.reasoning_effort = event.target.value; else delete next.reasoning_effort; setThinking(next); }}><option value="">{defaults("reasoning_effort").value} · {defaults("reasoning_effort").source}</option>{efforts.options.map(item => <option key={String(item.value)} value={String(item.value)}>{item.value === "default" ? defaults("reasoning_effort", "model").value + " · " + defaults("reasoning_effort", "model").source : item.label}</option>)}</select><small>{thinking.reasoning_effort == null ? defaults("reasoning_effort").source : "This chat"}</small></label> : null}
-        <label>Context <HoverHelp title="Context">Changing an owned model's context reloads it when safe. Queued inputs keep their saved settings. Clear the value to follow its configuration.</HoverHelp><input aria-label="Chat context" type="number" min={1} max={options?.context_size.maximum ?? undefined} step={1} value={context ?? ""} placeholder={typeof baseContext === "number" ? String(baseContext) : contextDefault.value} title={context === null ? contextDefault.title : undefined} disabled={busy || !contextSupported} onChange={event => setContext(event.target.value ? Number(event.target.value) : null)} /><small>{context === null ? contextDefault.source : "This chat"}{preview.loading ? " · Checking…" : ""}</small></label>
-        {!contextSupported ? <span className="hint">{selectedDeployment?.scope === "connected" ? "Context is managed by this connection." : "Context control unavailable."}</span> : null}
+        <div className="chat-tuning-body">
+        <header className="chat-tuning-heading"><strong>This chat</strong><span className="hint">Thinking applies to the next message</span></header>
+        <div className="setting-rows chat-thinking-settings">
+          {efforts?.supported && thinkingLevels.length ? <SegmentedChoice label="Thinking" value={thinkingChoice} meta={thinking.reasoning != null || thinking.reasoning_effort != null ? "This chat" : defaults("reasoning_effort").source} description="Only levels effective for the selected model template are offered. Saved sampling settings stay in place." options={[{ value: "", label: "Default" }, ...(modes?.supported ? [{ value: "off", label: "Off" }] : []), ...thinkingLevels.map(item => ({ value: String(item.value), label: item.label }))]} disabled={busy} onChange={choice => { const next = { ...thinking }; delete next.reasoning; delete next.reasoning_effort; if (choice === "off") next.reasoning = "off"; else if (choice) { if (modes?.supported) next.reasoning = "on"; next.reasoning_effort = choice; } void applyThinking(next); }} hint={thinkingChoice ? undefined : `${defaults("reasoning_effort").value} · ${defaults("reasoning_effort").source}`} /> : modes?.supported && effectiveThinking == null ? <SegmentedChoice label="Thinking" value={String(thinking.reasoning ?? "")} options={[{ value: "", label: "Default" }, { value: "on", label: "On" }, { value: "off", label: "Off" }]} disabled={busy} meta={thinking.reasoning == null ? defaults("reasoning").source : "This chat"} description="The next accepted message uses this choice. Active and already queued work keep their settings." hint="The template's default is not reported. Choose On or Off to set it explicitly." onChange={choice => { const next = { ...thinking }; delete next.reasoning; delete next.reasoning_effort; if (choice) next.reasoning = choice; void applyThinking(next); }} /> : modes?.supported ? <CompactSwitch label="Thinking" checked={effectiveThinking === "on" || effectiveThinking === true} disabled={busy} onChange={enabled => void applyThinking({ ...thinking, reasoning: enabled ? "on" : "off" })} meta={thinking.reasoning == null ? defaults("reasoning").source : "This chat"} description="The next accepted message uses this choice. Active and already queued work keep their settings." hint={Object.keys(thinking).length ? <button type="button" className="text-button" disabled={busy} onClick={() => void applyThinking({})} title={defaults("reasoning").title}>Reset to setup</button> : undefined} /> : options ? <span className="hint">Thinking {modes?.supported === false ? "unavailable for this template" : "not yet verified"}</span> : <span className="hint">Checking Thinking controls…</span>}
+        </div>
+        <section className="chat-capacity-settings" aria-label="Conversation capacity">
+          <SettingRow label="Conversation capacity" help="Total conversation capacity in tokens. Simultaneous requests share the pool. A deliberate reload changes loading settings; current and queued work retain their accepted settings." provenance={context === null ? contextDefault.source : "This chat"} onReset={context !== null && !busy ? () => stageContext(null) : undefined} resetLabel="Reset" resetTitle={contextDefault.title}>
+            <div className="model-context-control"><select aria-label="Chat capacity mode" value={context === null ? "setup" : context === 0 ? "full" : "custom"} disabled={busy || !contextSupported} onChange={event => stageContext(event.target.value === "setup" ? null : event.target.value === "full" ? 0 : Number(selectedContext) || 32768)}><option value="setup">From setup · {capacityLabel(selectedContext)}</option><option value="full" disabled={!contextMaximum}>Full · {capacityLabel(contextMaximum)}</option><option value="custom">Custom</option></select><div className="slider-field"><CompactSlider hideHeading label="Chat capacity slider" value={displayedContext} values={capacitySteps} formatValue={capacityLabel} inherited={context === null} disabled={busy || !contextSupported} onChange={stageContext} /><span className="number-field"><input aria-label="Chat context" type="number" min={1} max={contextMaximum ?? undefined} step={1} value={context === 0 ? contextMaximum ?? "" : context ?? ""} placeholder={selectedContext === 0 ? "Full" : typeof selectedContext === "number" ? String(selectedContext) : "Auto"} title={context === null ? contextDefault.title : undefined} disabled={busy || !contextSupported} onChange={event => stageContext(event.target.value ? Number(event.target.value) : null)} /><span className="field-unit">tokens</span></span></div></div>
+          </SettingRow>
+          <dl className="chat-capacity-state"><div><dt>Selected</dt><dd>{capacityLabel(incomingContext ?? selectedContext)}</dd></div><div><dt title="Maximum tokens for one request on the loaded model. Simultaneous requests share its context pool.">Loaded per request</dt><dd>{loadedContext == null ? "Not reported" : capacityLabel(loadedContext)}</dd></div>{tuningChanged || runtimeBusy && incomingContext !== null && incomingContext !== loadedContext ? <div data-pending="true"><dt>Pending</dt><dd>{capacityLabel(context ?? selectedContext)}</dd></div> : null}</dl>
+          <p className="hint">Simultaneous requests share this context pool.</p>
+          {runtimeBusy && tuningChanged ? <p className="hint">Stage this capacity for the next submission. Current and queued work keep their settings.</p> : tuningChanged ? <p className="hint">Review the proposed capacity, then reload this chat's model.</p> : null}
+          {contextSupported && selectedProfile && context !== null && Number.isSafeInteger(context) && context >= 0 ? <ModelHardwareEstimate active={tuningOpen} selection={{ bundle_id: selectedBundleId, startup: mergedStartup(selectedProfile.bags.startup.requested, previewConfiguration.startup_overrides ?? {}) }} /> : null}
+          {!contextSupported ? <span className="hint">{selectedDeployment?.scope === "connected" ? "Context is managed by this connection." : "Context control unavailable."}</span> : null}
+        </section>
         {error || preview.error ? <Notice tone="error">{error || preview.error}</Notice> : null}
-        <div className="actions chat-model-controls-actions"><button type="button" className="primary-button" disabled={!tuningChanged || busy || preview.loading || !preview.data || Boolean(preview.error) || (context !== null && (!Number.isInteger(context) || context < 1))} onClick={() => void applyTuning(close)}>{busy ? "Applying…" : "Apply"}</button></div>
+        </div>
+        <div className="actions chat-model-controls-actions"><button type="button" className="primary-button" disabled={!contextSupported || !needsReload || busy || preview.loading || !preview.data || Boolean(preview.error) || (context !== null && (!Number.isInteger(context) || context < 0 || Boolean(contextMaximum && context > contextMaximum)))} onClick={() => void applyTuning(close)}>{busy ? "Applying…" : runtimeBusy ? "Stage for next message" : "Reload"}</button></div>
       </>}
     </MenuPopover>
   </>;

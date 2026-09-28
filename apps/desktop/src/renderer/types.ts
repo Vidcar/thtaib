@@ -763,6 +763,17 @@ export interface RuntimeControlDescriptor {
   recommended?: number | null;
   supported?: boolean | null;
   accepted_values?: string[] | null;
+  domain?: "boolean" | "integer" | "number" | "string" | "object";
+  unit?: string | null;
+  control?: "switch" | "choice" | "tokens" | "number" | "text" | "json";
+  section?: "response" | "memory" | "advanced";
+  apply_timing?: "next_request" | "reload";
+  minimum?: number | null;
+  step?: number | null;
+  suggested_minimum?: number | null;
+  suggested_maximum?: number | null;
+  dependencies?: string[];
+  reset_value?: unknown;
   options: Array<{ value: string | number | boolean | null; label: string; description?: string }>;
 }
 

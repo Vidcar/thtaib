@@ -29,6 +29,7 @@ import type {
   PresentationSettings,
   RedactionMode,
   RunProfile,
+  ResponseRecipeOrigin,
   RuntimeManifest,
   ManagedModelsRuntime,
   SettingsBags,
@@ -44,8 +45,11 @@ import type {
 } from "./types";
 
 export const DEFAULT_GPU_STARTUP = {
-  n_gpu_layers: -1,
-  flash_attn: "on",
+  n_gpu_layers: "auto",
+  fit: "on",
+  flash_attn: "auto",
+  parallel: 4,
+  kv_unified: true,
 } as const;
 
 export const DEFAULT_EMBEDDING_STARTUP = {
@@ -181,10 +185,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ repo_id, revision }),
     }),
-  importHf: (repo_id: string, revision: string, allow_patterns: string[], recipe_ids: string[] = [], default_recipe_id: string | null = null) =>
+  importHf: (repo_id: string, revision: string, allow_patterns: string[], recipe_ids: string[] = [], default_recipe_id: string | null = null, initial?: { startup: Record<string, unknown>; per_request?: Record<string, unknown>; recipe_id?: string | null }) =>
     request<ImportJob>("/v1/imports/huggingface", {
       method: "POST",
-      body: JSON.stringify({ repo_id, revision, allow_patterns, recipe_ids, default_recipe_id }),
+      body: JSON.stringify({ repo_id, revision, allow_patterns, recipe_ids, default_recipe_id, ...(initial ? { initial_startup: initial.startup, ...(initial.recipe_id ? { initial_recipe_id: initial.recipe_id, initial_per_request: initial.per_request ?? {} } : initial.per_request ? { initial_per_request: initial.per_request } : {}) } : {}) }),
     }),
   refreshResponseRecipes: (bundleId: string) => request<ModelBundle>(`/v1/bundles/${bundleId}/response-recipes/refresh`, { method: "POST" }),
   modelCard: (bundleId: string) => request<ModelCard>(`/v1/bundles/${encodeURIComponent(bundleId)}/model-card`),
@@ -194,7 +198,9 @@ export const api = {
       body: JSON.stringify({ recipe_ids, default_recipe_id }),
     }),
   inspect: (bundleId: string) => request<InspectReport>(`/v1/bundles/${bundleId}/inspect`),
-  modelConfiguration: (bundleId: string, deploymentId?: string, refresh = false) => request<BundleConfigurationOptions>(`/v1/bundles/${bundleId}/configuration-options?refresh=${refresh}${deploymentId ? `&deployment_id=${encodeURIComponent(deploymentId)}` : ""}`),
+  modelConfiguration: (bundleId: string, deploymentId?: string, refresh = false, selection?: { configuration_id?: string | null; startup?: Record<string, unknown> }) => selection
+    ? request<BundleConfigurationOptions>(`/v1/bundles/${bundleId}/configuration-options`, { method: "POST", body: JSON.stringify({ ...selection, deployment_id: deploymentId ?? null, refresh }) })
+    : request<BundleConfigurationOptions>(`/v1/bundles/${bundleId}/configuration-options?refresh=${refresh}${deploymentId ? `&deployment_id=${encodeURIComponent(deploymentId)}` : ""}`),
   deploymentConfiguration: (deploymentId: string) => request<BundleConfigurationOptions>(`/v1/deployments/${deploymentId}/configuration-options`),
   modelProjectors: (id: string) => request<SchemaBundleProjectors>(`/v1/bundles/${id}/projectors`),
   selectModelProjector: (id: string, path: string | null) => request<ModelBundle>(`/v1/bundles/${id}/projector`, { method: "PUT", body: JSON.stringify({ path }) }),
@@ -229,7 +235,7 @@ export const api = {
   reload: (id: string) => request<Deployment>(`/v1/deployments/${id}/reload`, { method: "POST" }),
   reconfigure: (id: string, payload: { startup: Record<string, unknown>; replace_startup?: boolean; model_configuration_id?: string | null; expected_configuration_revision?: number; expected_updated_at?: string; conversation_id?: string | null }) => request<Deployment>(`/v1/deployments/${id}/reconfigure`, { method: "POST", body: JSON.stringify(payload) }),
   modelConfigurations: (bundleId: string) => request<RunProfile[]>(`/v1/bundles/${bundleId}/configurations`),
-  saveModelConfiguration: (bundleId: string, payload: { display_name: string; startup: object; per_request: object; configuration_id?: string; expected_revision?: number; make_default?: boolean }) => request<RunProfile>(`/v1/bundles/${bundleId}/configurations`, { method: "POST", body: JSON.stringify(payload) }),
+  saveModelConfiguration: (bundleId: string, payload: { display_name: string; startup: object; per_request: object; recipe_origin?: ResponseRecipeOrigin | null; configuration_id?: string; expected_revision?: number; make_default?: boolean }) => request<RunProfile>(`/v1/bundles/${bundleId}/configurations`, { method: "POST", body: JSON.stringify(payload) }),
   setDefaultConfiguration: (bundleId: string, configuration_id: string) => request<ModelBundle>(`/v1/bundles/${bundleId}/default-configuration`, { method: "PUT", body: JSON.stringify({ configuration_id }) }),
   smoke: (id: string) => request<{ ok: boolean; detail: string | null }>(`/v1/deployments/${id}/smoke`, { method: "POST" }),
   deploymentLogs: (id: string) => request<{ text: string; available: boolean }>(`/v1/deployments/${id}/logs`),

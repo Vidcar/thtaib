@@ -6,6 +6,8 @@ import json
 import hashlib
 import re
 from pathlib import Path
+import tempfile
+import time
 
 from pydantic import TypeAdapter
 
@@ -36,9 +38,9 @@ class KnowledgeStore:
 
     def read_config(self) -> KnowledgeConfig:
         if not self.config_path.is_file():
-            config = KnowledgeConfig()
-            self.write_config(config)
-            return config
+            # Diagnostics are reads. Concurrent initial readers must not
+            # publish defaults over another caller's newly saved choices.
+            return KnowledgeConfig()
         return KnowledgeConfig.model_validate_json(self.config_path.read_text(encoding="utf-8"))
 
     def write_config(self, config: KnowledgeConfig) -> KnowledgeConfig:
@@ -150,6 +152,25 @@ class KnowledgeStore:
 
     def _write_json(self, path: Path, payload: object) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f"{path.name}.tmp")
-        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        tmp.replace(path)
+        data = json.dumps(payload, indent=2)
+        tmp = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                    prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
+                tmp = Path(handle.name)
+                handle.write(data)
+            # Windows requires the temporary handle to close before replacing.
+            # Each writer owns its temporary file; readers see a whole record.
+            for attempt in range(10):
+                try:
+                    tmp.replace(path)
+                    break
+                except PermissionError as exc:
+                    # Concurrent replacement/read handles can briefly block a
+                    # Windows rename. Real permission failures still surface.
+                    if getattr(exc, "winerror", None) not in {5, 32, 33} or attempt == 9:
+                        raise
+                    time.sleep(0.005)
+        finally:
+            if tmp is not None:
+                tmp.unlink(missing_ok=True)

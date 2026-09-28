@@ -8,3 +8,16 @@
 .estimate-availability {display: grid; gap: var(--space-tight); margin-block: var(--space-compact); padding-block: var(--pad-tight); border-bottom: var(--line-hairline) solid var(--border);}
 .estimate-availability > span {display: flex; justify-content: space-between; gap: var(--space-compact);}
 .estimate-availability strong {font-variant-numeric: tabular-nums;}
+.estimate-heading strong {display: flex; align-items: center; gap: var(--space-compact); font-weight: var(--weight-medium);}
+.estimate-heading strong small {font-weight: var(--weight-regular); font-size: var(--text-small);}
+.estimate-totals {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-stack); margin: var(--space-compact) 0; padding-block: var(--pad-compact);}
+.estimate-totals dt {color: var(--muted); font-size: var(--text-small);}
+.estimate-totals dd {margin: var(--space-tight) 0 0; font-size: var(--text-heading); font-weight: var(--weight-medium); color: var(--text); font-variant-numeric: tabular-nums;}
+.estimate-summary {font-size: var(--text-small); color: var(--muted);}
+.estimate-summary strong {color: var(--text); font-weight: var(--weight-medium); font-variant-numeric: tabular-nums;}
+.estimate-completeness {line-height: var(--leading-body); font-size: var(--text-small);}
+.estimate-context {font-size: var(--text-small); color: var(--muted); margin: var(--space-compact) 0;}
+.estimate-context strong {font-weight: var(--weight-medium); color: var(--text);}
+.estimate-context small {display: block; margin-top: var(--space-tight); font-size: var(--text-small);}
+.estimate-observed {display: flex; flex-wrap: wrap; gap: var(--space-compact); padding-block: var(--pad-compact); border-top: var(--line-hairline) solid var(--border); font-size: var(--text-small); color: var(--muted);}
+.estimate-observed > strong {font-weight: var(--weight-medium); color: var(--text);}

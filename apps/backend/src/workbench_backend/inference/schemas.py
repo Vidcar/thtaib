@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class FileRole(str, Enum):
@@ -186,6 +186,8 @@ class ImportJob(BaseModel):
     default_recipe_id: str | None = None
     configuration_error: str | None = None
     initial_startup: dict[str, Any] = Field(default_factory=dict)
+    initial_per_request: dict[str, Any] = Field(default_factory=dict)
+    initial_recipe_id: str | None = None
 
 
 class StorageLocation(BaseModel):
@@ -217,6 +219,8 @@ class HuggingFaceImportRequest(BaseModel):
     recipe_ids: list[str] = Field(default_factory=list)
     default_recipe_id: str | None = None
     initial_startup: dict[str, Any] = Field(default_factory=dict)
+    initial_per_request: dict[str, Any] = Field(default_factory=dict)
+    initial_recipe_id: str | None = None
 
 
 class ChatTemplateSelectionRequest(BaseModel):
@@ -277,6 +281,15 @@ class ModelMemoryEstimate(BaseModel):
     assumptions: list[str] = Field(default_factory=list)
     unknown_reasons: list[str] = Field(default_factory=list)
     observed_runtime: dict[str, Any] | None = None
+    plan_identity: str | None = None
+    completeness: Literal["complete", "partial", "unavailable"] = "partial"
+    effective_context: int | None = None
+    effective_context_per_slot: int | None = None
+    effective_parallel: int | None = None
+    kv_unified: bool | None = None
+    projector_bytes: int | None = None
+    speculation_bytes: int | None = None
+    dynamic_overhead_bytes: int | None = None
 
 
 class HubVariant(BaseModel):
@@ -320,6 +333,9 @@ class LocalImportRequest(BaseModel):
     source_path: str
     display_name: str | None = None
     copy_files: bool = True
+    initial_startup: dict[str, Any] = Field(default_factory=dict)
+    initial_per_request: dict[str, Any] = Field(default_factory=dict)
+    initial_recipe_id: str | None = None
 
 
 class SettingNote(BaseModel):
@@ -327,6 +343,24 @@ class SettingNote(BaseModel):
     requested: Any = None
     applied: Any = None
     reason: str
+
+
+class ResponseBudgetPolicy(BaseModel):
+    version: int = 1
+    mode: Literal["explicit", "publisher", "workbench_auto"] = "workbench_auto"
+    total_tokens: int | None = None
+    thinking: bool | None = None
+    source: str = "Workbench Auto"
+
+
+class ResponseBudgetBinding(BaseModel):
+    version: int = 1
+    total_tokens: int
+    capacity_tokens: int
+    margin_tokens: int
+    source: str
+    model_identity: str
+    bound_at: str
 
 
 class SettingsBag(BaseModel):
@@ -338,9 +372,13 @@ class SettingsBag(BaseModel):
     unverified: list[str] = Field(default_factory=list)
     retired: list[SettingNote] = Field(default_factory=list)
     """Requested keys the pinned runtime no longer accepts; each note says what replaces it."""
+    output_budget_policy: ResponseBudgetPolicy | None = None
+    output_budget_binding: ResponseBudgetBinding | None = None
+    recipe_origin: ResponseRecipeOrigin | None = None
 
 
 class SettingsBags(BaseModel):
+    accepted_loading_identity: str | None = None
     startup: SettingsBag = Field(default_factory=SettingsBag)
     per_request: SettingsBag = Field(default_factory=SettingsBag)
     agent: SettingsBag = Field(default_factory=SettingsBag)
@@ -371,6 +409,7 @@ class RunProfile(BaseModel):
     created_at: str
     updated_at: str
     revision: int = 1
+    settings_schema_version: int = 1
 
 
 class DefaultConfigurationRequest(BaseModel):
@@ -390,6 +429,7 @@ class ResponseRecipeConfigurationResult(BaseModel):
 class ModelConfigurationWriteRequest(ProfileWriteRequest):
     configuration_id: str | None = None
     make_default: bool = False
+    recipe_origin: ResponseRecipeOrigin | None = None
 
 
 class ReconfigureDeploymentRequest(BaseModel):
@@ -510,6 +550,10 @@ class RuntimeManifest(BaseModel):
     error: str | None = None
     companion_asset_name: str | None = None
     companion_sha256: str | None = None
+    memory_planner_path: str | None = None
+    memory_planner_sha256: str | None = None
+    memory_planner_protocol: int | None = None
+    memory_planner_native_fingerprint: str | None = None
 
 
 class PinRuntimeRequest(BaseModel):
@@ -555,6 +599,17 @@ class RuntimeControlDescriptor(BaseModel):
     supported: bool | None = None
     accepted_values: list[str] | None = None
     options: list[RuntimeControlOption] = Field(default_factory=list)
+    domain: Literal["boolean", "integer", "number", "string", "object", "json"] = "string"
+    unit: str | None = None
+    control: Literal["switch", "choice", "tokens", "number", "text", "json"] = "choice"
+    section: Literal["response", "memory", "advanced"] = "advanced"
+    apply_timing: Literal["next_request", "reload"] = "reload"
+    minimum: int | float | None = None
+    step: int | float | None = None
+    suggested_minimum: int | float | None = None
+    suggested_maximum: int | float | None = None
+    dependencies: list[str] = Field(default_factory=list)
+    reset_value: Any = None
 
 
 class GgufRuntimeMetadata(BaseModel):
@@ -575,6 +630,14 @@ class ResponsePreset(BaseModel):
     per_request: dict[str, Any]
     thinking_limit_supported: bool | None = None
     notes: list[str] = Field(default_factory=list)
+
+
+class BundleConfigurationOptionsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    configuration_id: str | None = None
+    deployment_id: str | None = None
+    startup: dict[str, Any] | None = None
+    refresh: bool = False
 
 
 class BundleConfigurationOptions(BaseModel):
@@ -617,6 +680,7 @@ class Deployment(BaseModel):
     server_props: ServerProperties | None = None
     capability_evidence: list[dict[str, Any]] = Field(default_factory=list)
     inference_identity: dict[str, Any] = Field(default_factory=dict)
+    loaded_model_identity: str | None = None
     configuration_revision: int | None = None
     reconfiguration: dict[str, Any] | None = None
     error: str | None = None

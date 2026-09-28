@@ -20,6 +20,7 @@ from workbench_backend.inference.settings import (
     STARTUP_KEYS,
     resolve_bag,
     resolve_bags,
+    split_response_startup,
 )
 from workbench_backend.agents.memory_skills import (
     MEMORY_EDIT_GAP,
@@ -123,7 +124,10 @@ def effective_setting_values(manager, configuration, provenance: dict) -> dict:
     options = None
     if bundle_id and hasattr(manager, "get_bundle_configuration_options"):
         try:
-            options = manager.get_bundle_configuration_options(bundle_id, deployment_id=deployment.id if deployment else None)
+            options = manager.get_bundle_configuration_options(bundle_id,
+                deployment_id=deployment.id if deployment else None,
+                configuration_id=profile.id if profile else None,
+                startup=configuration.startup_overrides or None)
         except Exception:
             # A missing/offline model remains editable. Unknown values remain unknown.
             pass
@@ -155,6 +159,16 @@ def effective_setting_values(manager, configuration, provenance: dict) -> dict:
             default_source = descriptor.default_source if descriptor else None
             if descriptor and default_value is None and descriptor.applied not in (None, "auto", "default"):
                 default_value, default_source = descriptor.applied, descriptor.source
+            if bag_name == "per_request" and key == "max_tokens" and is_default:
+                publisher_limit = bags.per_request.applied.get("max_tokens")
+                if type(publisher_limit) is int and publisher_limit > 0:
+                    value, source, known = publisher_limit, "Publisher recommendation", True
+                    default_value, default_source = publisher_limit, source
+                elif not (type(default_value) is int and default_value > 0):
+                    # Auto becomes numeric only when accepted work binds to an
+                    # exact loaded capacity. A cold editor must not invent one.
+                    value, source, known = None, "Workbench Auto", False
+                    default_value, default_source = None, source
             parent_value = origin.inherited_value if origin and origin.inherited_source else selected.get(key)
             parent_source = origin.inherited_source if origin and origin.inherited_source else selected_source
             if parent_value is None or (key == "reasoning_effort" and parent_value == "default") or (key == "reasoning" and parent_value == "auto"):
@@ -216,6 +230,7 @@ def resolve_effective_setup(
         )
     # A saved setup is a snapshot. Only an explicitly selected profile resolves
     # its current values; opting out clears both response and agent preset bags.
+    startup_overrides, per_request_overrides = split_response_startup(startup_overrides or {}, per_request_overrides or {})
     inherited = profile is None and inherit_deployment_settings
     per_request = _resolve_per_request(profile, deployment, per_request_overrides, inherit_deployment_settings)
     validate_model_reasoning(deployment, per_request)
@@ -253,6 +268,7 @@ def resolve_effective_setup(
         startup=startup_selected,
         per_request=per_request,
         agent=agent,
+        accepted_loading_identity=deployment.settings.accepted_loading_identity if inherited else None,
     )
     return EffectiveSetup(
         selected_project_id=selected_project_id,
@@ -377,11 +393,20 @@ def _resolve_per_request(
     overrides: dict[str, Any] | None,
     inherit_deployment_settings: bool = True,
 ) -> SettingsBag:
+    source = profile.bags.per_request if profile is not None else deployment.settings.per_request
+    if (profile is not None or inherit_deployment_settings) and source.output_budget_policy is not None and not overrides:
+        # Accepted response policy, its first runtime binding and recipe origin
+        # are immutable execution facts. Resolving a resumed setup preserves them.
+        return source.model_copy(deep=True)
     if profile is not None:
         requested = dict(profile.bags.per_request.requested)
         requested.update(overrides or {})
+        # Response defaults belong to the selected setup, even when its weights
+        # are served by a child first loaded for another setup.
+        defaults = {key: value for key, value in profile.bags.per_request.applied.items()
+            if key not in profile.bags.per_request.requested}
         return resolve_bag({key: value for key, value in requested.items() if value is not None}, PER_REQUEST_KEYS,
-            defaults=deployment.publisher_request_defaults)
+            defaults=defaults)
     if not inherit_deployment_settings:
         return resolve_bag({key: value for key, value in (overrides or {}).items() if value is not None}, PER_REQUEST_KEYS,
             defaults=deployment.publisher_request_defaults)

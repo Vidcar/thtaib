@@ -32,7 +32,7 @@ from workbench_backend.agents.effective_setup import resolve_effective_setup
 from workbench_backend.agents.setup_service import SetupService, configuration_from_request, cleared_configuration_fields
 from workbench_backend.agents.setup_schemas import ProjectCreateRequest, InstructionLayer, FrozenHelperSelection, ReviewConfiguration, FrozenExecutionSelection
 from workbench_backend.inference.schemas import SettingsBags
-from workbench_backend.agents.helpers import freeze_helpers
+from workbench_backend.agents.helpers import freeze_helpers, freeze_settings, prepare_frozen_model, require_accepted_model_identity
 from workbench_backend.agents.execution_policy import ExecutionControl, PLAN_TOOLS, PLAN_INSTRUCTIONS, require_setup_capabilities
 from workbench_backend.agents.evidence import build_completion
 from workbench_backend.agents.context import BudgetedSummarizationMiddleware, observe_context, require_context_fit, observe_payload, token_counter_for_model, validate_retained_messages
@@ -534,6 +534,16 @@ class HarnessService:
             raise HarnessError("The frozen helper selection does not match this queued turn.", code="helper_snapshot_mismatch", status_code=409)
         if not request.deployment_id:
             raise HarnessError("Choose a model or an agent setup with a model.", code="setup_deployment_required", status_code=400)
+        # Lab/direct executions also capture response policy before a cold load
+        # can wait. Chat supplies its already-persisted admission snapshot.
+        with self.manager.store.configuration_lock():
+            accepted_settings = SettingsBags.model_validate(execution_snapshot.settings if execution_snapshot is not None
+                else freeze_settings(self.manager, selection.configuration))
+            prepared = prepare_frozen_model(self.manager, selection.configuration, accepted_settings)
+            selection = selection.model_copy(update={"configuration": prepared})
+            request = request.model_copy(update={"deployment_id": prepared.deployment_id})
+            helpers = [helper.model_copy(update={"configuration": prepare_frozen_model(self.manager,
+                helper.configuration, helper.settings_snapshot)}) if helper.settings_snapshot else helper for helper in helpers]
         require_setup_capabilities(selection.configuration,
             project_bound=bool(request.project_path or request.workspace_id), presented_tools=request.presented_tools)
         admission = self.manager.reserve_deployment(
@@ -543,6 +553,7 @@ class HarnessService:
         admission.__enter__()
         try:
             deployment = self.manager.ensure_deployment_ready(request.deployment_id)
+            require_accepted_model_identity(deployment, accepted_settings)
             if not deployment.endpoint:
                 raise HarnessError(
                     "Deployment has no endpoint. The manager could not load inference.",
@@ -565,7 +576,7 @@ class HarnessService:
                 versions,
                 resource_loader=self._knowledge_provider().resource_bytes if self._knowledge_provider else None,
             )
-            profile = self.manager.get_profile(request.profile_id) if request.profile_id and execution_snapshot is None else None
+            profile = None
             project_path = _resolved_project_path(request.project_path)
             if project_path is None and request.workspace_id:
                 stored = LabStore(self.manager.paths).get_workspace(request.workspace_id)
@@ -696,10 +707,10 @@ class HarnessService:
             if retrieval_presented and SEARCH_KNOWLEDGE_TOOL_NAME not in enabled:
                 enabled = [*enabled, SEARCH_KNOWLEDGE_TOOL_NAME]
             setup = resolve_effective_setup(
-                deployment=deployment.model_copy(update={"settings": SettingsBags.model_validate(execution_snapshot.settings)}) if execution_snapshot is not None else deployment,
+                deployment=deployment.model_copy(update={"settings": accepted_settings}),
                 profile=profile,
-                per_request_overrides=request.per_request_overrides,
-                startup_overrides=None if execution_snapshot is not None else request.startup_overrides,
+                per_request_overrides=None,
+                startup_overrides=None,
                 knowledge_refs=refs,
                 knowledge_versions=versions,
                 surface_system_prompt=request.system_prompt,
@@ -711,7 +722,7 @@ class HarnessService:
                 retrieval_corpus_documents=len(retrieval_documents),
                 retrieval_instructions=RETRIEVAL_INSTRUCTIONS if retrieval_presented else None,
                 materialized_knowledge=knowledge_plan.facts,
-                inherit_deployment_settings=True if execution_snapshot is not None else request.inherit_deployment_settings,
+                inherit_deployment_settings=True,
                 instruction_layers=selection.instruction_layers,
                 selected_project_id=selection.project_id,
                 selected_agent_setup_id=selection.agent_setup_id,
@@ -720,8 +731,17 @@ class HarnessService:
             )
             if execution_snapshot is not None:
                 setup.selected_profile_id = request.profile_id
+                # Admission already resolved response defaults and chat choices.
+                # Do not let the resident child's originating setup resolve them
+                # again, and do not consult the now-editable saved revision.
+                setup.bags.per_request = SettingsBags.model_validate(execution_snapshot.settings).per_request
                 if setup.startup_mismatches:
                     raise HarnessError("This queued turn needs different loaded model settings. Reload the model or edit this turn before retrying.", code="model_reload_required", status_code=409)
+            else:
+                setup.selected_profile_id = request.profile_id
+                setup.bags.per_request = accepted_settings.per_request
+            from workbench_backend.inference.response_budget import bind_output_budget
+            setup.bags.per_request = bind_output_budget(deployment, setup.bags.per_request)
             setup.system_prompt = "\n\n".join((setup.system_prompt, approval_mode_instructions(request.approval_mode)))
             if request.work_mode == "plan":
                 setup.system_prompt += "\n\n" + PLAN_INSTRUCTIONS
@@ -2256,8 +2276,32 @@ class HarnessService:
         run.tool_outcomes[message.tool_call_id] = settled
 
     def _deployment_model(self, run: AgentRun, http_sink: list[dict[str, Any]]) -> BaseChatModel:
+        require_accepted_model_identity(self.manager.get_deployment(run.deployment_id),
+            run.effective_setup.bags if run.effective_setup is not None else None)
         deployment = self.manager.ensure_deployment_ready(run.deployment_id)
+        require_accepted_model_identity(deployment, run.effective_setup.bags if run.effective_setup is not None else None)
         per_request = run.effective_setup.bags.per_request if run.effective_setup is not None else None
+        if run.effective_setup is not None:
+            from workbench_backend.inference.response_budget import bind_output_budget
+            parent = None
+            role = None
+            if run.parent_run_id:
+                with self._lock:
+                    parent = self._runs.get(run.parent_run_id) or self.store.get_execution_run(run.parent_run_id)
+                    role = next((item for item in parent.helper_snapshots
+                        if item.agent_id == run.agent_setup_id and item.version_id == run.agent_setup_version_id), None) if parent else None
+            if role is not None:
+                from workbench_backend.agents.helper_execution import bind_helper_output_budget
+                bound = bind_helper_output_budget(self, parent, role, deployment, run.effective_setup.bags)
+            else:
+                bound = bind_output_budget(deployment, run.effective_setup.bags.per_request)
+            if bound != run.effective_setup.bags.per_request:
+                run.effective_setup.bags.per_request = bound
+                # Persist a late/first binding before any provider call, including
+                # resumed runs whose endpoint previously had no capacity facts.
+                with self._lock:
+                    self._persist(run)
+            per_request = bound
         client = httpx.Client(
             transport=RecordingTransport(http_sink),
             timeout=DEFAULT_ADAPTER_TIMEOUT,

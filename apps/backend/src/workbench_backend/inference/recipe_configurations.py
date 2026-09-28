@@ -16,6 +16,7 @@ from workbench_backend.inference.schemas import (
     ResponseRecipe,
     ResponseRecipeConfigurationResult,
     ResponseRecipeOrigin,
+    ModelBundle,
     RunProfile,
 )
 from workbench_backend.inference.settings import resolve_bags
@@ -52,9 +53,7 @@ def create_recipe_configurations(
         if any(recipe_id not in available for recipe_id in recipe_ids):
             raise ManagerError("Selected response recipes no longer match this pinned model card. Refresh the card and choose again.",
                 code="recipe_stale", status_code=409)
-        selected = [available[recipe_id] for recipe_id in recipe_ids]
-        if any(recipe.reasoning != "preserve" for recipe in selected):
-            _require_template_toggle(bundle, selected)
+        selected = [validate_response_recipe(bundle, recipe_id) for recipe_id in recipe_ids]
         ensure_model_configurations(store)
         bundle = store.get_bundle(bundle_id)
         assert bundle is not None
@@ -91,6 +90,7 @@ def create_recipe_configurations(
                         section=recipe.section,
                     ),
                     bags=resolve_bags(startup=dict(base.bags.startup.requested), per_request=requested),
+                    settings_schema_version=2,
                     created_at=now,
                     updated_at=now,
                 )
@@ -121,6 +121,60 @@ def _recipe_key(recipe: ResponseRecipe) -> tuple[str, str, str, str]:
 
 def _origin_key(origin: ResponseRecipeOrigin) -> tuple[str, str, str, str]:
     return (origin.source_repo_id, origin.source_revision, origin.card_sha256, origin.recipe_id)
+
+
+def validate_response_recipe(bundle: ModelBundle, recipe_id: str) -> ResponseRecipe:
+    """Resolve one exact pinned recipe against the installed selected template."""
+    recipe = next((item for item in (bundle.huggingface_configuration.response_recipes
+        if bundle.huggingface_configuration else []) if item.id == recipe_id), None)
+    if recipe is None:
+        raise ManagerError("This recipe no longer matches the pinned model card. Refresh the card and choose again.",
+                           code="recipe_stale", status_code=409)
+    if recipe.reasoning != "preserve":
+        _require_template_toggle(bundle, [recipe])
+    from workbench_backend.inference.configuration_options import bundle_configuration_options
+    from workbench_backend.inference.settings import normalize_per_request_requested
+
+    _, invalid = normalize_per_request_requested(recipe.per_request)
+    if invalid:
+        raise ManagerError("The model-card recipe contains unsupported response values.",
+                           code="recipe_values_invalid", status_code=409, details={"keys": invalid})
+    effort = recipe.per_request.get("reasoning_effort")
+    if effort not in {None, "default", "none"}:
+        metadata = _selected_template_metadata(bundle)
+        descriptor = bundle_configuration_options(bundle.id, metadata).per_request_defaults["reasoning_effort"]
+        if descriptor.supported is False or descriptor.accepted_values is not None and effort not in descriptor.accepted_values:
+            raise ManagerError("The selected template does not support this recipe's Thinking level.",
+                               code="recipe_thinking_unsupported", status_code=409)
+    return recipe
+
+
+def validate_recipe_origin(bundle: ModelBundle, origin: ResponseRecipeOrigin) -> ResponseRecipeOrigin:
+    recipe = validate_response_recipe(bundle, origin.recipe_id)
+    expected = ResponseRecipeOrigin(recipe_id=recipe.id, name=recipe.name,
+        source_repo_id=recipe.source_repo_id, source_revision=recipe.source_revision,
+        card_sha256=recipe.card_sha256, section=recipe.section)
+    if origin != expected:
+        raise ManagerError("Recipe provenance no longer matches this exact pinned model card.",
+                           code="recipe_stale", status_code=409)
+    return expected
+
+
+def _selected_template_metadata(bundle: ModelBundle):
+    try:
+        metadata = read_gguf_runtime_metadata(Path(bundle.primary_path or ""))
+        config = bundle.huggingface_configuration
+        if config and config.template_file:
+            path = Path(config.template_file)
+            record = next((item for item in bundle.files if Path(item.path) == path), None)
+            payload = path.read_bytes()
+            if record is None or len(payload) > 2 * 1024 * 1024 or hashlib.sha256(payload).hexdigest() != record.sha256:
+                raise ValueError("selected template hash differs from the bundle record")
+            metadata.chat_template = payload.decode("utf-8")
+        return metadata
+    except (OSError, UnicodeError, ValueError, KeyError, TypeError) as exc:
+        raise ManagerError("The selected model template could not be checked for Thinking levels.",
+            code="recipe_template", status_code=409) from exc
 
 
 def _require_template_toggle(bundle, recipes: list[ResponseRecipe]) -> None:

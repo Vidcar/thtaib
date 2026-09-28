@@ -91,7 +91,7 @@ Optional extensions, including background consolidation, beta rubric or interpre
 
 ### Requirement: ARCH-008 - Resolve one effective setup before runs
 
-Before Chat, Lab restore or rerun, Agent-run, or workflow execution starts, the backend SHALL resolve deployment, startup settings, per-request settings, agent settings, enabled tools and policy, selected knowledge, skill and protected-instruction versions, and selected MCP server slugs. Missing, unknown, or incompatible references MUST fail closed. Startup, per-request, and agent settings SHALL remain separate bags; values MUST NOT be moved between bags.
+Before Chat, Lab restore or rerun, Agent-run, or workflow execution starts, the backend SHALL resolve deployment, startup settings, per-request settings, agent settings, enabled tools and policy, selected knowledge, skill and protected-instruction versions, and selected MCP server slugs. Missing, unknown, or incompatible references MUST fail closed. Startup, per-request, and agent settings SHALL remain separate bags; each control SHALL reach its current owner, with a narrow cutover moving proven native request-capable defaults from legacy startup into the request bag while preserving effective saved values and historical snapshots.
 
 For each newly accepted Chat input, the backend SHALL atomically resolve selected saved agent and knowledge record identities into their latest saved exact versions, including helper setups, model configuration settings, explicit deselection, tools, context references, policy and selected versioned shortcut prompts. It SHALL persist that immutable snapshot before execution or queue acceptance. Unsaved editor drafts SHALL NOT participate. Authored capture SHALL use Knowledge → Application → Model configuration lock order without holding those locks across model loading or execution.
 
@@ -158,3 +158,15 @@ A capability this contract does not include SHALL be described as not in this co
 - **WHEN** a later change adds voice cloning
 - **THEN** it uses the saved speech endpoint or another application the person configures
 - **AND** the current dictation and spoken-reply controls remain the way speech is used until that change exists.
+
+### Requirement: ARCH-012 - Distinguish authored acceptance from applied runtime binding
+
+Accepted work SHALL freeze authored model/setup revisions, response choices, automatic-budget policy/source/version and helper setups before queue acceptance. Runtime-dependent numeric allowances SHALL be recorded once per accepted execution role at its first exact native binding and before model execution. These applied facts SHALL extend existing run/effective-setup records without replacing authored snapshots or creating a second state authority. Concurrent first-binding attempts SHALL observe one result. Subsequent calls/recovery SHALL retain that result and reject incompatible capacity rather than refresh authored versions or silently recompute limits.
+
+#### Scenario: Author edits while a cold request waits
+- **WHEN** a saved setup changes after acceptance but before its cold native model binds
+- **THEN** binding consumes the original frozen authored policy and persists one numeric result from the exact loaded model.
+
+#### Scenario: Concurrent binding and resume
+- **WHEN** parallel calls race to bind the same role or a paused role resumes
+- **THEN** they consume the same recorded allowance and provenance through existing application records.

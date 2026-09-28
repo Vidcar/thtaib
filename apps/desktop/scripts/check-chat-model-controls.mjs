@@ -7,7 +7,7 @@ import { createServer as createViteServer } from "vite";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const originalWindow = globalThis.window;
-globalThis.window = Object.assign(new EventTarget(), { workbench: { backendUrl: "http://chat-model-controls.test" } });
+globalThis.window = Object.assign(new EventTarget(), { setTimeout, clearTimeout, workbench: { backendUrl: "http://chat-model-controls.test" } });
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const vite = await createViteServer({ root, appType: "custom", server: { middlewareMode: true, hmr: false }, logLevel: "error" });
 const { ChatModelControls } = await vite.ssrLoadModule("/src/renderer/ChatModelControls.tsx");
@@ -29,6 +29,7 @@ const options = { context_size: { supported: true, maximum: 65536, options: [] }
 function text(node) { return typeof node === "string" ? node : (node?.children ?? []).map(text).join(""); }
 function aria(renderer, label, type = "button") { const found = renderer.root.findAll(node => node.type === type && node.props["aria-label"] === label)[0]; assert.ok(found, "expected " + label); return found; }
 function button(renderer, label) { const found = renderer.root.findAll(node => node.type === "button" && text(node) === label)[0]; assert.ok(found, "expected button " + label); return found; }
+function thinkingChoice(renderer, value) { const found = renderer.root.findAll(node => node.type === "input" && node.props.type === "radio" && node.props.value === value)[0]; assert.ok(found, "expected thinking choice " + value); return found; }
 function choices(renderer) { return renderer.root.findAll(node => node.type === "button" && node.props.className === "chat-model-choice"); }
 async function flush() { await act(async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); }); }
 async function open(renderer, label) { await act(async () => { const trigger = aria(renderer, label); if (!trigger.props["aria-expanded"]) trigger.props.onClick(); }); await flush(); }
@@ -51,7 +52,8 @@ try {
     if (compatibility === "unknown") throw new Error("Readiness unavailable");
     return { status: compatibility, can_send: compatibility === "ready", issues: compatibility === "incompatible" ? [{ code: "image_support", message: "Image support unavailable" }] : [], selection: null };
   };
-  api.modelConfiguration = async () => { optionCalls++; return options; };
+  const optionSelections = [];
+  api.modelConfiguration = async (_bundle, _deployment, _refresh, selection) => { optionCalls++; optionSelections.push(selection); return options; };
   api.deploymentConfiguration = async () => options;
   api.startManaged = async (bundle, config, startup) => {
     loaded.push({ bundle, config, startup }); if (failure) throw new Error(failure);
@@ -105,10 +107,19 @@ try {
   await open(renderer, "Tune model");
   assert.ok(optionCalls > 0 && previewCalls > 0, "tuning fetches support and effective facts on demand");
   assert.equal(renderer.root.findAll(node => node.props["aria-label"] === "Response limit" || node.props["aria-label"] === "Thinking limit").length, 0, "Models owns token-limit editing");
-  await act(async () => aria(renderer, "Thinking level", "select").props.onChange({ target: { value: "medium" } }));
+  await act(async () => thinkingChoice(renderer, "medium").props.onChange());
+  assert.equal(applied.at(-1).per_request_overrides.reasoning_effort, "medium", "Thinking applies immediately to the next message without a reload action");
+  assert.equal(applied.at(-1).per_request_overrides.temperature, 0.2, "Thinking preserves explicit sampling");
+  assert.equal(applied.at(-1).per_request_overrides.max_tokens, 6000);
+  await act(async () => aria(renderer, "Chat capacity mode", "select").props.onChange({ target: { value: "full" } })); await flush();
+  assert.equal(resolutionCalls.at(-1).startup_overrides.ctx_size, 0, "chat Full is the native maximum directive");
+  assert.equal(optionSelections.at(-1).configuration_id, "config_a");
+  assert.equal(optionSelections.at(-1).startup.ctx_size, 0, "template controls follow the pending loading candidate");
+  assert.equal(aria(renderer, "Chat context", "input").props.value, options.context_size.maximum, "Full shows the supported maximum");
+  assert.equal(button(renderer, "Stage for next message").props.disabled, false, "native Full is a valid stageable choice");
   await act(async () => aria(renderer, "Chat context", "input").props.onChange({ target: { value: "8192" } }));
   const beforeTuning = loaded.length;
-  await act(async () => button(renderer, "Apply").props.onClick()); await flush();
+  await act(async () => button(renderer, "Stage for next message").props.onClick()); await flush();
   assert.equal(loaded.length, beforeTuning, "active tuning changes never reload");
   const tuned = applied.at(-1);
   assert.equal(tuned.startup_overrides.ctx_size, 8192);
@@ -119,12 +130,12 @@ try {
   assert.equal(tuned.model_overrides.bundle_a.startup_overrides.ctx_size, 8192);
   await update({ configuration: tuned });
   await open(renderer, "Tune model");
-  await act(async () => { aria(renderer, "Thinking level", "select").props.onChange({ target: { value: "" } }); aria(renderer, "Chat context", "input").props.onChange({ target: { value: "" } }); }); await flush();
+  await act(async () => { thinkingChoice(renderer, "").props.onChange(); aria(renderer, "Chat context", "input").props.onChange({ target: { value: "" } }); }); await flush();
   const resetPreview = resolutionCalls.at(-1);
   assert.equal(Object.hasOwn(resetPreview.startup_overrides, "ctx_size"), false, "cleared context is absent in preview");
   assert.equal(Object.hasOwn(resetPreview.per_request_overrides, "reasoning_effort"), false, "cleared thinking is absent in preview");
-  assert.match(text(aria(renderer, "Thinking level", "select")), /High.*Configuration default/, "default option uses parent value rather than edited Medium");
-  await act(async () => button(renderer, "Apply").props.onClick()); await flush();
+  assert.match(text(renderer.root), /High.*Configuration default/, "default choice uses parent value rather than edited Medium");
+  await act(async () => button(renderer, "Stage for next message").props.onClick()); await flush();
   assert.deepEqual(applied.at(-1).startup_overrides, resetPreview.startup_overrides, "Apply uses the previewed reset candidate");
   assert.deepEqual(applied.at(-1).per_request_overrides, resetPreview.per_request_overrides);
   await update({ configuration: tuned });
@@ -134,11 +145,11 @@ try {
   await act(async () => aria(renderer, "Chat context", "input").props.onChange({ target: { value: "9000" } }));
   assert.equal(aria(renderer, "Chat context", "input").props.disabled, false, "checking does not disable typing");
   await act(async () => aria(renderer, "Chat context", "input").props.onChange({ target: { value: "10000" } }));
-  assert.equal(button(renderer, "Apply").props.disabled, true);
+  assert.equal(button(renderer, "Stage for next message").props.disabled, true);
   await act(async () => { pendingChecks.shift()(); }); await flush();
-  assert.equal(button(renderer, "Apply").props.disabled, true, "earlier preview cannot validate a newer draft");
+  assert.equal(button(renderer, "Stage for next message").props.disabled, true, "earlier preview cannot validate a newer draft");
   await act(async () => { pendingChecks.shift()(); }); await flush();
-  assert.equal(button(renderer, "Apply").props.disabled, false);
+  assert.equal(button(renderer, "Stage for next message").props.disabled, false);
   workspaceApi.resolveSetup = normalResolve;
   await update({ configuration: { ...tuned, startup_overrides: { ctx_size: 8192, threads: 4 } } });
   await update({ configuration: tuned });
@@ -147,6 +158,26 @@ try {
   await act(async () => choices(renderer)[0].props.onClick()); await flush();
   assert.equal(applied.at(-1).startup_overrides.ctx_size, 8192, "A to B to A restores chat-local context");
   assert.equal(applied.at(-1).per_request_overrides.reasoning_effort, "medium");
+  await update({ runtimeBusy: false, conversationId: "chat_reload", selectedConfigurationId: "config_a", selectedDeploymentId: "dep_a", configuration: { model_configuration_id: "config_a", deployment_id: "dep_a", startup_overrides: { ctx_size: 8192 }, per_request_overrides: { temperature: 0.2, reasoning_effort: "medium" } } });
+  await open(renderer, "Tune model");
+  await act(async () => aria(renderer, "Chat context", "input").props.onChange({ target: { value: "12000" } })); await flush();
+  await act(async () => thinkingChoice(renderer, "off").props.onChange()); await flush();
+  assert.equal(applied.at(-1).startup_overrides.ctx_size, 8192, "immediate Thinking never commits an unreviewed context candidate");
+  assert.equal(applied.at(-1).per_request_overrides.temperature, 0.2);
+  await update({ configuration: applied.at(-1) });
+  assert.equal(aria(renderer, "Chat context", "input").props.value, 12000, "Thinking updates retain the pending context input");
+  failure = "GPU memory exhausted while reloading";
+  const beforeFailedReload = applied.length;
+  await act(async () => button(renderer, "Reload").props.onClick()); await flush();
+  assert.equal(applied.length, beforeFailedReload, "a failed reload does not replace the prior chat binding");
+  assert.equal(props.configuration.deployment_id, "dep_a");
+  assert.equal(aria(renderer, "Chat context", "input").props.value, 12000, "the failed candidate stays available for correction or retry");
+  assert.match(text(renderer.root), /GPU memory exhausted while reloading/);
+  const reloadConfiguration = props.configuration;
+  await update({ conversationId: "chat_other", configuration: { model_configuration_id: "config_a", deployment_id: "dep_a" } });
+  await update({ conversationId: "chat_reload", configuration: reloadConfiguration });
+  assert.equal(aria(renderer, "Chat context", "input").props.value, 12000, "returning to a chat restores its pending capacity draft");
+  failure = "";
   await update({ conversationId: "chat_2", configuration: { model_configuration_id: "config_a", deployment_id: "dep_a" }, selectedConfigurationId: "config_a", selectedDeploymentId: "dep_a", runtimeBusy: false });
   compatibility = "unknown";
   const beforeUnknown = loaded.length;
@@ -168,6 +199,28 @@ try {
   assert.equal(choices(renderer)[1].props.disabled, true, "fixed-model agent assignment cannot be silently overridden");
   await act(async () => button(renderer, "Change in Agents").props.onClick());
   assert.equal(managedAgent, 1);
+  const fullResolve = workspaceApi.resolveSetup;
+  const effortSupport = options.per_request_defaults.reasoning_effort.supported;
+  options.per_request_defaults.reasoning_effort.supported = false;
+  workspaceApi.resolveSetup = async (...args) => {
+    const result = await fullResolve(...args);
+    const selected = args[2].per_request_overrides?.reasoning;
+    result.effective_values['per_request.reasoning'] = { value: selected ?? null, known: selected != null, source: selected == null ? 'Template default not reported' : 'This chat', inherited_value: null, default_value: null };
+    return result;
+  };
+  const coldProfile = { ...profiles[0], bags: { ...profiles[0].bags, per_request: bag({ temperature: 0.3, max_tokens: 6000 }) } };
+  await update({ fixedModel: false, profiles: [coldProfile], deployments: [], selectedDeploymentId: '', selectedConfigurationId: coldProfile.id, conversationId: 'cold_auto', configuration: { model_configuration_id: coldProfile.id } });
+  await open(renderer, 'Tune model');
+  assert.notEqual(thinkingChoice(renderer, 'off').props.disabled, true, 'supported cold binary Thinking allows Off even when the native default is unknown');
+  const coldLoads = loaded.length;
+  await act(async () => thinkingChoice(renderer, 'off').props.onChange()); await flush();
+  assert.equal(applied.at(-1).per_request_overrides.reasoning, 'off', 'cold Off applies to the next accepted message');
+  assert.equal(loaded.length, coldLoads, 'choosing cold Thinking never loads weights');
+  await update({ configuration: applied.at(-1) });
+  await act(async () => button(renderer, 'Reset to setup').props.onClick()); await flush();
+  assert.equal(Object.hasOwn(applied.at(-1).per_request_overrides, 'reasoning'), false, 'reset restores unknown native default by omission');
+  workspaceApi.resolveSetup = fullResolve;
+  options.per_request_defaults.reasoning_effort.supported = effortSupport;
   const connected = { ...deployment("connected_1", null, null), scope: "connected", display_name: "connected:Remote" };
   await update({ fixedModel: false, bundles: [], profiles: [], deployments: [connected], selectedDeploymentId: connected.id, selectedConfigurationId: undefined, configuration: { deployment_id: connected.id } });
   await open(renderer, "Tune model");

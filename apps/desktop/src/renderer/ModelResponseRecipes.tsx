@@ -4,8 +4,9 @@ import remarkGfm from "remark-gfm";
 import { api } from "./api";
 import { errorMessage } from "./errors";
 import { settingValue } from "./effectiveSettings";
+import { SettingRow } from "./CompactControls";
 import { Notice } from "./Notice";
-import type { ModelBundle, ModelCard, ResponseRecipe, RunProfile } from "./types";
+import type { BundleConfigurationOptions, ModelBundle, ModelCard, ResponseRecipe, ResponseRecipeOrigin, RunProfile } from "./types";
 
 const fieldNames: Record<string, string> = {
   temperature: "Temperature", top_p: "Top P", top_k: "Top K", min_p: "Min P",
@@ -38,13 +39,34 @@ function safeCardHref(raw: string, repoId: string, revision: string): string {
   } catch { return ""; }
 }
 
-export function ModelResponseRecipes({ bundle, profiles, onChanged }: {
-  bundle: ModelBundle; profiles: RunProfile[]; onChanged: () => Promise<void>;
+/** Selecting publisher guidance edits the current setup draft; saving is owned by Models. */
+export function ModelResponseRecipePicker({ bundle, value, origin, options, disabled, onChange }: {
+  bundle: ModelBundle; value: Record<string, unknown>; origin: ResponseRecipeOrigin | null; options: BundleConfigurationOptions | null; disabled?: boolean;
+  onChange: (value: Record<string, unknown>, origin: ResponseRecipeOrigin | null) => void;
 }) {
   const recipes = bundle.huggingface_configuration?.response_recipes ?? [];
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [defaultId, setDefaultId] = useState("");
-  const [busy, setBusy] = useState<"refresh" | "create" | "">("");
+  const matchesOrigin = (recipe: ResponseRecipe) => origin?.recipe_id === recipe.id && origin.source_repo_id === recipe.source_repo_id && origin.source_revision === recipe.source_revision && origin.card_sha256 === recipe.card_sha256;
+  const selected = recipes.find(matchesOrigin);
+  const incompatible = (recipe: ResponseRecipe) => recipe.reasoning !== "preserve" && options?.per_request_defaults.reasoning?.supported === false;
+  const expected = selected ? { ...selected.per_request, ...(selected.reasoning === "preserve" ? {} : { reasoning: selected.reasoning }) } : {};
+  const customized = selected ? Object.entries(expected).filter(([key, entry]) => JSON.stringify(value[key]) !== JSON.stringify(entry)).map(([key]) => fieldNames[key] ?? key.replaceAll("_", " ")) : [];
+  const choose = (id: string) => {
+    const recipe = recipes.find(item => item.id === id);
+    if (!recipe || incompatible(recipe)) { if (!id) onChange(value, null); return; }
+    const next = { ...value, ...recipe.per_request };
+    if (recipe.reasoning !== "preserve") next.reasoning = recipe.reasoning;
+    onChange(next, { recipe_id: recipe.id, name: recipe.name, source_repo_id: recipe.source_repo_id, source_revision: recipe.source_revision, card_sha256: recipe.card_sha256, section: recipe.section });
+  };
+  return <SettingRow label="Recipe" htmlFor="model-response-recipe" help="Apply a recommendation from the installed model's pinned publisher card. It changes this draft's response settings. Loading settings remain independent." provenance={origin ? <span className="model-effective-readout"><strong>{origin.name}</strong> · {customized.length ? "Customized" : selected ? "Pinned card" : "Saved recommendation"}</span> : <span className="model-effective-readout">Model defaults · Custom values stay visible</span>} hint={origin ? <><span>{origin.source_repo_id} · {origin.source_revision.slice(0, 8)}{customized.length ? ` · Custom: ${customized.join(", ")}` : ""}</span> <a href={pinnedCardUrl(origin.source_repo_id, origin.source_revision)} target="_blank" rel="noreferrer noopener">Source ↗</a></> : recipes.length ? "Choose a recipe, then adjust individual controls if needed." : "No compatible publisher recipes are recorded for this model."} onReset={origin && !disabled ? () => onChange(value, null) : undefined} resetLabel="Clear recipe" resetTitle="Keep current response values and remove the recipe association">
+    <select id="model-response-recipe" disabled={disabled || !recipes.length} value={selected?.id ?? (origin ? "saved" : "")} onChange={event => choose(event.target.value)}><option value="">Model defaults / Custom</option>{origin && !selected ? <option value="saved">{origin.name} · saved source</option> : null}{recipes.map(recipe => <option key={recipe.id} value={recipe.id} disabled={incompatible(recipe)}>{recipe.name}{incompatible(recipe) ? " · unavailable for this template" : ""}</option>)}</select>
+  </SettingRow>;
+}
+
+export function ModelResponseRecipes({ bundle, onChanged }: {
+  bundle: ModelBundle; profiles?: RunProfile[]; onChanged: () => Promise<void>;
+}) {
+  const recipes = bundle.huggingface_configuration?.response_recipes ?? [];
+  const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [cardOpen, setCardOpen] = useState(false);
   const [cardBusy, setCardBusy] = useState(false);
@@ -52,7 +74,6 @@ export function ModelResponseRecipes({ bundle, profiles, onChanged }: {
   const [cardError, setCardError] = useState("");
   const cardGeneration = useRef(0);
   const mounted = useRef(true);
-  const selectedRecipes = recipes.filter(recipe => selectedIds.includes(recipe.id));
   const repoId = bundle.source.repo_id;
   const revision = bundle.source.resolved_revision;
   const pinnedUrl = repoId && revision ? pinnedCardUrl(repoId, revision) : null;
@@ -98,27 +119,15 @@ export function ModelResponseRecipes({ bundle, profiles, onChanged }: {
   }
 
   async function refreshCard() {
-    setBusy("refresh"); setNotice(null);
+    setBusy(true); setNotice(null);
     try {
       const updated = await api.refreshResponseRecipes(bundle.id);
-      setSelectedIds([]); setDefaultId("");
       await updateLibrary(updated.huggingface_configuration?.response_recipes?.length
         ? "Response recipes refreshed from this model's pinned repository card."
         : "The pinned repository card has no clear response recipes to offer.");
       if (cardOpen && mounted.current) await loadCard();
     } catch (error) { setNotice({ tone: "error", text: `Card refresh failed: ${errorMessage(error)}` }); }
-    finally { setBusy(""); }
-  }
-
-  async function createConfigurations() {
-    setBusy("create"); setNotice(null);
-    try {
-      await api.createRecipeConfigurations(bundle.id, selectedIds, defaultId || null);
-      await updateLibrary(defaultId
-        ? "Selected response recipes are available as model configurations. The chosen configuration is now the model default."
-        : "Selected response recipes are available as model configurations. The model default was kept.");
-    } catch (error) { setNotice({ tone: "error", text: `Configuration creation failed: ${errorMessage(error)}` }); }
-    finally { setBusy(""); }
+    finally { setBusy(false); }
   }
 
   return <section className="card model-recipe-library" aria-labelledby="model-recipes-heading">
@@ -131,24 +140,9 @@ export function ModelResponseRecipes({ bundle, profiles, onChanged }: {
         img({ alt }) { return <span className="hint">{alt ? `[Image omitted: ${alt}]` : "[Image omitted]"}</span>; },
       }}>{card.markdown}</ReactMarkdown></div></> : null}
     </div> : null}
-    <div className="section-heading"><div><h3 id="model-recipes-heading">Response recipes</h3><p className="hint">Suggestions from this GGUF repository's model card. A recipe affects requests when its configuration is selected.</p></div><button type="button" disabled={Boolean(busy)} onClick={() => void refreshCard()}>{busy === "refresh" ? "Refreshing…" : "Refresh model card"}</button></div>
-    <p className="hint">Refresh reads the recorded revision of the card without downloading model weights. New configurations copy the current model default's saved launch settings and remain independent after creation.</p>
+    <div className="section-heading"><div><h3 id="model-recipes-heading">Publisher recommendations</h3><p className="hint">Choose and customize these recipes in the setup's Response section.</p></div><button type="button" disabled={busy} onClick={() => void refreshCard()}>{busy ? "Refreshing…" : "Refresh model card"}</button></div>
+    <p className="hint">Refresh reads the recorded revision without downloading weights or changing saved setups.</p>
     {notice ? <Notice tone={notice.tone}>{notice.text}</Notice> : null}
-    {recipes.length ? <>
-      <fieldset className="model-recipe-choices" disabled={Boolean(busy)}><legend>Choose recipes to make configurations</legend>
-        {recipes.map(recipe => {
-          const existing = profiles.find(profile => profile.bundle_id === bundle.id && profile.recipe_origin?.recipe_id === recipe.id
-            && profile.recipe_origin.source_repo_id === recipe.source_repo_id
-            && profile.recipe_origin.source_revision === recipe.source_revision && profile.recipe_origin.card_sha256 === recipe.card_sha256);
-          return <div key={recipe.id} className="model-recipe-choice"><label><input type="checkbox" checked={selectedIds.includes(recipe.id)} onChange={event => {
-            const next = event.target.checked ? [...selectedIds, recipe.id] : selectedIds.filter(id => id !== recipe.id);
-            setSelectedIds(next);
-            if (!next.includes(defaultId)) setDefaultId("");
-          }} /><span><strong>{recipe.name}</strong><small>{recipe.reasoning === "off" ? "Non-thinking" : recipe.reasoning === "on" ? "Thinking" : "Thinking unchanged"} · {Object.entries(recipe.per_request).map(([key, value]) => `${fieldNames[key] ?? key.replaceAll("_", " ")} ${settingValue(value)}`).join(" · ")}</small>{existing ? <small>Created from model card as “{existing.display_name}”</small> : null}{recipe.notes?.length ? <small>{recipe.notes.join(" · ")}</small> : null}</span></label><small className="model-recipe-source">Repository card · {recipe.source_repo_id} @ {recipe.source_revision.slice(0, 12)} · {recipe.section} · card {recipe.card_sha256.slice(0, 12)} · <a href={cardUrl(recipe)} target="_blank" rel="noreferrer">View pinned card</a></small></div>;
-        })}
-      </fieldset>
-      <div className="model-recipe-actions"><label htmlFor={`model-recipe-default-${bundle.id}`}>Model default<select id={`model-recipe-default-${bundle.id}`} value={defaultId} disabled={Boolean(busy) || !selectedRecipes.length} onChange={event => setDefaultId(event.target.value)}><option value="">Keep current default</option>{selectedRecipes.map(recipe => <option key={recipe.id} value={recipe.id}>{recipe.name}</option>)}</select></label><button type="button" className="primary-button" disabled={Boolean(busy) || !selectedRecipes.length} onClick={() => void createConfigurations()}>{busy === "create" ? "Creating…" : "Create selected configurations"}</button></div>
-      {!bundle.disk_matches ? <p className="hint">Some saved files need verification. The configuration check will confirm whether this model's template supports the selected recipes.</p> : null}
-    </> : <p className="hint">No clear response recipes are saved for this model. Refresh its pinned model card to check for recommendations.</p>}
+    {recipes.length ? <dl className="model-recipe-reference">{recipes.map(recipe => <div key={recipe.id}><dt>{recipe.name}</dt><dd>{recipe.reasoning === "preserve" ? "Thinking unchanged" : `Thinking ${recipe.reasoning}`} · {Object.entries(recipe.per_request).map(([key, value]) => `${fieldNames[key] ?? key.replaceAll("_", " ")} ${settingValue(value)}`).join(" · ")}<small>{recipe.section} · <a href={cardUrl(recipe)} target="_blank" rel="noreferrer noopener">Pinned source ↗</a></small></dd></div>)}</dl> : <p className="hint">No clear response recipes are saved for this model.</p>}
   </section>;
 }
