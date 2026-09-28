@@ -10,7 +10,7 @@ from typing import Any
 from workbench_backend.errors import HarnessError
 
 
-PLAN_TOOLS = frozenset({"ls", "read_file", "glob", "grep", "read_attachment", "search_knowledge", "web_search", "write_todos", "ask_user", "echo", "time_now", "task"})
+PLAN_TOOLS = frozenset({"ls", "read_file", "glob", "grep", "read_attachment", "read_reference", "find_tools", "search_knowledge", "web_search", "write_todos", "ask_user", "echo", "time_now", "task"})
 PLAN_INSTRUCTIONS = "Plan mode: investigate and produce a plan. Read-only tools, questions and the checklist are available. Do not modify files, run shell commands, save memory or perform external actions. Switching Access does not permit implementation in Plan mode."
 CURRENT_TOOL_CALL: ContextVar[str] = ContextVar("workbench_current_tool_call", default="")
 

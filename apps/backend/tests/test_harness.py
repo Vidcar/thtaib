@@ -367,7 +367,7 @@ class HarnessApiTests(unittest.TestCase):
         self.assertEqual(assistant_events, ["second assistant"])
 
     def test_actual_model_request_is_captured(self) -> None:
-        started = self._start()
+        started = self._start(input_policy={"pinned_tools": ["echo"]})
         body = wait_for_run(self.client, started["id"])
         self.assertTrue(body["model_requests"])
         capture = body["model_requests"][0]
@@ -459,7 +459,7 @@ class HarnessApiTests(unittest.TestCase):
             AIMessage(content="", tool_calls=[{"name": "write_todos", "args": {"todos": [{"content": "Check integration", "status": "in_progress"}]}, "id": "plan-1"}]),
             AIMessage(content="Planning recorded."),
         ])
-        started = self._start()
+        started = self._start(input_policy={"tool_loading": "always"})
         body = wait_for_run(self.client, started["id"])
         self.assertEqual(body["status"], "completed", body.get("error"))
         self.assertIn("write_todos", body["model_requests"][0]["presented_tools"])
@@ -490,7 +490,7 @@ class HarnessApiTests(unittest.TestCase):
         self.assertIn("browser_take_screenshot", catalogue)
         self.assertIn("start_preview", catalogue)
         self.assertIn("desktop_screenshot", catalogue)
-        started = self._start(presented_tools=["echo"])
+        started = self._start(presented_tools=["echo"], input_policy={"tool_loading": "always"})
         body = wait_for_run(self.client, started["id"])
         self.assertEqual(body["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory", "read_file"])
         self.assertEqual(body["presented_tools"], ["echo"])
@@ -499,7 +499,7 @@ class HarnessApiTests(unittest.TestCase):
         self.assertEqual(body["framework_read_paths"], ["/large_tool_results/", "/conversation_history/"])
         project = self.root / "agt-005-project"
         project.mkdir()
-        bound = self._start(presented_tools=["echo"], project_path=str(project))
+        bound = self._start(presented_tools=["echo"], project_path=str(project), input_policy={"tool_loading": "always"})
         bound_body = wait_for_run(self.client, bound["id"])
         self.assertEqual(bound_body["enabled_tools"], [name for name in ENABLED_TOOL_NAMES if name != "read_attachment"])
         self.assertEqual(bound_body["presented_tools"], ["echo"])
@@ -525,6 +525,7 @@ class HarnessApiTests(unittest.TestCase):
                 "deployment_id": self.deployment_id,
                 "task": "nope",
                 "presented_tools": ["write_file"],
+                "input_policy": {"tool_loading": "always"},
             },
         )
         self.assertEqual(blocked.status_code, 400)

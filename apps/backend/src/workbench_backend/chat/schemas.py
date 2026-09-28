@@ -7,7 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 from workbench_backend.inference.user_content import UserContentBlock
 from workbench_backend.agents.structured import OutputSchemaRequest
-from workbench_backend.agents.setup_schemas import SetupConfiguration, InstructionLayer, FrozenHelperSelection, ReviewConfiguration, FrozenExecutionSelection, ResolvedSetupSelection
+from workbench_backend.agents.setup_schemas import AgentInputPolicy, AgentInputPreview, SetupConfiguration, InstructionLayer, FrozenHelperSelection, ReviewConfiguration, FrozenExecutionSelection, ResolvedSetupSelection
 
 from workbench_backend.agents.schemas import AgentRun, InterruptDecisionRequest
 from workbench_backend.state.run_views import AgentRunOperational
@@ -29,6 +29,7 @@ class ChatMessage(BaseModel):
 
 
 class ChatConversationCreateRequest(BaseModel):
+    input_policy: AgentInputPolicy | None = None
     agent_setup_id: str | None = None
     memory_entry_ids: list[str] | None = None
     skill_entry_ids: list[str] | None = None
@@ -62,6 +63,7 @@ class ChatConversationCreateRequest(BaseModel):
 
 class ChatStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    input_policy: AgentInputPolicy | None = None
     agent_setup_id: str | None = None
     memory_entry_ids: list[str] | None = None
     skill_entry_ids: list[str] | None = None
@@ -111,6 +113,11 @@ class ChatReadinessRequest(BaseModel):
     overrides: SetupConfiguration = Field(default_factory=SetupConfiguration)
     agent_setup_version_id: str | None = None
     agent_setup_id: str | None = None
+    include_input_content: bool = False
+    shortcut_ids: list[str] = Field(default_factory=list, max_length=8)
+    project_file_refs: list[str] = Field(default_factory=list, max_length=32)
+    attachment_ids: list[str] = Field(default_factory=list, max_length=32)
+    document_asset_ids: list[str] | None = Field(default=None, max_length=32)
 
 
 class ChatReadinessIssue(BaseModel):
@@ -124,6 +131,7 @@ class ChatReadiness(BaseModel):
     can_send: bool
     issues: list[ChatReadinessIssue] = Field(default_factory=list)
     selection: ResolvedSetupSelection | None = None
+    input_preview: AgentInputPreview | None = None
 
 
 class ChatConversationUpdateRequest(BaseModel):
@@ -249,6 +257,7 @@ class ChatContinuity(BaseModel):
 
 
 class ChatConversation(BaseModel):
+    input_policy: AgentInputPolicy | None = None
     agent_setup_id: str | None = None
     memory_entry_ids: list[str] | None = None
     skill_entry_ids: list[str] | None = None

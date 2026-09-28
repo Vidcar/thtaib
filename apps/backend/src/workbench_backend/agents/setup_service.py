@@ -12,7 +12,14 @@ from workbench_backend.agents.setup_schemas import (
     ProjectFiles, ProjectRecord, ProjectUpdateRequest, ResolvedSetupSelection, SetupConfiguration,
     SetupDependencyIssue, ResolvedSetting,
 )
+from workbench_backend.agents.input_sources import (
+    build_input_sources, knowledge_source_id, merge_input_policy, reference_source_mode,
+    deferred_reference_issues,
+    cold_optional_tool_definitions,
+    always_skill_requirements, skill_selection_error,
+)
 from workbench_backend.agents.tools import enabled_catalogue
+from workbench_backend.connections.schemas import ConnectionSnapshot
 from workbench_backend.errors import HarnessError, KnowledgeError
 from workbench_backend.inference.ids import new_id, utc_now
 
@@ -27,10 +34,10 @@ _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 # A project supplies context, never execution authority or a model choice. A
 # main agent owns behaviour and capabilities, and may assign a fixed model.
 # Chat retains its own inherited model when that assignment is selected.
-PROJECT_CONTEXT_FIELDS = frozenset({"memory_version_refs", "skill_version_refs", "memory_entry_ids", "skill_entry_ids", "embedding_deployment_id"})
+PROJECT_CONTEXT_FIELDS = frozenset({"memory_version_refs", "skill_version_refs", "memory_entry_ids", "skill_entry_ids", "embedding_deployment_id", "input_policy"})
 APPLICATION_DEFAULT_FIELDS = frozenset({"approval_mode"})
 MAIN_AGENT_FIELDS = frozenset({
-    "instructions", "memory_version_refs", "skill_version_refs",
+    "instructions", "input_policy", "memory_version_refs", "skill_version_refs",
     "protected_instruction_version_refs", "requires_project", "requires_host_shell",
     "helper_agent_ids", "review",
     "deployment_id", "bundle_id", "model_configuration_id", "profile_id", "inherit_deployment_settings",
@@ -51,12 +58,14 @@ def _image_preview(path: Path) -> str | None:
 
 
 class SetupService:
-    def __init__(self, store: ApplicationStore, manager: ModelManager, knowledge: KnowledgeService | None = None, *, connection_available: Callable[[str], bool] | None = None, connection_tools: Callable[[str], list[str]] | None = None) -> None:
+    def __init__(self, store: ApplicationStore, manager: ModelManager, knowledge: KnowledgeService | None = None, *, connection_available: Callable[[str], bool] | None = None, connection_tools: Callable[[str], list[str]] | None = None, connection_exists: Callable[[str], bool] | None = None, connection_tool_definitions: Callable[[str], list] | None = None) -> None:
         self.store = store
         self.manager = manager
         self.knowledge = knowledge
         self.connection_available = connection_available
         self.connection_tools = connection_tools
+        self.connection_exists = connection_exists
+        self.connection_tool_definitions = connection_tool_definitions
 
     def list_projects(self, *, include_inactive: bool = False) -> list[ProjectRecord]:
         return [self._project_view(p) for p in self.store.list_projects() if p.active or include_inactive]
@@ -212,8 +221,11 @@ class SetupService:
         source = self.get_setup(setup_id)
         return self.create_setup(AgentSetupCreateRequest(name=name or f"{source.name} copy", role=source.role, configuration=source.configuration))
 
-    def dependencies(self, configuration: SetupConfiguration, *, frozen: bool = False) -> list[SetupDependencyIssue]:
+    def dependencies(self, configuration: SetupConfiguration, *, frozen: bool = False,
+        connection_snapshots: list[ConnectionSnapshot] | None = None,
+        project_bound: bool = False) -> list[SetupDependencyIssue]:
         issues = []
+        selected_versions = []
         if configuration.bundle_id and not configuration.deployment_id and not configuration.model_configuration_id:
             issues.append(SetupDependencyIssue(kind="deployment_id", id=configuration.bundle_id, reason="choose a saved deployment for this model"))
         for field, getter in [("deployment_id", self.manager.store.get_deployment), ("embedding_deployment_id", self.manager.store.get_deployment), ("profile_id", self.manager.store.get_profile), ("model_configuration_id", self.manager.store.get_profile), ("bundle_id", self.manager.store.get_bundle)]:
@@ -231,6 +243,7 @@ class SetupService:
                     if version is None or version.kind != kind:
                         issues.append(SetupDependencyIssue(kind=kind, id=ref, reason="missing" if version is None else "wrong kind"))
                     elif self.knowledge is not None:
+                        selected_versions.append(version)
                         if frozen:
                             self.knowledge._require_scope(version.scope, version.scope_id)
                             continue
@@ -247,15 +260,82 @@ class SetupService:
         # Chat/harness admission checks that source scope before presenting it.
         from workbench_backend.agents.retrieval import SEARCH_KNOWLEDGE_TOOL_NAME
         available_tools.add(SEARCH_KNOWLEDGE_TOOL_NAME)
-        for connection in (configuration.connection_ids or []) if configuration.presented_tools != [] else []:
-            if self.connection_available is None or not self.connection_available(connection):
+        if configuration.input_policy is not None:
+            available_tools.update({"find_tools", "read_reference"})
+        if frozen or configuration.helper_agent_ids:
+            available_tools.add("task")
+        accepted_connections = {item.id: item for item in connection_snapshots} if frozen and connection_snapshots is not None else None
+        selected_connections = configuration.connection_ids
+        connection_tool_names = {}
+        if selected_connections is None and accepted_connections is not None:
+            selected_connections = list(accepted_connections)
+        for connection in (selected_connections or []) if configuration.presented_tools != [] else []:
+            if accepted_connections is not None:
+                accepted = accepted_connections.get(connection)
+                if accepted is None:
+                    issues.append(SetupDependencyIssue(kind="connection", id=connection, reason="not in the accepted connection selection"))
+                else:
+                    # The accepted catalogue remains immutable. Native runtime
+                    # readiness/identity checks still run before disclosure or use.
+                    connection_tool_names[connection] = [tool.name for tool in accepted.tools]
+                    available_tools.update(connection_tool_names[connection])
+                continue
+            deferred = bool(configuration.input_policy and configuration.input_policy.tool_loading == "when_needed" and self.connection_exists is not None)
+            known = self.connection_exists(connection) if self.connection_exists is not None else None
+            if known is False:
+                issues.append(SetupDependencyIssue(kind="connection", id=connection, reason="missing, removed or disabled"))
+            elif not deferred and (self.connection_available is None or not self.connection_available(connection)):
                 issues.append(SetupDependencyIssue(kind="connection", id=connection, reason="missing, disconnected or needs a successful test"))
             elif self.connection_tools is not None:
-                available_tools.update(self.connection_tools(connection))
+                connection_tool_names[connection] = self.connection_tools(connection)
+                available_tools.update(connection_tool_names[connection])
         for tool in configuration.presented_tools or []:
             if tool not in available_tools:
                 issues.append(SetupDependencyIssue(kind="tool", id=tool, reason="not in the current selected catalogue"))
+        issues.extend(SetupDependencyIssue(kind=item["code"], id=item["id"], reason=f"{item['message']} {item['action']}")
+            for item in deferred_reference_issues(configuration, knowledge_versions=selected_versions))
+        policy = configuration.input_policy
+        always_skills = [version for version in selected_versions if version.kind == "skill"
+            and reference_source_mode(policy, version.entry_id, "skill") == "always"]
+        if not always_skills:
+            return issues
+        from workbench_backend.agents.tools import resolve_presented_tools
+        from workbench_backend.agents.execution_policy import PLAN_TOOLS
+        allowed, _, _, _ = resolve_presented_tools(configuration.presented_tools, project_bound=project_bound,
+            knowledge_routes=bool(configuration.memory_version_refs or configuration.skill_version_refs),
+            external_names=[name for names in connection_tool_names.values() for name in names])
+        if allowed:
+            if configuration.helper_agent_ids:
+                allowed.append("task")
+            if policy is not None and policy.tool_loading == "when_needed":
+                allowed.append("find_tools")
+            if any(reference_source_mode(policy, version.entry_id, version.kind) == "when_needed" for version in selected_versions):
+                allowed.append("read_reference")
+        if policy is not None:
+            allowed = [name for name in allowed if f"tool:{name}" not in policy.excluded_sources]
+        if configuration.work_mode == "plan":
+            allowed = [name for name in allowed if name in PLAN_TOOLS]
+        allowed_connections = (selected_connections or []) if configuration.presented_tools != [] else []
+        for version in always_skills:
+            error = skill_selection_error(version, tool_names=allowed, connection_ids=allowed_connections,
+                project_bound=project_bound)
+            if error is not None:
+                issues.append(SetupDependencyIssue(kind=error.code, id=version.entry_id, reason=str(error)))
+                continue
+            for connection in version.required_connections:
+                if not set(connection_tool_names.get(connection, [])).intersection(allowed):
+                    reason = f"Enable a tool from required connection {connection} before including this skill."
+                elif not frozen and self.connection_available is not None and not self.connection_available(connection):
+                    reason = f"Set up required connection {connection} before including this skill."
+                else:
+                    continue
+                issues.append(SetupDependencyIssue(kind="skill_selection_required", id=version.entry_id, reason=reason))
         return issues
+
+    def always_skill_requirements(self, configuration: SetupConfiguration) -> tuple[set[str], set[str]]:
+        """Read only exact selected versions; current entry heads never participate."""
+        versions = [self.knowledge.get_version(ref) for ref in configuration.skill_version_refs or []] if self.knowledge else []
+        return always_skill_requirements(configuration, versions)
 
     @staticmethod
     def _require_project_context_only(configuration: SetupConfiguration) -> None:
@@ -263,6 +343,13 @@ class SetupService:
         if other:
             raise HarnessError("Projects can save folder and knowledge context only.",
                 code="project_setup_scope", status_code=400, details={"fields": other})
+        policy = configuration.input_policy
+        if policy is not None:
+            execution_fields = policy.model_fields_set - {"version", "reference_loading", "excluded_sources"}
+            bad_sources = [source for source in policy.excluded_sources if not source.startswith(("memory:", "skill:", "project_file:")) and source != "project_outline"]
+            if execution_fields or bad_sources:
+                raise HarnessError("Projects can save reference loading and project-context exclusions only.",
+                    code="project_setup_scope", status_code=400)
 
     @staticmethod
     def require_application_defaults_only(configuration: SetupConfiguration) -> None:
@@ -271,7 +358,7 @@ class SetupService:
             raise HarnessError("App preferences can seed new chats' Access choice only.",
                 code="application_setup_scope", status_code=400, details={"fields": other})
 
-    def resolve(self, *, project_id: str | None = None, agent_setup_version_id: str | None = None, agent_setup_id: str | None = None, overrides: SetupConfiguration | None = None, override_cleared_fields: list[str] | None = None, validate: bool = True, editing_layer: str = "conversation", prepare_model: bool = False, helper_role: bool = False, read_only: bool = False, latest_knowledge: bool = False) -> ResolvedSetupSelection:
+    def resolve(self, *, project_id: str | None = None, agent_setup_version_id: str | None = None, agent_setup_id: str | None = None, overrides: SetupConfiguration | None = None, override_cleared_fields: list[str] | None = None, validate: bool = True, editing_layer: str = "conversation", prepare_model: bool = False, helper_role: bool = False, read_only: bool = False, latest_knowledge: bool = False, include_input_content: bool = False) -> ResolvedSetupSelection:
         project = self.get_project(project_id, require_active=True) if project_id else None
         if agent_setup_id:
             record = self.store.get_agent_setup(agent_setup_id)
@@ -295,6 +382,7 @@ class SetupService:
         builtin_values = {"approval_mode": "ask", "work_mode": "work", "desktop_access": "off", "helper_agent_ids": [], "connection_ids": []}
         instructions = []
         protected = []
+        input_policy = merge_input_policy(None, None)
         for name, source_id, configuration, scope in layers:
             explicit = configuration.model_dump(exclude_none=True)
             if latest_knowledge and self.knowledge is not None:
@@ -326,7 +414,11 @@ class SetupService:
                     inherited_source=prior.source if prior else "Application default" if key in builtin_values else None)
                 if key == "instructions":
                     if value.strip():
-                        instructions.append(InstructionLayer(name=name, source_id=source_id, content=value.strip()))
+                        instructions.append(InstructionLayer(name=name, source_id=source_id, content=value))
+                elif key == "input_policy":
+                    input_policy = merge_input_policy(input_policy, configuration.input_policy)
+                    values[key] = input_policy.model_dump()
+                    effective[key].value = input_policy.model_dump()
                 elif key == "protected_instruction_version_refs":
                     protected.extend(ref for ref in value if ref not in protected)
                 elif key in {"requires_project", "requires_host_shell"}:
@@ -349,6 +441,7 @@ class SetupService:
         if protected:
             values["protected_instruction_version_refs"] = protected
             effective["protected_instruction_version_refs"].value = protected
+        values["input_policy"] = input_policy.model_dump()
         for key in override_cleared_fields or []:
             if key in {"profile_id", "embedding_deployment_id"}:
                 values[key] = None
@@ -395,16 +488,49 @@ class SetupService:
                     effective[key] = ResolvedSetting(value=values[key], source=source.source if source else "Model configuration", source_id=profile.id,
                         inherited=source.inherited if source else True)
         configuration = SetupConfiguration.model_validate(values)
+        preview_versions = []
+        excluded_rows = []
         if self.knowledge is not None:
-            for entry_field, version_field in (("memory_entry_ids", "memory_version_refs"), ("skill_entry_ids", "skill_version_refs"), ("protected_instruction_entry_ids", "protected_instruction_version_refs")):
+            from workbench_backend.agents.setup_schemas import InputSourceRow
+            from workbench_backend.agents.input_sources import HISTORY_HINT
+            for entry_field, version_field, kind in (("memory_entry_ids", "memory_version_refs", "memory"), ("skill_entry_ids", "skill_version_refs", "skill"), ("protected_instruction_entry_ids", "protected_instruction_version_refs", "protected_instruction")):
                 ids = getattr(configuration, entry_field)
                 if ids is None and latest_knowledge and getattr(configuration, version_field):
                     ids = list(dict.fromkeys(self.knowledge.get_version(ref).entry_id for ref in getattr(configuration, version_field)))
                 if ids is not None:
-                    refs = self.knowledge.resolve_entry_refs(**{entry_field: ids})
+                    included_ids = [entry_id for entry_id in ids if reference_source_mode(input_policy, entry_id, kind) != "off"]
+                    for entry_id in ids:
+                        if entry_id in included_ids:
+                            continue
+                        # Off is a control even if the former source was deleted. It
+                        # must not resolve a new version or require readable content.
+                        entry_metadata = self.knowledge.store.get_entry(entry_id)
+                        excluded_rows.append(InputSourceRow(id=knowledge_source_id(entry_id, kind),
+                            title=entry_metadata.display_name if entry_metadata and entry_metadata.display_name else f"{kind.replace('_', ' ').title()} {entry_id}", kind=kind,
+                            origin=f"{entry_metadata.scope} Knowledge" if entry_metadata else "Inherited Knowledge selection", reason="Excluded for future inputs.",
+                            mode="off", entry_id=entry_id, estimated_tokens=0, editable=True, history_hint=HISTORY_HINT))
+                    refs = self.knowledge.resolve_entry_refs(**{entry_field: included_ids})
                     configuration = configuration.model_copy(update={entry_field: ids, version_field: list(getattr(refs, version_field))})
                     if version_field in effective:
                         effective[version_field].value = list(getattr(refs, version_field))
+                else:
+                    refs = []
+                    for ref in getattr(configuration, version_field) or []:
+                        version_value = self.knowledge.get_version(ref)
+                        if reference_source_mode(input_policy, version_value.entry_id, kind) != "off":
+                            refs.append(ref)
+                        else:
+                            excluded_rows.append(InputSourceRow(id=knowledge_source_id(version_value.entry_id, kind),
+                                title=version_value.display_name or f"{kind.title()} {version_value.entry_id}", kind=kind,
+                                origin=f"{version_value.scope} Knowledge", reason="Excluded for future inputs.",
+                                mode="off", entry_id=version_value.entry_id, version_id=version_value.id,
+                                estimated_tokens=0, editable=True, history_hint=HISTORY_HINT))
+                    configuration = configuration.model_copy(update={version_field: refs})
+                preview_versions.extend(self.knowledge.get_version(ref) for ref in getattr(configuration, version_field) or [])
+        # A named exclusion can only narrow an explicit capability envelope. The
+        # runtime applies the same filter to its project-dependent default tools.
+        if configuration.presented_tools is not None:
+            configuration = configuration.model_copy(update={"presented_tools": [name for name in configuration.presented_tools if f"tool:{name}" not in input_policy.excluded_sources]})
         for key, value in builtin_values.items():
             if getattr(configuration, key) is None:
                 effective[key] = ResolvedSetting(value=value, source="Application default", inherited=True)
@@ -416,14 +542,48 @@ class SetupService:
         if prepare_model and any(value.requires_reload for value in effective.values()):
             raise HarnessError("Apply the changed model settings before sending a message.", code="model_reload_required", status_code=409)
         if validate:
-            issues = self.dependencies(configuration)
+            issues = self.dependencies(configuration, project_bound=bool(project))
             if issues:
-                raise HarnessError("The selected setup has unavailable dependencies. Update its selections before running.", code="setup_dependencies_missing", status_code=409, details={"missing_dependencies": [i.model_dump() for i in issues]})
+                deferred_only = all(issue.kind in {"deferred_reference_tools_off", "deferred_reference_reader_excluded"} for issue in issues)
+                deferred_code = "deferred_reference_reader_excluded" if any(issue.kind == "deferred_reference_reader_excluded" for issue in issues) else "deferred_reference_tools_off"
+                skill_only = all(issue.kind == "skill_selection_required" for issue in issues)
+                raise HarnessError("Choose Include now, Remove, or Enable reading for references set to When needed without an enabled reading route." if deferred_only else
+                    " ".join(dict.fromkeys(issue.reason for issue in issues)) if skill_only else
+                    "The selected setup has unavailable dependencies. Update its selections before running.",
+                    code=deferred_code if deferred_only else "skill_selection_required" if skill_only else "setup_dependencies_missing",
+                    status_code=409, details={"missing_dependencies": [i.model_dump() for i in issues]})
             if configuration.bundle_id and configuration.deployment_id:
                 deployment = self.manager.store.get_deployment(configuration.deployment_id)
                 if deployment is not None and deployment.bundle_id != configuration.bundle_id:
                     raise HarnessError("The selected deployment uses a different model from this setup.", code="setup_model_mismatch", status_code=409)
-        return ResolvedSetupSelection(project_id=project_id, agent_setup_id=version.setup_id if version else None, agent_setup_version_id=version.id if version else None, configuration=configuration, instruction_layers=instructions, effective_values=effective)
+        profile = self.manager.store.get_profile(configuration.profile_id or configuration.model_configuration_id or "")
+        deployment = self.manager.store.get_deployment(configuration.deployment_id or "")
+        from workbench_backend.agents.tools import tool_descriptions
+        from workbench_backend.agents.tools import resolve_presented_tools
+        preview_tools = values.get("presented_tools")
+        if preview_tools is None:
+            preview_tools = resolve_presented_tools(None, project_bound=bool(project_id),
+                knowledge_routes=bool(configuration.memory_version_refs or configuration.skill_version_refs))[0]
+        else:
+            preview_tools = list(preview_tools)
+        if preview_tools:
+            if configuration.helper_agent_ids and "task" not in preview_tools:
+                preview_tools.append("task")
+            if input_policy.tool_loading == "when_needed" and "find_tools" not in preview_tools:
+                preview_tools.append("find_tools")
+            if any(reference_source_mode(input_policy, item.entry_id, item.kind) == "when_needed" for item in preview_versions) and "read_reference" not in preview_tools:
+                preview_tools.append("read_reference")
+        optional, unavailable = cold_optional_tool_definitions(preview_tools, paths=getattr(self.manager, "paths", None))
+        if self.connection_tool_definitions is not None:
+            for connection_id in configuration.connection_ids or []:
+                optional.extend(self.connection_tool_definitions(connection_id))
+        input_sources = build_input_sources(policy=input_policy, instruction_layers=instructions,
+            knowledge_versions=preview_versions, profile=profile, deployment=deployment,
+            presented_tools=preview_tools, tool_metadata=tool_descriptions(),
+            include_content=include_input_content, selected_agent=bool(version), project_id=project_id,
+            extra_tools=optional, tool_unavailable=unavailable)
+        input_sources.extend(excluded_rows)
+        return ResolvedSetupSelection(project_id=project_id, agent_setup_id=version.setup_id if version else None, agent_setup_version_id=version.id if version else None, configuration=configuration, instruction_layers=instructions, effective_values=effective, input_sources=input_sources)
 
     def _model_selection_facts(self, configuration: SetupConfiguration, facts: dict) -> dict[str, ResolvedSetting]:
         """Describe the loaded choice and explicit-save target without selecting it.

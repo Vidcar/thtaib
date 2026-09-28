@@ -200,7 +200,7 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
     )
     application.state.knowledge = KnowledgeService(application.state.manager.paths, app_store=application.state.app_store)
     application.state.connections = ConnectionService(application.state.app_store)
-    application.state.setups = SetupService(application.state.app_store, application.state.manager, application.state.knowledge, connection_available=application.state.connections.available, connection_tools=lambda ident: [tool.name for tool in application.state.connections.get(ident).tools])
+    application.state.setups = SetupService(application.state.app_store, application.state.manager, application.state.knowledge, connection_available=application.state.connections.available, connection_tools=lambda ident: [tool.name for tool in application.state.connections.tool_definitions(ident)], connection_exists=application.state.connections.exists, connection_tool_definitions=application.state.connections.tool_definitions)
     application.include_router(connections_router)
     application.state.interaction = InteractionService(
         application.state.app_store,

@@ -47,6 +47,140 @@ class ProjectSetupTests(unittest.TestCase):
     def setup(self, **configuration):
         return self.post("/v1/agent-setups", {"name": "Helper", "configuration": {"deployment_id": self.deployment.id, **configuration}})
 
+    def test_reference_exclusion_precedes_latest_resolution_and_keeps_control_row(self):
+        memory = self.post('/v1/knowledge/entries', {'scope': 'user', 'kind': 'memory', 'display_name': 'Saved review facts', 'content': 'Full secret reference'})
+        setup = self.setup(memory_entry_ids=[memory['id']], input_policy={'pinned_tools': ['echo']})
+        first = self.post('/v1/setup-resolution', {'agent_setup_id': setup['id']})
+        self.assertEqual(first['configuration']['input_policy']['reference_loading'], {})
+        self.assertEqual(first['configuration']['memory_version_refs'], [memory['current_version_id']])
+        entry = self.app.state.knowledge.store.get_entry(memory['id'])
+        self.app.state.knowledge.store.put_entry(entry.model_copy(update={'active': False}))
+        with patch.object(self.app.state.knowledge, 'get_version', side_effect=AssertionError('Off inspected a version body')):
+            resolved = self.post('/v1/setup-resolution', {'agent_setup_id': setup['id'], 'include_input_content': True,
+                'overrides': {'input_policy': {'excluded_sources': [f'memory:{memory["id"]}']}}})
+        self.assertEqual(resolved['configuration']['memory_version_refs'], [])
+        self.assertEqual(resolved['configuration']['memory_entry_ids'], [memory['id']])
+        self.assertEqual(resolved['configuration']['input_policy']['pinned_tools'], ['echo'])
+        row = next(row for row in resolved['input_sources'] if row['entry_id'] == memory['id'])
+        self.assertEqual(row['mode'], 'off')
+        self.assertEqual(row['title'], 'Saved review facts')
+        self.assertEqual(row['origin'], 'user Knowledge')
+        self.assertEqual(row['estimated_tokens'], 0)
+        self.assertIsNone(row['content'])
+        self.assertIn('Earlier', row['history_hint'])
+
+    def test_cold_preview_expands_native_schemas_without_starting_workers_or_model(self):
+        with patch.object(self.app.state.manager, 'ensure_deployment_ready', side_effect=AssertionError('preview started a model')):
+            resolved = self.post('/v1/setup-resolution', {'include_input_content': True,
+                'overrides': {'deployment_id': self.deployment.id, 'presented_tools': ['read_file', 'desktop_search', 'start_preview'],
+                    'input_policy': {'pinned_tools': ['read_file']}}})
+        tools = {row['tool_name']: row for row in resolved['input_sources'] if row['tool_name']}
+        for name in ('read_file', 'desktop_search', 'start_preview'):
+            self.assertIn(name, tools[name]['content'])
+        self.assertIn('Project-relative', tools['read_file']['content'])
+        self.assertIn('selector', tools['desktop_search']['content'])
+        self.assertIn('entry_path', tools['start_preview']['content'])
+
+    def test_frozen_reference_reading_routes_require_action_without_widening(self):
+        memory = self.post('/v1/knowledge/entries', {'scope': 'user', 'kind': 'memory', 'content': 'Entire original'})
+        skill = self.post('/v1/knowledge/entries', {'scope': 'user', 'kind': 'skill',
+            'content': '---\nname: inspect-context\ndescription: Inspect selected context.\n---\n\nOriginal steps.\n'})
+
+        def resolve(**overrides):
+            return self.client.post('/v1/setup-resolution', json={'overrides': overrides})
+
+        # Exact version refs also need a reader, even when no entry-id list was authored.
+        no_tools = resolve(presented_tools=[], memory_version_refs=[memory['current_version_id']])
+        self.assertEqual(no_tools.status_code, 409, no_tools.text)
+        self.assertEqual(no_tools.json()['code'], 'deferred_reference_tools_off')
+        memory_excluded = resolve(presented_tools=['echo'], memory_version_refs=[memory['current_version_id']],
+            input_policy={'excluded_sources': ['tool:read_reference']})
+        self.assertEqual(memory_excluded.status_code, 409, memory_excluded.text)
+        self.assertEqual(memory_excluded.json()['code'], 'deferred_reference_reader_excluded')
+        self.assertIn('Include now, Remove, or Enable reading', memory_excluded.json()['error'])
+        both_excluded = resolve(presented_tools=['echo', 'read_file'], skill_version_refs=[skill['current_version_id']],
+            input_policy={'excluded_sources': ['tool:read_reference', 'tool:read_file']})
+        self.assertEqual(both_excluded.status_code, 409, both_excluded.text)
+        self.assertEqual(both_excluded.json()['code'], 'deferred_reference_reader_excluded')
+        file_route = resolve(presented_tools=['read_file'], skill_version_refs=[skill['current_version_id']],
+            input_policy={'excluded_sources': ['tool:read_reference']})
+        self.assertEqual(file_route.status_code, 200, file_route.text)
+        self.assertEqual(file_route.json()['configuration']['presented_tools'], ['read_file'])
+        included = resolve(presented_tools=[], memory_version_refs=[memory['current_version_id']],
+            input_policy={'reference_loading': {memory['id']: 'always'}})
+        self.assertEqual(included.status_code, 200, included.text)
+        self.assertEqual(included.json()['configuration']['presented_tools'], [])
+
+    def test_progressive_connection_defers_readiness_but_rejects_disabled_and_unknown_records(self):
+        from workbench_backend.connections.schemas import ConnectionRecord, ConnectionTool
+        from workbench_backend.inference.ids import utc_now
+        record = ConnectionRecord(id='connection-deferred', name='Saved disconnected connection', version=1,
+            kind='mcp', transport='http', url='http://127.0.0.1:9/mcp',
+            tools=[ConnectionTool(id='descriptor', name='cx_saved_read', remote_name='read', description='Read remote text', input_schema={'type': 'object', 'properties': {}})],
+            created_at=utc_now(), updated_at=utc_now(), last_error='Disconnected')
+        self.app.state.connections.store.put(record)
+        with patch.object(self.app.state.connections, 'available', side_effect=AssertionError('deferred preview tested a connection')), \
+                patch.object(self.app.state.connections, 'get', side_effect=AssertionError('preview read credentials')):
+            resolved = self.post('/v1/setup-resolution', {'include_input_content': True,
+                'overrides': {'connection_ids': [record.id], 'presented_tools': ['cx_saved_read']}})
+        self.assertEqual(resolved['configuration']['connection_ids'], [record.id])
+        self.assertEqual(resolved['configuration']['presented_tools'], ['cx_saved_read'])
+        source = next(row for row in resolved['input_sources'] if row['tool_name'] == 'cx_saved_read')
+        self.assertIn('Read remote text', source['content'])
+        self.assertIn('"parameters"', source['content'])
+        self.assertEqual(source['mode'], 'when_needed')
+        self.assertEqual(source['estimated_tokens'], 0)
+        with patch.object(self.app.state.connections, 'get', side_effect=AssertionError('snapshot read credentials')):
+            snapshots = self.app.state.connections.snapshot([record.id], allow_unready=True)
+        self.assertEqual(snapshots[0].tools, record.tools)
+        self.assertEqual(snapshots[0].version, record.version)
+        eager = self.client.post('/v1/setup-resolution', json={'overrides': {'connection_ids': [record.id], 'input_policy': {'tool_loading': 'always'}}})
+        self.assertEqual(eager.status_code, 409, eager.text)
+        self.app.state.connections.store.put(record.model_copy(update={'enabled': False}))
+        for ident in (record.id, 'unknown'):
+            rejected = self.client.post('/v1/setup-resolution', json={'overrides': {'connection_ids': [ident]}})
+            self.assertEqual(rejected.status_code, 409, rejected.text)
+            self.assertEqual(rejected.json()['missing_dependencies'][0]['kind'], 'connection')
+
+    def test_helper_connections_freeze_exact_metadata_inside_parent_selection(self):
+        from workbench_backend.agents.helpers import freeze_helpers
+        from workbench_backend.connections.schemas import ConnectionRecord, ConnectionTool
+        from workbench_backend.inference.ids import utc_now
+        records = []
+        for ident in ('permitted', 'outside'):
+            record = ConnectionRecord(id=ident, name=f'Saved {ident}', version=1,
+                kind='mcp', transport='http', url='http://127.0.0.1:9/mcp', credential_ref='opaque-reference',
+                tools=[ConnectionTool(id=f'cx_{ident}', name=f'cx_{ident}', remote_name='read',
+                    description='Read accepted text', input_schema={'type': 'object', 'properties': {'original': {'type': 'string'}}})],
+                created_at=utc_now(), updated_at=utc_now())
+            self.app.state.connections.store.put(record)
+            records.append(record)
+        helper = self.setup(presented_tools=['echo'], connection_ids=['permitted', 'outside'])
+        parent = SetupConfiguration(deployment_id=self.deployment.id, presented_tools=['echo'], connection_ids=['permitted'])
+        with patch.object(self.app.state.connections, 'get', side_effect=AssertionError('helper freeze read credentials')):
+            frozen, = freeze_helpers(self.app.state.setups, [helper['id']], parent_configuration=parent,
+                connection_snapshot=self.app.state.connections.snapshot)
+        self.assertEqual([item.id for item in frozen.connection_snapshots], ['permitted'])
+        self.assertEqual(frozen.configuration.connection_ids, ['permitted'])
+        self.assertEqual(frozen.connection_snapshots[0].tools, records[0].tools)
+        with patch.object(self.app.state.setups, 'connection_tools', side_effect=AssertionError('accepted catalogue refreshed')), \
+            patch.object(self.app.state.setups, 'connection_exists', side_effect=AssertionError('accepted dependency refreshed')):
+            self.assertEqual(self.app.state.setups.dependencies(frozen.configuration, frozen=True,
+                connection_snapshots=frozen.connection_snapshots), [])
+            widened = frozen.configuration.model_copy(update={'connection_ids': ['permitted', 'outside']})
+            issues = self.app.state.setups.dependencies(widened, frozen=True,
+                connection_snapshots=frozen.connection_snapshots)
+        self.assertEqual([(issue.kind, issue.id) for issue in issues], [('connection', 'outside')])
+        original = frozen.model_dump_json()
+        changed = records[0].model_copy(deep=True)
+        changed.version = 2
+        changed.tools[0].input_schema = {'type': 'object', 'properties': {'later': {'type': 'integer'}}}
+        self.app.state.connections.store.put(changed)
+        self.assertEqual(frozen.model_dump_json(), original)
+        self.assertIn('original', frozen.connection_snapshots[0].tools[0].input_schema['properties'])
+        self.assertNotIn('later', frozen.connection_snapshots[0].tools[0].input_schema['properties'])
+        self.assertNotIn('credential_present', original)
+
     def test_project_aliases_removal_and_fixed_chat_area(self):
         project = self.project(name="Work")
         alias = self.project(path=str(self.folder / ".." / "project"))
@@ -305,7 +439,7 @@ class ProjectSetupTests(unittest.TestCase):
         self.assertIsNone(reloaded.embedding_deployment_id)
 
     def test_chat_uses_latest_agent_record_and_saved_empty_tool_choice(self):
-        setup = self.setup(instructions="AGENT ORIGINAL", presented_tools=["read_file"], per_request_overrides={"temperature": 0.2})
+        setup = self.setup(instructions="AGENT ORIGINAL", presented_tools=["read_file"], per_request_overrides={"temperature": 0.2}, input_policy={"tool_loading": "always"})
         project = self.project()
         self.app.state.harness = HarnessService(lambda: self.app.state.manager, app_store=self.app.state.app_store,
             knowledge_provider=lambda: self.app.state.knowledge, model_factory=lambda *_: ScriptedChatModel([AIMessage(content="done")]))

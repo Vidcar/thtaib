@@ -33,7 +33,7 @@ console.log("Knowledge workspace checks passed.");
 async function checkGuidedSkillDraft(Editor) {
   const original = '---\nname: original\ndescription: Read references.\nlicense: MIT\n---\nInstructions.';
   const pending = [];
-  const preview = (source, fields) => ({ content: fields ? source.replace('name: original', `name: ${fields.name}`).replace('description: Read references.', `description: ${fields.description}`) : source, name: fields?.name ?? 'original', description: fields?.description ?? 'Read references.', instructions: fields?.instructions ?? 'Instructions.', guided_available: true, valid: true, issues: [] });
+  const preview = (source, fields) => ({ content: fields ? source.replace('name: original', `name: ${fields.name}`).replace('description: Read references.', `description: ${fields.description}`) : source, name: fields?.name ?? 'original', description: fields?.description ?? 'Read references.', instructions: fields?.instructions ?? 'Instructions.', required_tools: fields?.required_tools ?? ['read_file'], required_connections: fields?.required_connections ?? ['saved_connection'], requires_project: fields?.requires_project ?? true, guided_available: true, valid: true, issues: [] });
   globalThis.fetch = async (url, init) => {
     assert.equal(new URL(String(url)).pathname, '/v1/knowledge/skills/preview');
     const body = JSON.parse(init.body);
@@ -51,6 +51,9 @@ async function checkGuidedSkillDraft(Editor) {
     await act(async () => { renderer = create(React.createElement(Host)); await tick(); });
     assert.equal(valid, true);
     await act(async () => field(renderer, 'Skill name', 'input').props.onChange({ target: { value: 'older-name' } }));
+    assert.deepEqual(pending[0].body.fields.required_tools, ['read_file'], 'ordinary Guided edits preserve declared tool requirements');
+    assert.deepEqual(pending[0].body.fields.required_connections, ['saved_connection']);
+    assert.equal(pending[0].body.fields.requires_project, true);
     assert.equal(valid, false, 'an unconfirmed source transformation cannot save');
     await act(async () => field(renderer, 'Skill name', 'input').props.onChange({ target: { value: 'latest-name' } }));
     assert.equal(button(renderer, 'Source').props.disabled, true, 'Source cannot discard an outstanding guided edit');
@@ -305,9 +308,13 @@ async function checkKnowledgeOwnershipAndReview(Component) {
   try {
     await act(async () => { renderer = create(React.createElement(Component)); await tick(); });
     await act(async () => button(renderer, "New memory").props.onClick());
+    await act(async () => field(renderer, "When to use (optional)", "textarea").props.onChange({ target: { value: "Cancelled description" } }));
+    await act(async () => button(renderer, "Cancel").props.onClick());
+    await act(async () => button(renderer, "New memory").props.onClick());
+    assert.equal(field(renderer, "When to use (optional)", "textarea").props.value, "", "a new memory does not inherit a cancelled description");
     await act(async () => segmented(renderer.root, "Use in", "project").props.onChange());
     assert.ok(text(field(renderer, "Project", "select")).includes("Actual project"));
-    await act(async () => { field(renderer, "Project", "select").props.onChange({ target: { value: "project_real" } }); field(renderer, "Display name (optional)", "input").props.onChange({ target: { value: "Scoped fact" } }); field(renderer, "Content", "textarea").props.onChange({ target: { value: "Remember this" } }); });
+    await act(async () => { field(renderer, "Project", "select").props.onChange({ target: { value: "project_real" } }); field(renderer, "Display name (optional)", "input").props.onChange({ target: { value: "Scoped fact" } }); field(renderer, "Content", "textarea").props.onChange({ target: { value: "Remember this" } }); field(renderer, "When to use (optional)", "textarea").props.onChange({ target: { value: "Use this when preparing a project comparison." } }); });
     await act(async () => { renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }); await tick(); });
     const created = calls.find(call => call.path === "/v1/knowledge/entries" && call.method === "POST").body;
     assert.equal(created.scope_id, "project_real"); assert.equal(created.scope, "project"); assert.ok(!Object.hasOwn(created, "provenance"), "the desktop cannot forge actor or run provenance");
@@ -316,9 +323,16 @@ async function checkKnowledgeOwnershipAndReview(Component) {
     await act(async () => { button(renderer, "Disable entry").props.onClick(); await tick(); });
     assert.equal(calls.find(call => call.method === "PATCH").body.enabled, false);
     await act(async () => field(renderer, "Content", "textarea").props.onChange({ target: { value: "Unsaved human change" } }));
+    await act(async () => field(renderer, "When to use (optional)", "textarea").props.onChange({ target: { value: "Updated memory description." } }));
     await act(async () => { button(renderer, "Save").props.onClick(); await tick(); });
     assert.equal(calls.find(call => call.path.endsWith("/edit")).body.base_version, "created-version");
     assert.equal(field(renderer, "Content", "textarea").props.value, "Unsaved human change", "conflict must preserve the human draft");
+    assert.equal(field(renderer, "When to use (optional)", "textarea").props.value, "Updated memory description.", "version conflicts preserve the short description draft too");
+    assert.equal(calls.find(call => call.path.endsWith("/edit")).body.description, "Updated memory description.");
+    assert.equal(calls.find(call => call.path === "/v1/knowledge/entries" && call.method === "POST").body.description, "Use this when preparing a project comparison.");
+    await act(async () => { button(renderer, "Discard edits and reload").props.onClick(); await tick(); });
+    assert.equal(field(renderer, "Content", "textarea").props.value, "Remember this", "discard restores the saved memory body");
+    assert.equal(field(renderer, "When to use (optional)", "textarea").props.value, "Use this when preparing a project comparison.", "discard restores the saved short description");
     await act(async () => { button(renderer, "Accept").props.onClick(); await tick(); });
     assert.deepEqual(calls.find(call => call.path.endsWith("/review")).body, { decision: "accept" });
     await act(async () => field(renderer, "Destination", "select").props.onChange({ target: { value: "project:project_real" } }));

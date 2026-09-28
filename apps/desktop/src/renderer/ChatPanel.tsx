@@ -25,7 +25,11 @@ import { packet03Api, packet03Request } from "./packet03Api";
 import { ChatModelControls } from "./ChatModelControls";
 import { HelperRail, helperEntries, helperIsActive } from "./HelperRail";
 import { ChatMeasurements, publishLiveMeasurement } from "./ChatMeasurements";
+import { AgentInputs } from "./AgentInputs";
+import { scopedSetupConfiguration } from "./SetupConfigurationEditor";
+import type { AgentInputPolicy, CapabilitySetupRequest } from "./agentInputPolicy";
 import { ChatRetainedFiles, useChatRetainedAssets } from "./ChatRetainedFiles";
+import { copyRetainedAsset } from "./retainedFiles";
 import { ChatDraftWriter, sameDraftValue } from "./chatDraftWriter";
 import { notifyAttentionChanged } from "./AttentionPanel";
 import { ChatHistoryActions } from "./ChatHistoryActions";
@@ -122,6 +126,7 @@ function ChatInteractionStream(props: {
   onHelperActivity: (conversationId: string, active: number, total: number) => void;
   historicalRuns: AgentRun[];
   onRecoverRun?: (run: AgentRun) => void;
+  onConfigureSetup?: (setup: CapabilitySetupRequest) => void;
 }) {
   const {
     threadId,
@@ -205,6 +210,7 @@ function ChatInteractionStream(props: {
           onHelperActivity={props.onHelperActivity}
           historicalRuns={props.historicalRuns}
           onRecoverRun={props.onRecoverRun}
+          onConfigureSetup={props.onConfigureSetup}
         />
       )}
     </InteractionStream>
@@ -237,6 +243,7 @@ function ChatInteractionStreamContent(props: {
   onHelperActivity: (conversationId: string, active: number, total: number) => void;
   historicalRuns: AgentRun[];
   onRecoverRun?: (run: AgentRun) => void;
+  onConfigureSetup?: (setup: CapabilitySetupRequest) => void;
 }) {
   const {
     stream,
@@ -492,6 +499,7 @@ function ChatInteractionStreamContent(props: {
         <InterruptApproval
           ownerLabel={helperApprovalOwner(run, visibleInterrupt.namespace)}
           pending={visibleInterrupt.pending}
+          onConfigureSetup={props.onConfigureSetup}
           busy={stream.isLoading}
           onRespond={(payload) => {
             void stream
@@ -673,6 +681,9 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const [agentSetupId, setAgentSetupId] = useState<string | null>(null);
   const [modelOverrides, setModelOverrides] = useState<NonNullable<SetupConfiguration["model_overrides"]>>({});
   const [inheritedModelConfiguration, setInheritedModelConfiguration] = useState<SetupConfiguration | null>(null);
+  const [inputPolicy, setInputPolicy] = useState<AgentInputPolicy | null>(null);
+  const [localInstructions, setLocalInstructions] = useState<string | null>(null);
+  const [showInputs, setShowInputs] = useState(false);
   const [contextEntryIds, setContextEntryIds] = useState<string[]>([]);
   const [contextKinds, setContextKinds] = useState<Record<string, "memory" | "instruction">>({});
   const [messageSkillIds, setMessageSkillIds] = useState<string[]>([]);
@@ -710,6 +721,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const [recoveringEffects, setRecoveringEffects] = useState(false);
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
   const [documentAssetIds, setDocumentAssetIds] = useState<string[] | null>(null);
+  const [copyingInputFiles, setCopyingInputFiles] = useState(false);
   const filePicker = useRef<HTMLInputElement>(null);
   const [workMode, setWorkMode] = useState<"work" | "plan">("work");
   const [desktopAccess, setDesktopAccess] = useState<DesktopAccess>("off");
@@ -1016,6 +1028,8 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       work_mode: workMode,
       helper_agent_ids: helperAgentIds,
       review,
+      ...(inputPolicy ? { input_policy: inputPolicy } : {}),
+      ...(localInstructions !== null ? { instructions: localInstructions } : {}),
       ...selectedKnowledge,
     }, setupEditedFields.current, layered);
     // Editable intent names records; backend admission owns the exact versions.
@@ -1084,6 +1098,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       setAgentSetupId(nextAgentId ?? null);
       if (!preserveWorkspace) setProjectPath(projects.find(project => project.id === nextProjectId)?.canonical_path ?? "");
       applyResolvedSetup(resolved);
+      setInputPolicy(effectiveOverrides.input_policy ?? null);
       if (overrides.model_overrides) setModelOverrides(overrides.model_overrides);
       if (overrides.inherited_model_configuration !== undefined) setInheritedModelConfiguration(overrides.inherited_model_configuration ?? null);
       if (overrides.agent_setup_id !== undefined) setAgentSetupId(overrides.agent_setup_id ?? null);
@@ -1198,7 +1213,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     selectedKnowledgeIds,
     knowledgeEntries,
     projectId, agentSetupVersionId, setupResolving, hasApplicationDefaults,
-    agentSetupId, modelOverrides, inheritedModelConfiguration, contextEntryIds, contextKinds, messageSkillIds, shortcutIds, projectFileRefs,
+    agentSetupId, modelOverrides, inheritedModelConfiguration, contextEntryIds, contextKinds, messageSkillIds, shortcutIds, projectFileRefs, inputPolicy, localInstructions,
   ]);
 
   const transcript = conversation ? displayedTranscript(conversation) : [];
@@ -1231,6 +1246,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     updateTask("");
     setAttachmentIds([]);
     setDocumentAssetIds(null);
+    setInputPolicy(null); setLocalInstructions(null); setShowInputs(false);
     setModelOverrides({}); setContextEntryIds([]); setContextKinds({}); setMessageSkillIds([]); setShortcutIds([]); setProjectFileRefs([]); setPicker(null);
     setupEditedFields.current = keepModelChoice ? new Set(["deployment_id", "model_configuration_id"]) : new Set();
     setApprovalMode(approvalModeOf(applicationDefaults.current?.configuration.approval_mode));
@@ -1240,7 +1256,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     setMessage("");
   }
 
-  const selectionBusy = Boolean(props.restoringSelection) || Boolean(selectionLoading) || setupResolving || setupDefaultsLoading;
+  const selectionBusy = Boolean(props.restoringSelection) || Boolean(selectionLoading) || setupResolving || setupDefaultsLoading || copyingInputFiles;
   const hasPendingCancelInput = Boolean(conversation?.pending_cancel_input_ids?.length);
   const currentRunLive = Boolean(conversation?.current_run && isAgentRunLive(conversation.current_run.status));
   const awaitingRunAdmission = Boolean(pendingSubmit && !currentRunLive);
@@ -1347,6 +1363,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
 
   function selectConversation(item: ChatConversation): void {
     if (historyMutations.current.get(item.id) === "deleted") return;
+    setShowInputs(false);
     const requestId = selectionRequest.current + 1;
     selectionRequest.current = requestId;
     setupRequest.current += 1;
@@ -1424,6 +1441,8 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         setApprovalMode(approvalModeOf(overrides.approval_mode ?? (resolved ? resolved.configuration.approval_mode : next.approval_mode)));
         setPerRequestOverrides(draftConfig.per_request_overrides && typeof draftConfig.per_request_overrides === "object" ? draftConfig.per_request_overrides as Record<string, unknown> : {});
         setSelectedTools(overrides.presented_tools ?? null);
+        setInputPolicy(overrides.input_policy ?? null);
+        setLocalInstructions(overrides.instructions ?? null);
         applyExecutionPreferences({ ...(next as ExecutionPreferences), ...draftConfig } as ExecutionPreferences);
         setProjectPath(next.project_path ?? "");
         setSelectedKnowledgeIds([
@@ -1718,6 +1737,95 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     void persistBeforeLeaving().then(() => onNavigate?.(tab, recordId)).catch(fail);
   }
 
+  function editInputs(configuration: SetupConfiguration): void {
+    draftRevision.current += 1;
+    markSetupEdited("input_policy");
+    setInputPolicy(configuration.input_policy ?? null);
+    if (Object.hasOwn(configuration, "instructions")) {
+      markSetupEdited("instructions");
+      setLocalInstructions(configuration.instructions ?? "");
+    }
+    setReadinessEpoch(value => value + 1);
+  }
+
+  async function saveInputsToAgent(name?: string): Promise<void> {
+    const generation = selectionRequest.current;
+    const basePolicy: AgentInputPolicy = selectedAgent?.configuration.input_policy ?? {};
+    const promoteExclusions = (ids: string[] | undefined) => ids?.map(id => !selectedAgent && id === "conversation_instructions" ? "agent_instructions" : id);
+    const policy = { ...basePolicy, ...(inputPolicy ?? {}), reference_loading: { ...basePolicy.reference_loading, ...inputPolicy?.reference_loading }, version: 1 as const, instruction_override: null };
+    if (policy.excluded_sources) policy.excluded_sources = promoteExclusions(policy.excluded_sources);
+    const instructions = inputPolicy?.instruction_override ?? selectedAgent?.configuration.instructions ?? localInstructions ?? null;
+    const base = selectedAgent?.configuration ?? {
+      memory_entry_ids: contextEntryIds.filter(id => contextKinds[id] !== "instruction"),
+      protected_instruction_entry_ids: contextEntryIds.filter(id => contextKinds[id] === "instruction"),
+      skill_entry_ids: messageSkillIds,
+      ...(selectedTools !== null ? { presented_tools: selectedTools } : {}),
+    };
+    const configuration = scopedSetupConfiguration({ ...base, instructions, input_policy: policy }, "agent");
+    const saved = selectedAgent
+      ? await workspaceApi.updateAgentSetup(selectedAgent.id, { name: selectedAgent.name, role: selectedAgent.role, configuration, base_version: selectedAgent.current_version_id })
+      : await workspaceApi.createAgentSetup({ name: name?.trim() || "Chat agent", configuration });
+    setAgentSetups(current => [...current.filter(agent => agent.id !== saved.id), saved]);
+    if (generation !== selectionRequest.current) return;
+    setAgentSetupId(saved.id); setAgentSetupVersionId(saved.current_version_id);
+    markSetupEdited("agent_setup_id", "input_policy");
+    setInputPolicy({ ...inputPolicy, ...(inputPolicy?.excluded_sources ? { excluded_sources: promoteExclusions(inputPolicy.excluded_sources) } : {}), version: 1, instruction_override: null });
+    setReadinessEpoch(value => value + 1);
+  }
+
+  async function freshWithInputs(effectivePolicy: AgentInputPolicy): Promise<void> {
+    const generation = selectionRequest.current;
+    const intent = chatConfiguration();
+    const configuration = setupOverrides(chatConfiguration());
+    const context = [...contextEntryIds], kinds = { ...contextKinds }, skills = [...messageSkillIds], actions = [...shortcutIds], files = [...projectFileRefs];
+    const path = projectPath;
+    const included = (id: string) => !effectivePolicy.excluded_sources?.includes(`attachment:${id}`);
+    const attachments = attachmentIds.filter(included), documents = selectedDocumentIds.filter(included);
+    const selectedAssets = [...new Set([...attachments, ...documents])];
+    setCopyingInputFiles(true);
+    try {
+      const source = await persistBeforeLeaving() ?? conversation;
+      if (generation !== selectionRequest.current) return;
+      if (selectedAssets.length) {
+        if (!source) throw new Error("The selected files need a saved Chat owner before they can be reused.");
+        const available = await packet03Api.assets({ sessionId: source.id });
+        const originals = selectedAssets.map(id => {
+          const asset = available.find(item => item.id === id && !item.deleted_at);
+          if (!asset) throw new Error("A selected file is no longer available in this chat.");
+          return asset;
+        });
+        if (generation !== selectionRequest.current) return;
+        const target = await api.createChatConversation(chatCreationConfiguration());
+        const copies = new Map<string, string>();
+        for (const asset of originals) {
+          if (generation !== selectionRequest.current) return;
+          const copied = await copyRetainedAsset(asset, target.id, { sessionId: source.id, ...(source.project_path ? { projectPath: source.project_path } : {}) });
+          copies.set(asset.id, copied.id);
+        }
+        const saved = await draftWriter.current.save(target, { content: "", attachment_ids: attachments.map(id => copies.get(id)!), intended_config: { ...intent, document_asset_ids: documents.map(id => copies.get(id)!) } });
+        cacheConversation(saved);
+        if (generation === selectionRequest.current) selectConversation(saved);
+        return;
+      }
+      startFresh();
+      setProjectPath(path);
+      setContextEntryIds(context); setContextKinds(kinds); setMessageSkillIds(skills); setShortcutIds(actions); setProjectFileRefs(files);
+      setLocalInstructions(localInstructions);
+      await chooseSetup(projectId, agentSetupVersionId, configuration, true, true);
+    } catch (failure) { fail(failure); }
+    finally { setCopyingInputFiles(false); }
+  }
+
+  function configureCapability(setup: CapabilitySetupRequest): void {
+    if (setup.target === "browser") { openRail("browser"); return; }
+    if (setup.target === "windows") { setToolMenuRequest(value => value + 1); return; }
+    if (setup.target === "context") { setShowInputs(true); return; }
+    if (setup.target === "settings") {
+      try { sessionStorage.setItem("workbench.settings.category", "Connections"); } catch { /* Settings still opens. */ }
+      navigateAway("settings", setup.target_id ?? undefined);
+    } else navigateAway(setup.target === "agent" ? "agents" : setup.target === "project" ? "projects" : "knowledge", setup.target_id ?? (setup.target === "agent" ? selectedAgent?.id : setup.target === "project" ? projectId ?? undefined : undefined));
+  }
+
   function openPermissions(): void {
     try { sessionStorage.setItem("workbench.settings.category", "Permissions"); } catch { /* Navigation still works without storage. */ }
     navigateAway("settings");
@@ -1726,14 +1834,14 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const readinessKey = conversation && !selectionLoading && !setupResolving && !runBusy
     ? JSON.stringify([conversation.id, projectId, setupOverrides(chatConfiguration()), agentSetupVersionId,
       conversation.current_run_id, conversation.current_run?.status, selectedDeployment?.status,
-      selectedDeployment?.health?.healthy, readinessEpoch]) : "";
+      selectedDeployment?.health?.healthy, attachmentIds, selectedDocumentIds, shortcutIds, projectFileRefs, readinessEpoch]) : "";
   const readiness = readinessSnapshot?.key === readinessKey ? readinessSnapshot.value : null;
   const readinessBlocked = readinessBlocksSend(readiness);
   const queueIntent = currentRunLive || hasPendingCancelInput || Boolean(conversation?.current_run?.finalization_phase) || Boolean(readiness?.issues.some(issue => issue.code === "chat_turn_active"));
   useEffect(() => {
     if (!conversation || !readinessKey) { setReadinessSnapshot(null); return; }
     let cancelled = false;
-    void workspaceApi.chatReadiness(conversation.id, setupOverrides(chatConfiguration()), agentSetupVersionId).then(result => {
+    void workspaceApi.chatReadiness(conversation.id, setupOverrides(chatConfiguration()), agentSetupVersionId, false, { attachment_ids: attachmentIds, document_asset_ids: selectedDocumentIds, shortcut_ids: shortcutIds, project_file_refs: projectFileRefs }).then(result => {
       if (!cancelled) setReadinessSnapshot({ key: readinessKey, value: result });
     }).catch(failure => {
       if (!cancelled) setReadinessSnapshot({ key: readinessKey, value: { status: "unverified", can_send: false,
@@ -2010,6 +2118,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
               onHelperActivity={recordHelperActivity}
               historicalRuns={historicalRuns}
               onRecoverRun={recoverRun}
+              onConfigureSetup={configureCapability}
             />
           ) : (
             transcript.map((item, index) => (
@@ -2042,12 +2151,13 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         ) : null}
         {conversation && readinessBlocked && !runBusy ? <Notice tone={readiness?.status === "incompatible" ? "error" : "warn"} action={<button type="button" onClick={() => {
           const code = readiness?.issues[0]?.code ?? "";
-          if (code === "browser_control_active") openRail("browser");
+          if (["deferred_reference_tools_off", "deferred_reference_reader_excluded", "skill_selection_required"].includes(code)) setShowInputs(true);
+          else if (code === "browser_control_active") openRail("browser");
           else if (code === "browser_worker_missing") { try { sessionStorage.setItem("workbench.settings.category", "Connections"); } catch {} navigateAway("settings"); }
           else if (/browser/.test(code)) openToolMenu("browser");
           else if (/window|desktop|grant/.test(code)) openToolMenu("windows");
           else navigateAway("agents");
-        }}>{readiness?.issues[0]?.code === "browser_control_active" ? "Return to agent in Browser" : readiness?.issues[0]?.code === "browser_worker_missing" ? "Install browser worker" : readiness?.issues[0]?.code === "browser_session_lost" ? "Reset browser" : /window|desktop|grant/.test(readiness?.issues[0]?.code ?? "") ? "Review Windows access" : "Review setup"}</button>}>{readiness?.issues[0]?.message ?? "This chat needs a setup change before sending."}</Notice> : null}
+        }}>{readiness?.issues[0]?.code === "skill_selection_required" ? "Review skill requirements" : ["deferred_reference_tools_off", "deferred_reference_reader_excluded"].includes(readiness?.issues[0]?.code ?? "") ? "Review reference loading" : readiness?.issues[0]?.code === "browser_control_active" ? "Return to agent in Browser" : readiness?.issues[0]?.code === "browser_worker_missing" ? "Install browser worker" : readiness?.issues[0]?.code === "browser_session_lost" ? "Reset browser" : /window|desktop|grant/.test(readiness?.issues[0]?.code ?? "") ? "Review Windows access" : "Review setup"}</button>}>{readiness?.issues[0]?.message ?? "This chat needs a setup change before sending."}</Notice> : null}
         {message && message !== conversation?.deploy_health?.message ? (
           <Notice tone="error" action={/^Return (browser control|to agent in the Browser)/.test(message) ? <button type="button" onClick={() => openRail("browser")}>Return to agent in Browser</button> : undefined}>{message}</Notice>
         ) : null}
@@ -2186,7 +2296,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
               {agentSetups.map(agent => <div key={agent.id} className="chat-agent-option"><button type="button" className="menu-action" aria-pressed={agent.current_version_id === agentSetupVersionId} disabled={Boolean(agent.missing_dependencies?.length)} title={agent.missing_dependencies?.map(issue => issue.reason).join(", ")} onClick={() => { void chooseMainAgent(agent.current_version_id); close(); }}>{agent.name}</button>{agent.missing_dependencies?.length ? <><small className="hint">{agent.missing_dependencies.map(issue => issue.reason).join(" · ")}</small><button type="button" className="text-button" onClick={() => { close(); navigateAway("agents", agent.id); }}>Review in Agents</button></> : null}</div>)}
             </div>}</MenuPopover>
             <span className="composer-spacer" />
-            <ChatMeasurements run={conversation?.current_run} ownerKey={JSON.stringify([conversation?.id, interactionThreadId, boundGeneration])} starting={pendingSubmissionActive || (sending && !currentRunLive)} stopping={pendingStopActive} />
+            <ChatMeasurements run={conversation?.current_run} ownerKey={JSON.stringify([conversation?.id, interactionThreadId, boundGeneration])} starting={pendingSubmissionActive || (sending && !currentRunLive)} stopping={pendingStopActive} onInspect={() => setShowInputs(true)} />
             <button
               type={runBusy ? "button" : "submit"}
               aria-label={runBusy ? savingProjectState ? "Finishing" : pendingStopActive ? "Stopping…" : "Stop" : props.restoringSelection || selectionLoading ? "Opening conversation…" : selectionBusy ? "Loading settings…" : sending ? "Sending…" : "Send"}
@@ -2200,6 +2310,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         </div>
       </div>
     </section>
+    {showInputs ? <AgentInputs configuration={{ ...setupOverrides(chatConfiguration()), input_policy: inputPolicy, ...(localInstructions !== null ? { instructions: localInstructions } : {}) }} conversationId={conversation?.id} projectId={projectId} agentSetupVersionId={agentSetupVersionId} context={{ attachment_ids: attachmentIds, document_asset_ids: selectedDocumentIds, shortcut_ids: shortcutIds, project_file_refs: projectFileRefs }} preview={readiness?.input_preview} run={conversation?.current_run} hasHistory={transcript.length > 0} disabled={selectionBusy || sending} effectiveTools={selectedTools} preparingFresh={copyingInputFiles} onChange={editInputs} onClose={() => setShowInputs(false)} agentName={selectedAgent?.name} onSaveToAgent={saveInputsToAgent} onFreshChat={policy => void freshWithInputs(policy)} onEditSource={(owner, recordId) => { setShowInputs(false); navigateAway(owner, recordId ?? (owner === "models" ? profileId || selectedDeployment?.bundle_id || undefined : owner === "agents" ? selectedAgent?.id : undefined)); }} /> : null}
     </ChatDockContext.Provider>
   );
 }

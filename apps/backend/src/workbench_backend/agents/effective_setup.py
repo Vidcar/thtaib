@@ -27,7 +27,11 @@ from workbench_backend.agents.memory_skills import (
     MaterializedKnowledgeFact,
 )
 from workbench_backend.knowledge.schemas import KnowledgeKind, KnowledgeRefs, KnowledgeVersion
-from workbench_backend.agents.setup_schemas import InstructionLayer
+from workbench_backend.agents.setup_schemas import AgentInputPolicy, InputSourceRow, InstructionLayer
+from workbench_backend.agents.input_sources import (
+    WORKBENCH_CORE_INSTRUCTIONS, authored_instruction_sections, build_input_sources,
+    reference_source_mode,
+)
 
 NO_RETRIEVAL_GAP = "no retrieval requested"
 RAG_GAP = NO_RETRIEVAL_GAP
@@ -66,6 +70,8 @@ class EffectiveSetup(BaseModel):
     selected_agent_setup_version_id: str | None = None
     selected_connection_ids: list[str] = Field(default_factory=list)
     instruction_layers: list[InstructionLayer] = Field(default_factory=list)
+    input_policy: AgentInputPolicy | None = None
+    input_sources: list[InputSourceRow] = Field(default_factory=list)
     selected_deployment_id: str
     selected_embedding_deployment_id: str | None = None
     selected_memory_version_ids: list[str] = Field(default_factory=list)
@@ -211,6 +217,8 @@ def resolve_effective_setup(
     selected_agent_setup_id: str | None = None,
     selected_agent_setup_version_id: str | None = None,
     selected_connection_ids: list[str] | None = None,
+    input_policy: AgentInputPolicy | None = None,
+    input_sources: list[InputSourceRow] | None = None,
 ) -> EffectiveSetup:
     """Resolve bags, startup mismatch and knowledge content before execution."""
 
@@ -250,6 +258,8 @@ def resolve_effective_setup(
         versions=knowledge_versions,
         retrieval_instructions=retrieval_instructions,
         instruction_layers=instruction_layers,
+        input_policy=input_policy,
+        selected_agent=bool(selected_agent_setup_version_id),
     )
     gaps: list[str] = []
     if retrieval_presented:
@@ -276,6 +286,11 @@ def resolve_effective_setup(
         selected_agent_setup_version_id=selected_agent_setup_version_id,
         selected_connection_ids=list(selected_connection_ids or []),
         instruction_layers=list(instruction_layers or []),
+        input_policy=input_policy,
+        input_sources=list(input_sources) if input_sources is not None else build_input_sources(
+            policy=input_policy, instruction_layers=instruction_layers, knowledge_versions=knowledge_versions,
+            profile=profile, deployment=deployment, selected_agent=bool(selected_agent_setup_version_id),
+            surface_text=surface_system_prompt, project_id=selected_project_id),
         selected_profile_id=profile.id if profile is not None else deployment.profile_id if inherited else None,
         selected_deployment_id=deployment.id,
         selected_embedding_deployment_id=(
@@ -332,6 +347,8 @@ def compose_system_prompt(
     versions: list[KnowledgeVersion],
     retrieval_instructions: str | None = None,
     instruction_layers: list[InstructionLayer] | None = None,
+    input_policy: AgentInputPolicy | None = None,
+    selected_agent: bool = False,
 ) -> str:
     """Prefer the profile identity prompt; compose the surface prompt after it.
 
@@ -343,6 +360,18 @@ def compose_system_prompt(
     Deep Agents injects them via ``memory=`` / ``skills=``.
     """
 
+    if input_policy is not None:
+        sections = [WORKBENCH_CORE_INSTRUCTIONS]
+        authored = authored_instruction_sections(policy=input_policy, profile_text=profile_system_prompt,
+            surface_text=surface_system_prompt, layers=list(instruction_layers or []),
+            selected_agent=selected_agent or any(layer.name.startswith("Agent") for layer in instruction_layers or []))
+        sections.extend(f"## {heading}\n{text}" for _, heading, text in authored)
+        if retrieval_instructions:
+            sections.append(retrieval_instructions)
+        for version in versions:
+            if version.kind == "protected_instruction" and reference_source_mode(input_policy, version.entry_id, version.kind) != "off":
+                sections.append(f"## Instructions ({version.id})\n{version.content}")
+        return "\n\n".join(sections)
     profile = (profile_system_prompt or "").strip() or None
     surface = (surface_system_prompt or "").strip() or None
     if instruction_layers:

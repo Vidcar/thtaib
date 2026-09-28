@@ -3,12 +3,13 @@ import { useEffect, useMemo, useState } from "react";
 import { interruptCommand } from "./display";
 import { PathBrowseButton } from "./PathField";
 import type { PendingInterrupt, PendingInterruptAction, UserQuestion } from "./types";
+import type { CapabilitySetupRequest } from "./agentInputPolicy";
 
 type ApprovalScope = "once" | "session" | "always";
 type Decision =
   | { type: "approve"; scope: ApprovalScope }
   | { type: "reject"; scope: "once"; message?: string }
-  | { type: "respond"; message: string };
+  | { type: "respond"; message: string; scope?: "once" };
 
 export type InterruptResponsePayload = { decisions: Decision[] };
 
@@ -22,6 +23,7 @@ function actionWorkingFolder(action: PendingInterruptAction): string | null {
 }
 
 function defaultDecision(action: PendingInterruptAction): Decision {
+  if (action.setup && action.allowed_decisions.includes("respond")) return { type: "respond", message: "", scope: "once" };
   if (action.question && action.allowed_decisions.includes("respond")) return { type: "respond", message: "" };
   return action.allowed_decisions.includes("approve") ? { type: "approve", scope: "once" } : { type: "reject", scope: "once" };
 }
@@ -48,10 +50,11 @@ export function InterruptApproval(props: {
   ownerLabel?: string;
   busy?: boolean;
   onRespond: (payload: InterruptResponsePayload) => void;
+  onConfigureSetup?: (setup: CapabilitySetupRequest) => void;
 }) {
   const { pending, busy, onRespond } = props;
   const decisionSignature = useMemo(
-    () => pending.action_requests.map(action => `${action.name}:${action.allowed_decisions.join(",")}:${action.question?.prompt ?? ""}`).join("|"),
+    () => pending.action_requests.map(action => `${action.name}:${action.allowed_decisions.join(",")}:${action.question?.prompt ?? ""}:${action.setup?.id ?? ""}:${action.setup?.code ?? ""}:${action.setup?.requires_new_input ?? ""}`).join("|"),
     [pending.action_requests],
   );
   const [decisions, setDecisions] = useState<Decision[]>(pending.action_requests.map(defaultDecision));
@@ -66,23 +69,39 @@ export function InterruptApproval(props: {
 
   const canSend = !busy && decisions.length === pending.action_requests.length && pending.action_requests.every((action, index) => {
     const decision = decisions[index];
-    return decision && action.allowed_decisions.includes(decision.type) && (decision.type !== "respond" || Boolean(decision.message.trim()));
+    return decision && action.allowed_decisions.includes(decision.type) && (decision.type !== "respond" || Boolean(decision.message.trim()) && !action.setup?.requires_new_input);
   });
+  const setupOnly = pending.action_requests.every(action => Boolean(action.setup));
+  const singleSetup = pending.action_requests.length === 1 && pending.action_requests[0].setup;
 
   return (
     <div className="approval-card" role="alertdialog" aria-labelledby="approval-title">
-      <h3 id="approval-title">Review requested actions{props.ownerLabel ? ` · ${props.ownerLabel}` : ""}</h3>
-      <p className="notice notice-warn">Choose a decision for each action. Saved permissions apply only to matching future actions with the same recorded scope.</p>
+      <h3 id="approval-title">{setupOnly ? "Setup needed" : "Review requested actions"}{props.ownerLabel ? ` · ${props.ownerLabel}` : ""}</h3>
+      <p className="notice notice-warn">{setupOnly ? "This step is paused. Complete the setup, then continue the saved work." : "Choose a decision for each action. Saved permissions apply only to matching future actions with the same recorded scope."}</p>
       <ol className="plain-list">
         {pending.action_requests.map((action, index) => {
           const command = interruptCommand(action);
           const workingFolder = actionWorkingFolder(action);
           const decision = decisions[index] ?? defaultDecision(action);
           const question = action.question;
+          const setup = action.setup;
           return (
             <li key={`${action.name}-${index}`} className="approval-action">
-              <strong>{index + 1}. {question ? answerTypeLabel(question) : actionTitle(action)}</strong>
-              {question ? (
+              <strong>{index + 1}. {setup ? setup.action : question ? answerTypeLabel(question) : actionTitle(action)}</strong>
+              {setup ? <>
+                <p>{setup.message}</p>
+                {setup.requires_new_input ? <p className="hint">This changes what the saved work may use. Skip this step and send a new message after changing your choices.</p> : <p className="hint">Continue retries this saved step with its original choices and access.</p>}
+                <div className="actions">
+                  {props.onConfigureSetup ? <button type="button" disabled={busy} onClick={() => props.onConfigureSetup?.(setup)}>Configure</button> : null}
+                  {singleSetup ? <>
+                    <button type="button" disabled={busy || setup.requires_new_input || !action.allowed_decisions.includes("respond")} onClick={() => onRespond({ decisions: [{ type: "respond", message: "continue", scope: "once" }] })}>Continue saved work</button>
+                    <button type="button" disabled={busy || !action.allowed_decisions.includes("reject")} onClick={() => onRespond({ decisions: [{ type: "reject", scope: "once", message: "The user skipped this setup step." }] })}>Skip this step</button>
+                  </> : <fieldset className="choice-set"><legend>Decision for setup {index + 1}</legend>
+                    <label className="check-row"><input type="radio" name={`decision-${index}`} checked={decision.type === "respond" && decision.message === "continue"} disabled={busy || setup.requires_new_input || !action.allowed_decisions.includes("respond")} onChange={() => choose(index, { type: "respond", message: "continue", scope: "once" })} />Continue saved work</label>
+                    <label className="check-row"><input type="radio" name={`decision-${index}`} checked={decision.type === "reject"} disabled={busy || !action.allowed_decisions.includes("reject")} onChange={() => choose(index, { type: "reject", scope: "once" })} />Skip this step</label>
+                  </fieldset>}
+                </div>
+              </> : question ? (
                 <>
                   <p>{question.prompt}</p>
                   <p className="hint">An answer does not grant file, folder, or tool access.</p>
@@ -137,7 +156,7 @@ export function InterruptApproval(props: {
           );
         })}
       </ol>
-      <div className="actions"><button type="button" disabled={!canSend} onClick={() => onRespond({ decisions })}>Send decisions</button></div>
+      {!singleSetup ? <div className="actions"><button type="button" disabled={!canSend} onClick={() => onRespond({ decisions })}>Send decisions</button></div> : null}
     </div>
   );
 }

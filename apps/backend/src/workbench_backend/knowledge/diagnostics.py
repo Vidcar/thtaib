@@ -16,6 +16,7 @@ import json
 from typing import Any
 
 from workbench_backend.agents.schemas import AgentRun, ModelRequestCapture
+from workbench_backend.agents.setup_schemas import InputSourceRow
 from workbench_backend.knowledge.redaction import redact_structured
 from workbench_backend.knowledge import redaction
 from workbench_backend.knowledge.schemas import ContextCaptureSettings
@@ -24,7 +25,7 @@ from workbench_backend.paths import WorkbenchPaths
 
 POLICY_DISCARD_GAP = "diagnostic content discarded by Knowledge capture policy"
 POLICY_EXPIRED_GAP = "diagnostic content expired by Knowledge capture retention"
-POLICY_VERSION = 1
+POLICY_VERSION = 3
 
 
 def capture_settings_for_paths(paths: WorkbenchPaths) -> ContextCaptureSettings:
@@ -74,6 +75,10 @@ def apply_capture_policy(
                 "http_payload": None,
                 "http_payloads": [],
                 "failure": None,
+                "tool_schemas": [],
+                "input_sources": [source.model_copy(update={"content": None, "path": None,
+                    "title": source.kind, "origin": "Captured source", "reason": "Diagnostic content unavailable.",
+                    "history_hint": None, "required_tools": [], "required_connections": []}) for source in capture.input_sources],
                 "capture_gaps": gaps,
                 "redaction_mode": settings.redaction_mode,
                 "retention_seconds": settings.retention_seconds,
@@ -101,6 +106,12 @@ def apply_capture_policy(
     http_payload, redacted_fields = _redact_value(capture.http_payload, redacted_fields)
     http_payloads, redacted_fields = _redact_value(capture.http_payloads, redacted_fields)
     failure, redacted_fields = _redact_value(capture.failure, redacted_fields)
+    if capture.input_sources or capture.tool_schemas:
+        inputs, redacted_fields = _redact_value({"sources": [source.model_dump(mode="json") for source in capture.input_sources],
+            "tools": capture.tool_schemas}, redacted_fields)
+        source_values, tool_schemas = inputs["sources"], inputs["tools"]
+    else:
+        source_values, tool_schemas = [], []
     unique = list(dict.fromkeys(redacted_fields))
     updated = capture.model_copy(
         update={
@@ -115,6 +126,8 @@ def apply_capture_policy(
             "http_payload": http_payload if isinstance(http_payload, dict) else None,
             "http_payloads": http_payloads if isinstance(http_payloads, list) else [],
             "failure": failure if isinstance(failure, dict) else None,
+            "input_sources": [InputSourceRow.model_validate(source) for source in source_values] if isinstance(source_values, list) else [],
+            "tool_schemas": tool_schemas if isinstance(tool_schemas, list) else [],
             "capture_gaps": gaps,
             "redaction_mode": settings.redaction_mode,
             "retention_seconds": settings.retention_seconds,

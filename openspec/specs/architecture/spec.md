@@ -97,6 +97,8 @@ For each newly accepted Chat input, the backend SHALL atomically resolve selecte
 
 Dispatch, queued recovery, helper execution and approval/question resumes SHALL consume the accepted snapshot and recheck live authorization, resource availability, model/history compatibility and shared admission. These checks SHALL NOT refresh frozen authored versions or settings from current records. A text-only queue revision SHALL retain its frozen setup; an explicit revision-checked setup edit SHALL resolve and freeze a new snapshot. Accepted input identity SHALL remain stable, with identical retries reusing the corresponding snapshot and conflicting edits or obsolete revisions rejected. Draft intent, accepted execution and observed model binding SHALL remain distinguishable. No renderer or duplicate runtime SHALL become an alternative resolution authority.
 
+Resolution SHALL also freeze explicit source exclusions, instruction replacement, reference loading and tool pins. Preview, input estimates, supplied tool schemas and actual request inspection SHALL share this resolved policy. Unknown authored references remain errors. Known selected optional capabilities MAY defer live setup until needed, remaining visibly unready and undisclosed until validated; this MUST NOT become another configuration, storage or execution authority. Accepted records predating progressive input policy SHALL retain their original supplied-context behaviour.
+
 #### Scenario: Run-start validation
 
 - **WHEN** a stored definition names settings, tools, knowledge and deployment references

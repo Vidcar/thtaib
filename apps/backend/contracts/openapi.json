@@ -55,6 +55,121 @@
         "title": "AgentEvent",
         "type": "object"
       },
+      "AgentInputPolicy": {
+        "additionalProperties": false,
+        "description": "Frozen disclosure choices; these never grant execution authority.",
+        "properties": {
+          "excluded_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Excluded Sources",
+            "type": "array"
+          },
+          "instruction_override": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instruction Override"
+          },
+          "pinned_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pinned Tools",
+            "type": "array"
+          },
+          "reference_loading": {
+            "additionalProperties": {
+              "enum": [
+                "off",
+                "when_needed",
+                "always"
+              ],
+              "type": "string"
+            },
+            "title": "Reference Loading",
+            "type": "object"
+          },
+          "tool_loading": {
+            "default": "when_needed",
+            "enum": [
+              "when_needed",
+              "always"
+            ],
+            "title": "Tool Loading",
+            "type": "string"
+          },
+          "version": {
+            "const": 1,
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "title": "AgentInputPolicy",
+        "type": "object"
+      },
+      "AgentInputPreview": {
+        "properties": {
+          "estimated_input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Input Tokens"
+          },
+          "note": {
+            "default": "Next-input estimate. Native model formatting and retained history are measured at dispatch.",
+            "title": "Note",
+            "type": "string"
+          },
+          "policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentInputPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "prepared": {
+            "default": false,
+            "title": "Prepared",
+            "type": "boolean"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/InputSourceRow"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "token_counting_method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Counting Method"
+          }
+        },
+        "title": "AgentInputPreview",
+        "type": "object"
+      },
       "AgentRun": {
         "properties": {
           "activity_phase": {
@@ -473,6 +588,23 @@
               }
             ],
             "title": "Input Message Id"
+          },
+          "input_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentInputPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "input_sources": {
+            "items": {
+              "$ref": "#/components/schemas/InputSourceRow"
+            },
+            "title": "Input Sources",
+            "type": "array"
           },
           "knowledge": {
             "default": "none",
@@ -1274,6 +1406,23 @@
             ],
             "title": "Input Message Id"
           },
+          "input_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentInputPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "input_sources": {
+            "items": {
+              "$ref": "#/components/schemas/InputSourceRow"
+            },
+            "title": "Input Sources",
+            "type": "array"
+          },
           "knowledge": {
             "default": "none",
             "enum": [
@@ -1994,6 +2143,16 @@
               }
             ],
             "title": "Input Message Id"
+          },
+          "input_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentInputPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "instructions": {
             "anyOf": [
@@ -3119,6 +3278,83 @@
         "title": "CapabilityProbeRequest",
         "type": "object"
       },
+      "CapabilitySetupRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "capability": {
+            "title": "Capability",
+            "type": "string"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "requires_new_input": {
+            "default": false,
+            "title": "Requires New Input",
+            "type": "boolean"
+          },
+          "target": {
+            "enum": [
+              "settings",
+              "browser",
+              "windows",
+              "agent",
+              "knowledge",
+              "project",
+              "context"
+            ],
+            "title": "Target",
+            "type": "string"
+          },
+          "target_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Id"
+          },
+          "tool_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tool Names",
+            "type": "array"
+          },
+          "version": {
+            "const": 1,
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "capability",
+          "id",
+          "code",
+          "message",
+          "action",
+          "target"
+        ],
+        "title": "CapabilitySetupRequest",
+        "type": "object"
+      },
       "ChatCancelRequest": {
         "properties": {
           "input_message_id": {
@@ -3422,6 +3658,16 @@
             "default": true,
             "title": "Inherit Deployment Settings",
             "type": "boolean"
+          },
+          "input_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentInputPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "memory_entry_ids": {
             "anyOf": [
@@ -3830,6 +4076,16 @@
             "default": true,
             "title": "Inherit Deployment Settings",
             "type": "boolean"
+          },
+          "input_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentInputPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "instructions": {
             "anyOf": [
@@ -4343,6 +4599,16 @@
             "default": true,
             "title": "Inherit Deployment Settings",
             "type": "boolean"
+          },
+          "input_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentInputPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "memory_entry_ids": {
             "anyOf": [
@@ -5269,6 +5535,16 @@
             "title": "Can Send",
             "type": "boolean"
           },
+          "input_preview": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentInputPreview"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "issues": {
             "items": {
               "$ref": "#/components/schemas/ChatReadinessIssue"
@@ -5359,8 +5635,52 @@
             ],
             "title": "Agent Setup Version Id"
           },
+          "attachment_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Attachment Ids",
+            "type": "array"
+          },
+          "document_asset_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Asset Ids"
+          },
+          "include_input_content": {
+            "default": false,
+            "title": "Include Input Content",
+            "type": "boolean"
+          },
           "overrides": {
             "$ref": "#/components/schemas/SetupConfiguration"
+          },
+          "project_file_refs": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Project File Refs",
+            "type": "array"
+          },
+          "shortcut_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Shortcut Ids",
+            "type": "array"
           }
         },
         "title": "ChatReadinessRequest",
@@ -5572,6 +5892,16 @@
               }
             ],
             "title": "Input Message Id"
+          },
+          "input_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentInputPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "instructions": {
             "anyOf": [
@@ -7242,6 +7572,23 @@
             "title": "Gaps",
             "type": "array"
           },
+          "input_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentInputPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "input_sources": {
+            "items": {
+              "$ref": "#/components/schemas/InputSourceRow"
+            },
+            "title": "Input Sources",
+            "type": "array"
+          },
           "instruction_layers": {
             "items": {
               "$ref": "#/components/schemas/InstructionLayer"
@@ -7495,6 +7842,20 @@
             "title": "Cleared Fields",
             "type": "array"
           },
+          "connection_snapshots": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ConnectionSnapshot"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Snapshots"
+          },
           "conversation_overrides": {
             "anyOf": [
               {
@@ -7573,6 +7934,20 @@
           },
           "configuration": {
             "$ref": "#/components/schemas/SetupConfiguration"
+          },
+          "connection_snapshots": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ConnectionSnapshot"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Snapshots"
           },
           "instruction_layers": {
             "items": {
@@ -8929,6 +9304,176 @@
         "title": "ImportStatus",
         "type": "string"
       },
+      "InputSourceRow": {
+        "properties": {
+          "available": {
+            "default": true,
+            "title": "Available",
+            "type": "boolean"
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content"
+          },
+          "editable": {
+            "default": false,
+            "title": "Editable",
+            "type": "boolean"
+          },
+          "entry_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Id"
+          },
+          "estimated_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Tokens"
+          },
+          "history_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "History Hint"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "mode": {
+            "default": "always",
+            "enum": [
+              "off",
+              "when_needed",
+              "always"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "observed": {
+            "default": false,
+            "title": "Observed",
+            "type": "boolean"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "required": {
+            "default": false,
+            "title": "Required",
+            "type": "boolean"
+          },
+          "required_connections": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Connections",
+            "type": "array"
+          },
+          "required_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Tools",
+            "type": "array"
+          },
+          "requires_project": {
+            "default": false,
+            "title": "Requires Project",
+            "type": "boolean"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "token_counting_method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Counting Method"
+          },
+          "tool_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Name"
+          },
+          "version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version Id"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "kind",
+          "origin",
+          "reason"
+        ],
+        "title": "InputSourceRow",
+        "type": "object"
+      },
       "InspectReport": {
         "properties": {
           "architecture": {
@@ -9449,6 +9994,18 @@
             "title": "Content",
             "type": "string"
           },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
           "display_name": {
             "anyOf": [
               {
@@ -9527,6 +10084,18 @@
             "title": "Content",
             "type": "string"
           },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
           "provenance": {
             "anyOf": [
               {
@@ -9571,6 +10140,17 @@
           "current_version_id": {
             "title": "Current Version Id",
             "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
           },
           "display_name": {
             "anyOf": [
@@ -9630,6 +10210,25 @@
           },
           "provenance": {
             "$ref": "#/components/schemas/KnowledgeProvenance"
+          },
+          "required_connections": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Connections",
+            "type": "array"
+          },
+          "required_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Tools",
+            "type": "array"
+          },
+          "requires_project": {
+            "default": false,
+            "title": "Requires Project",
+            "type": "boolean"
           },
           "resources": {
             "items": {
@@ -10015,6 +10614,28 @@
             "title": "Created At",
             "type": "string"
           },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
           "entry_id": {
             "title": "Entry Id",
             "type": "string"
@@ -10061,6 +10682,25 @@
           },
           "provenance": {
             "$ref": "#/components/schemas/KnowledgeProvenance"
+          },
+          "required_connections": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Connections",
+            "type": "array"
+          },
+          "required_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Tools",
+            "type": "array"
+          },
+          "requires_project": {
+            "default": false,
+            "title": "Requires Project",
+            "type": "boolean"
           },
           "resources": {
             "items": {
@@ -11257,6 +11897,13 @@
             "title": "Http Payloads",
             "type": "array"
           },
+          "input_sources": {
+            "items": {
+              "$ref": "#/components/schemas/InputSourceRow"
+            },
+            "title": "Input Sources",
+            "type": "array"
+          },
           "instructions": {
             "anyOf": [
               {
@@ -11401,6 +12048,14 @@
             "title": "Startup Mismatches",
             "type": "array"
           },
+          "tool_schemas": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Tool Schemas",
+            "type": "array"
+          },
           "transport_attempt_count": {
             "default": 0,
             "title": "Transport Attempt Count",
@@ -11533,7 +12188,8 @@
               "windows_host_shell",
               "tool_actions",
               "user_input",
-              "browser_control"
+              "browser_control",
+              "capability_setup"
             ],
             "title": "Environment",
             "type": "string"
@@ -11559,7 +12215,8 @@
             "default": "deepagents_interrupt_on",
             "enum": [
               "deepagents_interrupt_on",
-              "browser_control"
+              "browser_control",
+              "capability_setup"
             ],
             "title": "Kind",
             "type": "string"
@@ -11613,6 +12270,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/UserQuestion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "setup": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CapabilitySetupRequest"
               },
               {
                 "type": "null"
@@ -12376,6 +13043,13 @@
             },
             "title": "Effective Values",
             "type": "object"
+          },
+          "input_sources": {
+            "items": {
+              "$ref": "#/components/schemas/InputSourceRow"
+            },
+            "title": "Input Sources",
+            "type": "array"
           },
           "instruction_layers": {
             "items": {
@@ -14476,6 +15150,16 @@
             ],
             "title": "Inherit Deployment Settings"
           },
+          "input_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentInputPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "instructions": {
             "anyOf": [
               {
@@ -14741,6 +15425,11 @@
             "title": "Editing Layer",
             "type": "string"
           },
+          "include_input_content": {
+            "default": false,
+            "title": "Include Input Content",
+            "type": "boolean"
+          },
           "overrides": {
             "$ref": "#/components/schemas/SetupConfiguration"
           },
@@ -14792,6 +15481,25 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "required_connections": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Connections",
+            "type": "array"
+          },
+          "required_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Tools",
+            "type": "array"
+          },
+          "requires_project": {
+            "default": false,
+            "title": "Requires Project",
+            "type": "boolean"
           }
         },
         "required": [
@@ -14920,6 +15628,25 @@
               }
             ],
             "title": "Name"
+          },
+          "required_connections": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Connections",
+            "type": "array"
+          },
+          "required_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Tools",
+            "type": "array"
+          },
+          "requires_project": {
+            "default": false,
+            "title": "Requires Project",
+            "type": "boolean"
           },
           "valid": {
             "default": false,

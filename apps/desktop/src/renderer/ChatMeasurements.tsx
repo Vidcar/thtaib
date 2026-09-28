@@ -36,11 +36,12 @@ function subscribeLiveMeasurement(listener: () => void): () => void {
   return () => measurementListeners.delete(listener);
 }
 
-export function ChatMeasurements({ run, ownerKey, starting = false, stopping = false }: {
+export function ChatMeasurements({ run, ownerKey, starting = false, stopping = false, onInspect }: {
   run?: AgentRun | null;
   ownerKey?: string;
   starting?: boolean;
   stopping?: boolean;
+  onInspect?: () => void;
 }) {
   const published = useSyncExternalStore(subscribeLiveMeasurement, () => liveMeasurement, () => liveMeasurement);
   const measurement = ownerKey && published?.ownerKey === ownerKey && published.runId === run?.id ? published : null;
@@ -74,7 +75,7 @@ export function ChatMeasurements({ run, ownerKey, starting = false, stopping = f
 
   return <span className="chat-measurements" data-estimated-input={context?.estimated_input_tokens ?? ""} data-tokens-per-second={speed ?? ""}>
     {announcement ? <span className="sr-only" role="status">{announcement}</span> : null}
-    <HoverHelp title="Context and speed" placement="above" interactive={history.length > 0} triggerClassName="chat-usage-trigger" bubbleClassName="chat-usage-bubble"
+    <HoverHelp title="Context and speed" placement="above" interactive={history.length > 0 || Boolean(onInspect)} triggerClassName="chat-usage-trigger" bubbleClassName="chat-usage-bubble"
       triggerContent={<><Icon name="activity" size={16} /><span>{stage ? `${stage}${live && speed != null ? ` · ${speed.toFixed(1)} tok/s` : ""}` : speed != null ? `${speed.toFixed(1)} tok/s` : "Context"}</span>{live ? <span className="usage-live-dot" aria-hidden="true" /> : null}</>}>
       <div className="usage-heading"><strong>Context</strong><span className={live ? "usage-state is-live" : "usage-state"}>{status}</span></div>
       <div className="usage-context-value"><span>{used != null ? `${used.toLocaleString()}${capacity ? ` / ${capacity.toLocaleString()}` : " tokens"}` : "Not reported"}</span>{percent != null ? <span>{percent < 1 && percent > 0 ? "<1" : Math.round(percent)}%</span> : null}</div>
@@ -110,6 +111,7 @@ export function ChatMeasurements({ run, ownerKey, starting = false, stopping = f
           </li>)}
         </ol>
       </details> : null}
+      {onInspect ? <button type="button" onClick={onInspect}>What the agent sees</button> : null}
     </HoverHelp>
   </span>;
 }

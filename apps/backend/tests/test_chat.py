@@ -501,9 +501,9 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertFalse(started["shell_tools_available"])
         self.assertEqual(started["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory"])
         run = started["current_run"]
-        self.assertEqual(run["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory", "read_file"])
+        self.assertEqual(run["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory", "find_tools", "read_file"])
         self.assertEqual(run["framework_read_paths"], ["/large_tool_results/", "/conversation_history/"])
-        self.assertEqual(run["presented_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory"])
+        self.assertEqual(run["presented_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory", "find_tools"])
         self.assertIsNone(run["project_path"])
         body = wait_for_chat(self.client, conversation["id"])
         self.assertEqual(body["current_run"]["status"], "completed", body["current_run"].get("error"))
@@ -526,7 +526,7 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertEqual(created.status_code, 200, created.text)
         response = self.client.post(
             f"/v1/chat/conversations/{created.json()['id']}/start",
-            json={"task": "Write a file.", "presented_tools": ["write_file"]},
+            json={"task": "Write a file.", "presented_tools": ["write_file"], "input_policy": {"pinned_tools": ["write_file"]}},
         )
         self.assertEqual(response.status_code, 400, response.text)
         self.assertEqual(response.json()["code"], "filesystem_requires_project")

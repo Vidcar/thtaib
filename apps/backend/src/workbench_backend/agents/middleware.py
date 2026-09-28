@@ -7,6 +7,7 @@ from workbench_backend.errors import HarnessError
 import asyncio
 import base64
 import binascii
+import json
 import re
 import sys
 from collections.abc import Callable
@@ -391,6 +392,14 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
     def _saved_screenshot(self, message: ToolMessage) -> tuple[str, str] | None:
         path = message.additional_kwargs.get("capture_path")
         mime_type = message.additional_kwargs.get("capture_media_type")
+        if not isinstance(path, str) and message.name == "desktop_screenshot" and isinstance(message.content, str):
+            try:
+                result = json.loads(message.content)
+            except (ValueError, TypeError):
+                result = None
+            if isinstance(result, dict) and isinstance(result.get("path"), str):
+                path = result["path"]
+                mime_type = {".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp"}.get(Path(path).suffix.lower())
         if not isinstance(path, str):
             match = _SAVED_SCREENSHOT.search(message.content if isinstance(message.content, str) else "")
             if match is None:
@@ -568,6 +577,14 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             ):
                 return ToolMessage(content="Filesystem tools require a bound project folder or selected knowledge. The unselected action was not executed.", name=name, tool_call_id=call_id, status="error")
             return ToolMessage(content="This tool was not selected for this run. The action was not executed.", name=name, tool_call_id=call_id, status="error")
+        from workbench_backend.agents.tool_disclosure import deferred_tools
+        if deferred_tools(self.run) and not self.run.project_path and name in {*FILESYSTEM_TOOL_NAMES, *SHELL_TOOL_NAMES}:
+            # The inner native disclosure wrapper pauses the selected action
+            # for project setup; it cannot execute without a new bound input.
+            if not (_allow_projectless_knowledge_tool(name, args, self.run)
+                    or _allow_projectless_capture_tool(name, args, self.run)
+                    or name == "read_file" and self.run.framework_read_paths):
+                return None
         if name in FILESYSTEM_TOOL_NAMES and not self.run.project_path:
             if (_allow_projectless_knowledge_tool(name, args, self.run)
                 or _allow_projectless_capture_tool(name, args, self.run)):
@@ -648,6 +665,9 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
 
     def _with_outline(self, request):
         self.run.activity_phase = "thinking"
+        policy = getattr(self.run, "input_policy", None)
+        if policy is not None and "project_outline" in policy.excluded_sources:
+            return request
         system = request.system_message
         content = system.content if system else ""
         if not isinstance(content, str):
@@ -709,11 +729,41 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             if self._settings_provider is not None
             else ContextCaptureSettings()
         )
+        from langchain_core.utils.function_calling import convert_to_openai_tool
+        presented_names = {name for name in _tool_names(request.tools)
+            if name in self.run.presented_tools or (name == "read_file" and self.run.framework_read_paths)}
+        tool_schemas = [convert_to_openai_tool(tool) for tool in request.tools if tool_name(tool) in presented_names]
+        schema_text = {schema["function"]["name"]: json.dumps(schema, ensure_ascii=False, sort_keys=True)
+            for schema in tool_schemas}
+        from workbench_backend.knowledge.costs import content_token_estimate, TOKEN_ESTIMATE_METHOD
+        from workbench_backend.agents.input_sources import WORKBENCH_CORE_INSTRUCTIONS, instruction_source_id
+        instructions = _captured_instructions(request, http_payload)
+        known_text = {"workbench_core": WORKBENCH_CORE_INSTRUCTIONS}
+        if setup is not None:
+            known_text.update({instruction_source_id(layer): layer.content for layer in setup.instruction_layers})
+            model_text = setup.bags.agent.applied.get("system_prompt")
+            if isinstance(model_text, str):
+                known_text["model_instructions"] = model_text
+        policy = self.run.input_policy
+        if policy is not None and policy.instruction_override is not None:
+            known_text["agent_instructions" if self.run.agent_setup_version_id else "conversation_instructions"] = policy.instruction_override
+        source_rows = []
+        for row in self.run.input_sources:
+            if row.tool_name in schema_text:
+                content = schema_text[row.tool_name]
+                source_rows.append(row.model_copy(update={"mode": "always", "observed": True,
+                    "available": True, "reason": "Tool definition supplied in this request.",
+                    "content": content, "estimated_tokens": content_token_estimate(content),
+                    "token_counting_method": TOKEN_ESTIMATE_METHOD}))
+            elif row.mode != "off" and known_text.get(row.id) and known_text[row.id] in (instructions or ""):
+                source_rows.append(row.model_copy(update={"content": known_text[row.id], "observed": True}))
+            else:
+                source_rows.append(row.model_copy(deep=True))
         captured = apply_capture_policy(
             ModelRequestCapture(
                 purpose=current_request_purpose(),
                 at=utc_now(),
-                instructions=_captured_instructions(request, http_payload),
+                instructions=instructions,
                 messages=[_message_dict(message) for message in request.messages],
                 available_tools=list(self.run.enabled_tools),
                 presented_tools=[
@@ -721,6 +771,8 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                     for name in (_tool_names(request.tools))
                     if name in self.run.presented_tools or (name == "read_file" and self.run.framework_read_paths)
                 ],
+                input_sources=source_rows,
+                tool_schemas=tool_schemas,
                 generation_settings=generation,
                 memory_versions=list(self.run.memory_version_refs),
                 skill_versions=list(self.run.skill_version_refs),

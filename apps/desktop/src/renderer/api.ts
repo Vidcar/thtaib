@@ -236,7 +236,7 @@ export const api = {
   reload: (id: string) => request<Deployment>(`/v1/deployments/${id}/reload`, { method: "POST" }),
   reconfigure: (id: string, payload: { startup: Record<string, unknown>; replace_startup?: boolean; model_configuration_id?: string | null; expected_configuration_revision?: number; expected_updated_at?: string; conversation_id?: string | null }) => request<Deployment>(`/v1/deployments/${id}/reconfigure`, { method: "POST", body: JSON.stringify(payload) }),
   modelConfigurations: (bundleId: string) => request<RunProfile[]>(`/v1/bundles/${bundleId}/configurations`),
-  saveModelConfiguration: (bundleId: string, payload: { display_name: string; startup: object; per_request: object; recipe_origin?: ResponseRecipeOrigin | null; configuration_id?: string; expected_revision?: number; make_default?: boolean }) => request<RunProfile>(`/v1/bundles/${bundleId}/configurations`, { method: "POST", body: JSON.stringify(payload) }),
+  saveModelConfiguration: (bundleId: string, payload: { display_name: string; startup: object; per_request: object; agent?: object; recipe_origin?: ResponseRecipeOrigin | null; configuration_id?: string; expected_revision?: number; make_default?: boolean }) => request<RunProfile>(`/v1/bundles/${bundleId}/configurations`, { method: "POST", body: JSON.stringify(payload) }),
   setDefaultConfiguration: (bundleId: string, configuration_id: string) => request<ModelBundle>(`/v1/bundles/${bundleId}/default-configuration`, { method: "PUT", body: JSON.stringify({ configuration_id }) }),
   smoke: (id: string) => request<{ ok: boolean; detail: string | null }>(`/v1/deployments/${id}/smoke`, { method: "POST" }),
   deploymentLogs: (id: string) => request<{ text: string; available: boolean }>(`/v1/deployments/${id}/logs`),
@@ -301,6 +301,7 @@ export const api = {
       }),
     }),
   agentRun: (id: string) => request<AgentRunOperational>(`/v1/agent-runs/${id}?view=operational`),
+  agentRunInputs: (id: string) => request<AgentRun>(`/v1/agent-runs/${id}?view=diagnostic`),
   cancelAgentRun: (id: string) => request<AgentRun>(`/v1/agent-runs/${id}/cancel`, { method: "POST" }),
   decideAgentRunInterrupt: (id: string, type: "approve" | "reject") =>
     request<AgentRun>(`/v1/agent-runs/${id}/interrupt-decision`, {

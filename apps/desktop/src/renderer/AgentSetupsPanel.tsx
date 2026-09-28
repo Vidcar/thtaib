@@ -10,6 +10,8 @@ import { HoverHelp } from "./HoverHelp";
 import { Icon } from "./Icon";
 import { Notice } from "./Notice";
 import { LifecycleAction } from "./LifecycleAction";
+import { AgentInputs } from "./AgentInputs";
+import type { WorkbenchTab } from "./types";
 import "./WorkspacePanels.css";
 import "./AgentSetupsPanel.css";
 
@@ -47,7 +49,7 @@ function AgentReview({ draft, catalogue, agents }: { draft: SetupDraft; catalogu
   </dl>;
 }
 
-export function AgentSetupsPanel({ openAgentId, openRequest, active = true }: { onUse?: (setup: AgentSetup) => void; openAgentId?: string; openRequest?: number; active?: boolean }) {
+export function AgentSetupsPanel({ openAgentId, openRequest, active = true, onNavigate }: { onUse?: (setup: AgentSetup) => void; openAgentId?: string; openRequest?: number; active?: boolean; onNavigate?: (tab: WorkbenchTab, id?: string) => void }) {
   const [records, setRecords] = useState<AgentSetup[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [creating, setCreating] = useState(false);
@@ -63,6 +65,7 @@ export function AgentSetupsPanel({ openAgentId, openRequest, active = true }: { 
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [showInputs, setShowInputs] = useState(false);
   const actionPending = useRef(false);
   const openedRequest = useRef("");
   const initialized = useRef(false);
@@ -143,7 +146,7 @@ export function AgentSetupsPanel({ openAgentId, openRequest, active = true }: { 
     <CatalogueWorkspace title="Agents" search={query} onSearch={setQuery} items={visibleRecords.map(record => ({ id: record.id, name: record.name, icon: "agents", detail: <>{record.role || "General assistant"}<br />{setupModelLabel(record.configuration, catalogue)}</>, status: [record.missing_dependencies?.length ? "Needs attention" : "", drafts[record.id] ? "Unsaved changes" : ""].filter(Boolean).join(" · "), selectorLabel: `${record.name} · ${setupModelLabel(record.configuration, catalogue)}` }))} selectedId={creating ? "" : selectedId} onSelect={id => { if (!busy) { setSelectedId(id); setCreating(false); } }} emptyLabel={query ? "No matching agents" : "No agents yet"} loading={loading}>
       {creating || selected ? <>
         <form className="agent-editor workspace-editor" onSubmit={event => { event.preventDefault(); if (creating && step < 2) { if (draft.name.trim()) setStep(current => current + 1); } else void save(); }}>
-          <div className="section-heading"><h3>{creating ? "New agent" : selected!.name}</h3></div>
+          <div className="section-heading"><h3>{creating ? "New agent" : selected!.name}</h3><button type="button" disabled={busy} onClick={() => setShowInputs(true)}>What the agent sees</button></div>
           {selected?.missing_dependencies?.length && !creating ? <Notice tone="warn">This setup needs attention.<ul>{selected.missing_dependencies.map((issue, index) => <li key={`${issue.kind}-${issue.id}-${index}`}>{issue.kind.includes("model") || issue.kind.includes("deployment") || issue.kind.includes("bundle") ? "Assigned model" : issue.kind === "connection" ? "Connection" : issue.kind === "tool" ? "Tool" : "Knowledge selection"}: {issue.reason}</li>)}</ul><div className="actions"><button type="button" onClick={() => setTab(selected.missing_dependencies?.some(issue => /memory|skill|instruction/.test(issue.kind)) ? "knowledge" : "model")}>Review selections</button></div></Notice> : null}
           {selected?.helper_missing_dependencies?.length && !creating ? <Notice tone="warn">Needs attention when used as a helper.<ul>{selected.helper_missing_dependencies.map((issue, index) => <li key={`${issue.kind}-${issue.id}-${index}`}>{issue.reason}</li>)}</ul></Notice> : null}
           {creating ? <nav className="model-tabs agent-steps" aria-label="Agent creation steps">{["Role", "Setup", "Review"].map((label, index) => <span key={label} aria-current={step === index ? "step" : undefined}>{index + 1}. {label}</span>)}</nav>
@@ -159,5 +162,6 @@ export function AgentSetupsPanel({ openAgentId, openRequest, active = true }: { 
         </> : null}
       </> : <EmptyState title="Choose an agent">Select a saved setup or create one.</EmptyState>}
     </CatalogueWorkspace>
+    {showInputs ? <AgentInputs scope="agent" configuration={draft.configuration} disabled={busy} onChange={configuration => updateDraft({ configuration })} onClose={() => setShowInputs(false)} onEditSource={(owner, recordId) => { setShowInputs(false); onNavigate?.(owner, recordId ?? (owner === "models" ? draft.configuration.model_configuration_id ?? undefined : selected?.id)); }} /> : null}
   </section>;
 }

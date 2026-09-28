@@ -193,7 +193,7 @@ def resolve_presented_tools(
         if name in seen:
             continue
         seen.add(name)
-        if name == "search_knowledge":
+        if name in {"search_knowledge", "find_tools", "read_reference", "task"}:
             # Known dynamic tool: harness presents it only for this turn's
             # authorized corpus. An empty selection leaves it idle, as with
             # read_attachment, instead of breaking a saved tool preference.

@@ -130,7 +130,8 @@ class BrowserWorkerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.published[-1][2]["target"], "browser page (URL unavailable)")
             self.service.screenshot_reader = lambda _run: False
             denied = await by_name["browser_take_screenshot"].coroutine()
-            self.assertIn(CANNOT_READ_IMAGE, denied)
+            self.assertNotIn(CANNOT_READ_IMAGE, denied,
+                "The model boundary checks image support after deferred setup; capture must not retain an early failure verdict")
             self.assertNotIn("probe", denied)
             self.service.screenshot_reader = lambda _run: True
             allowed = await by_name["browser_take_screenshot"].coroutine()

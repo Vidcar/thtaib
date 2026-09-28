@@ -14,7 +14,7 @@ from workbench_backend.inference.schemas import (LocalImportRequest, ManagedDepl
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 from workbench_backend.state.migrate import open_application_store
-from support import write_tiny_gguf
+from tests.support import write_tiny_gguf
 
 
 class ModelConfigurationTests(unittest.TestCase):
@@ -237,21 +237,38 @@ class ModelConfigurationTests(unittest.TestCase):
         self.assertEqual(self.manager.configuration_deployment(variant.id).id, first.id)
         self.assertEqual(self.manager.get_deployment(first.id).profile_id, original.id)
 
-    def test_configuration_names_are_unique_and_agent_instructions_stay_in_agents(self):
+    def test_configuration_names_are_unique_and_optional_model_instructions_are_explicit(self):
         from workbench_backend.inference.schemas import ProfileWriteRequest
         legacy = self.manager.create_profile(ProfileWriteRequest(display_name="Legacy", bundle_id=self.bundle_id,
             agent={"system_prompt": "Retain the authored instructions."}))
         saved = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
             configuration_id=legacy.id, display_name="Legacy", per_request={"temperature": 0.5}))
-        self.assertEqual(saved.bags.agent.requested, {})
+        self.assertEqual(saved.bags.agent.applied["system_prompt"], "Retain the authored instructions.")
         for name, code in ((" ", "configuration_name_required"), (" legacy ", "configuration_name_conflict")):
             with self.subTest(name=name), self.assertRaises(ManagerError) as error:
                 self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(display_name=name))
             self.assertEqual(error.exception.code, code)
         with self.assertRaises(ManagerError) as error:
             self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
-                display_name="New", agent={"system_prompt": "Wrong owner"}))
+                display_name="New", agent={"tools_enabled": True}))
         self.assertEqual(error.exception.code, "configuration_agent_instructions")
+
+    def test_model_instruction_edit_reset_and_omission_preserve_other_saved_values(self):
+        saved = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+            display_name="Authored guidance", startup={"ctx_size": 8192},
+            per_request={"temperature": 0.4}, agent={"system_prompt": "Answer in plain language."}))
+        self.assertEqual(saved.bags.agent.applied["system_prompt"], "Answer in plain language.")
+        updated = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+            configuration_id=saved.id, expected_revision=saved.revision, display_name=saved.display_name,
+            startup=saved.bags.startup.requested, per_request=saved.bags.per_request.requested,
+            agent={"system_prompt": "Use short examples."}))
+        self.assertEqual(updated.bags.agent.applied["system_prompt"], "Use short examples.")
+        reset = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+            configuration_id=saved.id, expected_revision=updated.revision, display_name=saved.display_name,
+            startup=updated.bags.startup.requested, per_request=updated.bags.per_request.requested, agent={}))
+        self.assertEqual(reset.bags.agent.requested, {})
+        self.assertEqual(reset.bags.startup.requested["ctx_size"], 8192)
+        self.assertEqual(reset.bags.per_request.requested["temperature"], 0.4)
 
     def test_fixed_port_collision_is_rejected_before_process_creation(self):
         with socket.socket() as occupied:

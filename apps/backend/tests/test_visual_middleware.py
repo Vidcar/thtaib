@@ -228,7 +228,7 @@ class VisualMiddlewareTests(unittest.TestCase):
             if isinstance(message, HumanMessage)], ["Inspect /view.png"],
             "Synthetic tool-image context must not become a retained user turn")
 
-    def _exercise_late_screenshot_probe(self, *, asynchronous: bool, status: str) -> None:
+    def _exercise_late_screenshot_probe(self, *, asynchronous: bool, status: str, desktop: bool = False) -> None:
         # A green/yellow capture is distinct from both red/blue probe fixtures.
         def chunk(kind: bytes, content: bytes) -> bytes:
             return (struct.pack(">I", len(content)) + kind + content
@@ -239,8 +239,9 @@ class VisualMiddlewareTests(unittest.TestCase):
             + chunk(b"IEND", b""))
         encoded = base64.b64encode(image).decode()
         path = "/captures/asset_" + "a" * 32 + ".png"
-        page_text = ("Screenshot captured from https://news.example.\n"
-            '- heading "City news"\n' + f"Saved screenshot: {path}")
+        page_text = (json.dumps({"path": path, "width": 2, "height": 1}) if desktop else
+            "Screenshot captured from https://news.example.\n" + '- heading "City news"\n' + f"Saved screenshot: {path}")
+        tool_name = "desktop_screenshot" if desktop else "browser_take_screenshot"
         now = utc_now()
         deployment = Deployment(id="vision-model", display_name="Vision fixture",
             scope="connected", status="running", endpoint="http://127.0.0.1:9/v1",
@@ -250,7 +251,7 @@ class VisualMiddlewareTests(unittest.TestCase):
             created_at=now, updated_at=now)
         selected = resolve_bags(per_request={"temperature": 0.2, "max_tokens": 37})
         run = _run()
-        run.presented_tools = run.enabled_tools = ["browser_take_screenshot"]
+        run.presented_tools = run.enabled_tools = [tool_name]
         run.effective_setup = EffectiveSetup(selected_deployment_id=deployment.id,
             loaded_deployment_id=deployment.id, bags=selected, system_prompt="Inspect the page.")
         setup_before = run.effective_setup.model_dump(mode="json")
@@ -277,11 +278,11 @@ class VisualMiddlewareTests(unittest.TestCase):
         initial_profile = {"image_inputs": False, "image_tool_message": False,
             "max_input_tokens": 17777, "max_output_tokens": 37, "tool_calling": True}
         model = InspectModel([
-            AIMessage(content="", tool_calls=[{"name": "browser_take_screenshot",
+            AIMessage(content="", tool_calls=[{"name": tool_name,
                 "args": {}, "id": "fresh-shot"}]), AIMessage(content="Page inspected."),
         ], profile=initial_profile.copy())
 
-        @tool
+        @tool(tool_name)
         def browser_take_screenshot() -> str:
             """Capture the current browser page and return its retained path."""
             return page_text
@@ -345,6 +346,9 @@ class VisualMiddlewareTests(unittest.TestCase):
 
     def test_fresh_screenshot_probe_refreshes_same_async_graph_request(self) -> None:
         self._exercise_late_screenshot_probe(asynchronous=True, status="passed")
+
+    def test_deferred_windows_capture_json_runs_native_image_probe_and_hydrates(self) -> None:
+        self._exercise_late_screenshot_probe(asynchronous=True, status="passed", desktop=True)
 
     def test_failed_or_inconclusive_probe_keeps_page_text_through_native_graph(self) -> None:
         for asynchronous in (False, True):

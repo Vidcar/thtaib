@@ -159,6 +159,28 @@ try {
     button(renderer, "Send decisions").props.onClick();
   });
   assert.deepEqual(responses.at(-1), { decisions: [{ type: "reject", scope: "once", message: "The user cancelled this question. Do not repeat it unless asked." }] }, "cancel question should reject its action explicitly");
+
+  const setup = { version: 1, capability: "browser", id: "browser-install", tool_names: ["browser_navigate"], code: "browser_worker_missing", message: "Install the Browser worker in Settings.", action: "Set up Browser", target: "settings", target_id: null, requires_new_input: false };
+  const setupPending = { ...pending, kind: "capability_setup", environment: "capability_setup", identity: "saved-setup-checkpoint", action_requests: [{ name: "capability_setup", args: {}, allowed_decisions: ["respond", "reject"], setup }] };
+  const setupRun = { id: "setup-run", status: "running", pending_interrupt: setupPending };
+  const setupVisible = visibleApprovalInterrupt(stream(setupRun, setupRun.id, [{ id: "native-setup-id", namespace: ["helper", "tools"], value: setupPending }]), setupRun);
+  assert.equal(setupVisible.id, "native-setup-id");
+  assert.deepEqual(setupVisible.namespace, ["helper", "tools"], "setup cards preserve their native saved invocation target");
+  assert.equal(visibleApprovalInterrupt(stream({ ...setupRun, status: "cancelled", pending_interrupt: null }, setupRun.id, [{ id: "native-setup-id", value: setupPending }]), { ...setupRun, status: "cancelled", pending_interrupt: null }), null, "a cancelled setup cannot render a stale Continue action");
+  const configured = [];
+  await act(async () => renderer.update(React.createElement(InterruptApproval, { pending: setupPending, onRespond: payload => responses.push(payload), onConfigureSetup: request => configured.push(request) })));
+  assert.equal(textOf(renderer.root).includes("Always allow"), false, "capability setup does not duplicate permissions");
+  const beforeSetup = responses.length;
+  await act(async () => button(renderer, "Configure").props.onClick());
+  assert.deepEqual(configured, [setup]); assert.equal(responses.length, beforeSetup, "Configure navigates without resuming saved work");
+  await act(async () => button(renderer, "Continue saved work").props.onClick());
+  assert.deepEqual(responses.at(-1), { decisions: [{ type: "respond", message: "continue", scope: "once" }] });
+  const changedSetup = { ...setupPending, identity: "changed-capability", action_requests: [{ ...setupPending.action_requests[0], setup: { ...setup, requires_new_input: true } }] };
+  await act(async () => renderer.update(React.createElement(InterruptApproval, { pending: changedSetup, onRespond: payload => responses.push(payload), onConfigureSetup: request => configured.push(request) })));
+  assert.equal(button(renderer, "Continue saved work").props.disabled, true, "changed frozen choices require a newly accepted message");
+  await act(async () => button(renderer, "Skip this step").props.onClick());
+  assert.equal(responses.at(-1).decisions[0].type, "reject");
+  await act(async () => renderer.unmount());
 } finally {
   await vite.close();
 }

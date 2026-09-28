@@ -1,5 +1,6 @@
 import { isRunLifecycleLive, type RunLifecycleStatus } from "./sharedContracts";
 import type { MatchedPermissionGrant } from "./packet03Api";
+import type { AgentInputSource, CapabilitySetupRequest } from "./agentInputPolicy";
 import type {
   SchemaAgentRun,
   SchemaChatDraft,
@@ -383,6 +384,8 @@ export interface AgentRun {
   presented_tools: string[];
   events: Array<{ at: string; kind: string; detail: Record<string, unknown> }>;
   model_requests?: Array<{
+    input_sources?: AgentInputSource[];
+    tool_schemas?: Array<Record<string, unknown>>;
     at: string;
     request_prepared?: boolean;
     transport_attempted?: boolean;
@@ -411,6 +414,7 @@ export interface AgentRun {
     startup_mismatches?: Array<{ key: string; selected: unknown; loaded: unknown }>;
   }>;
   effective_setup?: {
+    input_sources?: AgentInputSource[];
     selected_profile_id: string | null;
     selected_deployment_id: string;
     selected_embedding_deployment_id?: string | null;
@@ -494,6 +498,7 @@ export interface PendingInterruptAction {
   description: string | null;
   allowed_decisions: string[];
   question?: UserQuestion | null;
+  setup?: CapabilitySetupRequest | null;
 }
 
 export interface UserQuestion {
@@ -506,8 +511,8 @@ export interface PendingInterrupt {
   interrupt_id?: string | null;
   namespace?: string[];
   identity?: string | null;
-  kind: "deepagents_interrupt_on" | "browser_control";
-  environment: "windows_host_shell" | "tool_actions" | "user_input" | "browser_control";
+  kind: "deepagents_interrupt_on" | "browser_control" | "capability_setup";
+  environment: "windows_host_shell" | "tool_actions" | "user_input" | "browser_control" | "capability_setup";
   isolation: "none";
   note: string;
   action_requests: PendingInterruptAction[];
@@ -681,6 +686,7 @@ export interface KnowledgeProvenance {
 }
 
 export interface KnowledgeEntry {
+  description?: string | null;
   estimated_content_tokens?: number;
   token_counting_method?: string;
   resources?: Array<{ path: string; sha256: string; size_bytes: number }>;
@@ -704,6 +710,7 @@ export interface KnowledgeEntry {
 }
 
 export interface KnowledgeVersion {
+  description?: string | null;
   kind?: KnowledgeKind;
   estimated_content_tokens?: number;
   token_counting_method?: string;

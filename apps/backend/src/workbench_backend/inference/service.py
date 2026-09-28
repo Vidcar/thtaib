@@ -463,8 +463,16 @@ class ModelManager:
             if any(profile.bundle_id == bundle_id and profile.id != (existing.id if existing else None)
                     and profile.display_name.strip().casefold() == name.casefold() for profile in self.store.list_profiles()):
                 raise ManagerError("This model already has a configuration with that name. Choose a different name.", code="configuration_name_conflict", status_code=409)
-            if request.agent:
-                raise ManagerError("Put instructions in an Agent setup. Model configurations save loading and response settings.", code="configuration_agent_instructions", status_code=400)
+            # Optional model-authored guidance is a visible input source. An
+            # ordinary response/settings save must not erase it implicitly.
+            agent = request.agent if "agent" in request.model_fields_set else (
+                dict(existing.bags.agent.requested) if existing is not None else {})
+            if set(agent) - {"system_prompt"}:
+                raise ManagerError("Model instructions support only system_prompt; choose tools and access in an Agent setup.",
+                    code="configuration_agent_instructions", status_code=400)
+            if "system_prompt" in agent and not isinstance(agent["system_prompt"], str):
+                raise ManagerError("Model instructions must be text. Use an empty instruction bag to reset them.",
+                    code="configuration_agent_instructions", status_code=400)
             recipe_origin = existing.recipe_origin if existing else None
             if "recipe_origin" in request.model_fields_set:
                 if request.recipe_origin is not None:
@@ -473,7 +481,7 @@ class ModelManager:
                 else:
                     recipe_origin = None
             body = ProfileWriteRequest(**{**request.model_dump(exclude={"configuration_id", "make_default", "recipe_origin"}),
-                "display_name": name, "bundle_id": bundle_id, "agent": {}})
+                "display_name": name, "bundle_id": bundle_id, "agent": agent})
             if request.configuration_id:
                 profile = self.update_profile(existing.id, body)
             else:

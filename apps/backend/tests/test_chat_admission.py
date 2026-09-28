@@ -36,7 +36,8 @@ class ChatAdmissionTests(unittest.TestCase):
             "scope": "user", "kind": "memory", "content": "Original memory"})
         self.agent = self.post("/v1/agent-setups", {"name": "Selected agent", "configuration": {
             "instructions": "Original instructions", "presented_tools": [],
-            "memory_entry_ids": [self.memory["id"]]}})
+            "memory_entry_ids": [self.memory["id"]], "input_policy": {
+                "reference_loading": {self.memory["id"]: "always"}}}})
         self.conversation = self.post("/v1/chat/conversations", {
             "deployment_id": self.deployment.id, "agent_setup_id": self.agent["id"]})
 
@@ -65,9 +66,183 @@ class ChatAdmissionTests(unittest.TestCase):
         response = self.client.patch(f'/v1/agent-setups/{self.agent["id"]}', json={
             "name": "Saved agent", "base_version": self.agent["current_version_id"],
             "configuration": {"instructions": "Saved instructions", "presented_tools": [],
-                "memory_entry_ids": [self.memory["id"]]}})
+                "memory_entry_ids": [self.memory["id"]], "input_policy": {
+                    "reference_loading": {self.memory["id"]: "always"}}}})
         self.assertEqual(response.status_code, 200, response.text)
         self.agent = response.json()
+
+    def test_chat_policy_reset_clears_local_choices_without_a_setup_layer(self):
+        created = self.post("/v1/chat/conversations", {
+            "deployment_id": self.deployment.id,
+            "input_policy": {"pinned_tools": ["echo"], "instruction_override": "Local behaviour"}})
+        conversation = self.chat.store.get(created["id"])
+        self.chat._apply_start_configuration(conversation,
+            ChatStartRequest(task="Reset", input_policy=None), prepare_model=False, read_only=True)
+        self.assertIsNone(conversation.setup_overrides.input_policy)
+        self.assertEqual(conversation.input_policy.pinned_tools, [])
+        self.assertIsNone(conversation.input_policy.instruction_override)
+
+    def test_instruction_reset_restores_saved_behaviour_in_readiness_and_admission_without_clearing_other_choices(self):
+        from workbench_backend.agents.effective_setup import compose_system_prompt
+        agent = self.post("/v1/agent-setups", {"name": "Saved behaviour", "configuration": {
+            "instructions": "Agent original behaviour", "presented_tools": ["echo", "time_now"],
+            "input_policy": {"instruction_override": "Saved agent replacement", "pinned_tools": ["time_now"]}}})
+        for selected_agent, expected in ((None, "Saved Chat behaviour"), (agent["id"], "Saved agent replacement")):
+            with self.subTest(agent=selected_agent):
+                policy = {"pinned_tools": ["echo"], "instruction_override": "Temporary local behaviour",
+                    "reference_loading": {self.memory["id"]: "always"}, "excluded_sources": ["project_outline"]}
+                created = self.post("/v1/chat/conversations", {"deployment_id": self.deployment.id,
+                    "agent_setup_id": selected_agent, "instructions": "Saved Chat behaviour",
+                    "memory_entry_ids": [self.memory["id"]], "input_policy": policy})
+                response = self.client.post(f'/v1/chat/conversations/{created["id"]}/readiness', json={
+                    "overrides": {"input_policy": {"instruction_override": None}}, "include_input_content": True})
+                self.assertEqual(response.status_code, 200, response.text)
+                readiness = response.json()
+                self.assertTrue(readiness["can_send"], readiness["issues"])
+                resolved = readiness["selection"]["configuration"]["input_policy"]
+                self.assertEqual(resolved["instruction_override"], None if selected_agent is None else expected)
+                self.assertEqual(resolved["pinned_tools"], ["echo"])
+                self.assertEqual(resolved["reference_loading"], policy["reference_loading"])
+                self.assertEqual(resolved["excluded_sources"], ["project_outline"])
+                source_id = "agent_instructions" if selected_agent else "conversation_instructions"
+                shown = next(source for source in readiness["input_preview"]["sources"] if source["id"] == source_id)
+                self.assertEqual(shown["content"], expected)
+
+                conversation = self.chat.store.get(created["id"])
+                frozen = self.chat._admit_snapshot(conversation, self.request(
+                    f'instruction-reset-{selected_agent or "plain"}', input_policy={"instruction_override": None}))
+                self.assertEqual(frozen.selection.configuration.input_policy.model_dump(), resolved)
+                authored = frozen.conversation_overrides.input_policy
+                self.assertIsNone(authored.instruction_override)
+                self.assertEqual(authored.pinned_tools, ["echo"])
+                self.assertEqual(authored.reference_loading, policy["reference_loading"])
+                self.assertEqual(authored.excluded_sources, ["project_outline"])
+                prompt = compose_system_prompt(input_policy=frozen.selection.configuration.input_policy,
+                    selected_agent=bool(selected_agent), default_system_prompt="legacy", profile_system_prompt=None,
+                    surface_system_prompt=None, versions=[], instruction_layers=frozen.selection.instruction_layers)
+                self.assertIn(expected, prompt)
+                self.assertNotIn("Temporary local behaviour", prompt)
+
+    def test_partial_policy_edit_preserves_attachment_exclusions(self):
+        created = self.post("/v1/chat/conversations", {
+            "deployment_id": self.deployment.id,
+            "input_policy": {"excluded_sources": ["attachment:omitted"]}})
+        conversation = self.chat.store.get(created["id"])
+        request = ChatStartRequest(task="Change pins", attachment_ids=["omitted", "retained"],
+            input_policy={"pinned_tools": ["echo"]})
+        self.assertEqual(self.chat._selected_document_ids(conversation, request), ["retained"])
+
+    def test_policy_reset_retains_inherited_attachment_exclusion_before_validation(self):
+        agent = self.post("/v1/agent-setups", {"name": "Excluded attachment", "configuration": {
+            "presented_tools": [], "input_policy": {"excluded_sources": ["attachment:omitted"]}}})
+        created = self.post("/v1/chat/conversations", {
+            "deployment_id": self.deployment.id, "agent_setup_id": agent['id']})
+        conversation = self.chat.store.get(created['id'])
+        request = ChatStartRequest(task="Reset local choices", input_policy=None, attachment_ids=['omitted'])
+        with patch.object(self.chat.assets, 'require_active_assets') as validate:
+            frozen = self.chat._admit_snapshot(conversation, request, persist=False)
+        self.assertEqual(validate.call_args.args[0], [])
+        self.assertIn('attachment:omitted', frozen.selection.configuration.input_policy.excluded_sources)
+        self.chat._apply_start_configuration(conversation, request, prepare_model=False, read_only=True)
+        self.assertEqual(self.chat._selected_document_ids(conversation, request), [])
+
+    def test_full_preview_does_not_read_excluded_attachment_body(self):
+        conversation = self.chat.store.get(self.conversation['id'])
+        asset = self.chat.assets.retain_upload(RetainedUploadRequest(session_id=conversation.id,
+            filename='excluded.md', content_type='text/markdown',
+            content_base64=base64.b64encode(b'Excluded exact content').decode('ascii')))
+        request = ChatStartRequest(task='Preview', attachment_ids=[asset.id],
+            input_policy={'excluded_sources': [f'attachment:{asset.id}']})
+        with patch.object(self.chat.assets, '_load_content', side_effect=AssertionError('Excluded body was read')):
+            rows = self.chat._context_input_sources(conversation, request, request.input_policy, include_content=True)
+        self.assertEqual(rows[0].mode, 'off')
+        self.assertEqual(rows[0].estimated_tokens, 0)
+        self.assertIsNone(rows[0].content)
+
+    def test_default_tool_selection_freezes_connection_manifest_at_admission(self):
+        from workbench_backend.connections.schemas import ConnectionWrite, ConnectionTool
+        from workbench_backend.connections.service import namespaced
+        service = self.chat.harness.connections
+        record = service.create(ConnectionWrite(name='Frozen connection', kind='mcp', transport='http',
+            url='https://example.test/mcp'))
+        name = namespaced(record.id, 'read_document')
+        original = ConnectionTool(id=name, name=name, remote_name='read_document', description='Original schema',
+            input_schema={'type': 'object', 'properties': {'query': {'type': 'string'}}, 'required': ['query']})
+        record = record.model_copy(update={'tools': [original], 'last_tested_at': record.created_at})
+        service.store.put(record)
+        created = self.post('/v1/chat/conversations', {'deployment_id': self.deployment.id, 'connection_ids': [record.id]})
+        request = ChatStartRequest(task='Accepted connection task', input_message_id='frozen-default-manifest')
+        accepted = self.chat.enqueue(created['id'], request).queue[-1].execution_snapshot
+        self.assertIsNone(accepted.selection.configuration.presented_tools)
+        self.assertEqual(accepted.connection_snapshots[0].tools, [original])
+        added = original.model_copy(update={'id': 'new_name', 'name': 'new_name', 'remote_name': 'new_name'})
+        service.store.put(record.model_copy(update={'version': record.version + 1, 'tools': [added]}))
+        repeated = self.chat.enqueue(created['id'], request).queue[-1].execution_snapshot
+        restored = self.chat.store.get(created['id']).accepted_inputs[request.input_message_id]
+        self.assertEqual(repeated.connection_snapshots, accepted.connection_snapshots)
+        self.assertEqual(restored.connection_snapshots, accepted.connection_snapshots)
+        self.assertNotIn('new_name', [tool.name for snapshot in restored.connection_snapshots for tool in snapshot.tools])
+
+    def test_queued_deferred_connection_dispatch_uses_accepted_catalogue_and_rejects_new_names(self):
+        from workbench_backend.connections.schemas import ConnectionWrite, ConnectionTool
+        from workbench_backend.connections.service import ConnectionService, namespaced
+        self.app.state.harness = HarnessService(lambda: self.app.state.manager,
+            app_store=self.app.state.app_store, knowledge_provider=lambda: self.knowledge,
+            model_factory=lambda *_: ScriptedChatModel([AIMessage(content="Ordinary answer")]))
+        connections = self.chat.harness.connections
+        record = connections.create(ConnectionWrite(name="Deferred connection", kind="mcp",
+            transport="http", url="https://example.test/mcp"))
+        name = namespaced(record.id, "read_document")
+        original = ConnectionTool(id=name, name=name, remote_name="read_document",
+            description="Accepted original schema", input_schema={"type": "object", "properties": {}})
+        record = record.model_copy(update={"tools": [original], "last_tested_at": record.created_at})
+        connections.store.put(record)
+        agent = self.post("/v1/agent-setups", {"name": "Deferred connection agent", "configuration": {
+            "presented_tools": ["echo", name], "connection_ids": [record.id],
+            "input_policy": {"tool_loading": "when_needed"}}})
+        created = self.post("/v1/chat/conversations", {
+            "deployment_id": self.deployment.id, "agent_setup_id": agent["id"]})
+        request = self.request("queued-deferred-manifest")
+        queued = self.chat.enqueue(created["id"], request).queue[0]
+        accepted = queued.execution_snapshot
+        self.assertEqual(accepted.connection_snapshots[0].tools, [original])
+
+        new_name = namespaced(record.id, "added_later")
+        changed = original.model_copy(update={"id": new_name, "name": new_name, "remote_name": "added_later"})
+        connections.store.put(record.model_copy(update={"version": record.version + 1, "tools": [changed]}))
+        conversation = self.chat.store.get(created["id"])
+        # A name found only in the latest manifest cannot enter accepted work,
+        # even if an inconsistent trusted intended-config record supplies it.
+        invalid = accepted.model_copy(update={"intended_config": {
+            **accepted.intended_config, "presented_tools": ["echo", new_name]}})
+        with patch.object(self.chat.harness, "start", wraps=self.chat.harness.start) as start, \
+            patch.object(ConnectionService, "_adapter", side_effect=AssertionError("Optional connection opened")) as adapter:
+            with self.assertRaises(ChatError) as denied:
+                self.chat._dispatch_request_admitted(conversation, request, queue_item=queued,
+                    admitted_snapshot=invalid)
+            self.assertEqual(denied.exception.code, "tool_denied")
+            self.assertEqual(denied.exception.details["tools"], [new_name])
+            start.assert_not_called()
+            self.assertEqual(self.chat.store.get(created["id"]).transcript, [])
+
+            resumed = self.client.post(f'/v1/chat/conversations/{created["id"]}/queue/resume', json={})
+            self.assertEqual(resumed.status_code, 200, resumed.text)
+            self.assertIsNotNone(resumed.json()["current_run"],
+                [(item["status"], item.get("pause_error_code"), item.get("pause_error"))
+                    for item in resumed.json()["queue"]])
+            body = wait_for_chat(self.client, created["id"])
+            completed = body["current_run"]
+            self.assertEqual(completed["status"], "completed")
+            self.assertEqual([message["content"] for message in body["transcript"]
+                if message["role"] == "assistant"], ["Ordinary answer"])
+            self.assertEqual(start.call_count, 1)
+            self.assertEqual(start.call_args.kwargs["execution_snapshot"].connection_snapshots,
+                accepted.connection_snapshots)
+            adapter.assert_not_called()
+        run = self.chat.harness.get_run(completed["id"])
+        self.assertEqual(run.connection_snapshots, accepted.connection_snapshots)
+        self.assertIn(name, run.presented_tools)
+        self.assertNotIn(new_name, run.presented_tools)
 
     def test_each_new_input_resolves_latest_saved_records_without_execution(self):
         with patch.object(self.chat.harness, "start", side_effect=AssertionError("Queue must not execute")), \
@@ -106,6 +281,36 @@ class ChatAdmissionTests(unittest.TestCase):
         with self.assertRaises(KnowledgeError):
             self.enqueue(self.request("new-after-disable"))
         self.assertEqual(len(self.chat.get(self.conversation["id"]).queue), 1)
+
+    def test_chat_input_policy_is_local_and_frozen_across_queue_reload_and_later_edits(self):
+        updated = self.client.patch(f'/v1/agent-setups/{self.agent["id"]}', json={
+            "name": "Selected agent", "base_version": self.agent['current_version_id'], "configuration": {
+                "instructions": "Original instructions", "presented_tools": ["echo", "time_now"],
+                "memory_entry_ids": [self.memory['id']]}})
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.agent = updated.json()
+        request = self.request("policy-first", presented_tools=["echo", "time_now"],
+            input_policy={"pinned_tools": ["echo"], "instruction_override": "Local verbatim behaviour",
+                "reference_loading": {self.memory["id"]: "when_needed"}})
+        first = self.enqueue(request)
+        frozen = first.execution_snapshot
+        self.assertEqual(frozen.selection.configuration.input_policy.pinned_tools, ["echo"])
+        self.assertEqual(frozen.intended_config['input_policy']['instruction_override'], "Local verbatim behaviour")
+        old_ref = frozen.selection.configuration.memory_version_refs[0]
+        self.save_memory("Newer reference body")
+        self.save_agent()
+        reloaded = self.chat.store.get(self.conversation['id']).queue[0].execution_snapshot
+        self.assertEqual(reloaded, frozen)
+        retry = self.chat.enqueue(self.conversation['id'], request).queue[0]
+        self.assertEqual(retry.execution_snapshot, frozen)
+        self.assertEqual(self.knowledge.get_version(old_ref).content, "Original memory")
+        second = self.enqueue(self.request("policy-next", presented_tools=["echo"],
+            input_policy={"excluded_sources": [f"memory:{self.memory['id']}"], "instruction_override": "Second choice"}))
+        self.assertNotEqual(second.execution_snapshot.selection.configuration.input_policy, frozen.selection.configuration.input_policy)
+        self.assertEqual(second.execution_snapshot.selection.configuration.memory_version_refs, [])
+        self.assertEqual(self.chat.get(self.conversation['id']).setup_overrides.instructions, None)
+        saved_agent = self.app.state.app_store.get_agent_setup_version(self.agent['current_version_id'])
+        self.assertEqual(saved_agent.configuration.instructions, "Saved instructions")
 
     def test_identical_queued_retry_uses_accepted_snapshot_after_asset_removal(self):
         asset = self.chat.assets.retain_upload(RetainedUploadRequest(
@@ -221,7 +426,8 @@ class ChatAdmissionTests(unittest.TestCase):
             display_name="Selected settings", per_request={"temperature": 0.25}))
         helper = self.post("/v1/agent-setups", {"name": "Helper", "configuration": {
             "instructions": "Original helper", "presented_tools": [], "profile_id": profile.id,
-            "memory_entry_ids": [self.memory["id"]]}})
+            "memory_entry_ids": [self.memory["id"]], "input_policy": {
+                "reference_loading": {self.memory['id']: "always"}}}})
         main = self.client.patch(f'/v1/agent-setups/{self.agent["id"]}', json={
             "name": "Main", "base_version": self.agent["current_version_id"],
             "configuration": {"presented_tools": [], "profile_id": profile.id,
@@ -233,7 +439,8 @@ class ChatAdmissionTests(unittest.TestCase):
         updated = self.client.patch(f'/v1/agent-setups/{helper["id"]}', json={
             "name": "Changed helper", "base_version": helper["current_version_id"],
             "configuration": {"instructions": "Saved helper", "presented_tools": [],
-                "profile_id": profile.id, "memory_entry_ids": [self.memory["id"]]}})
+                "profile_id": profile.id, "memory_entry_ids": [self.memory["id"]], "input_policy": {
+                    "reference_loading": {self.memory['id']: "always"}}}})
         self.assertEqual(updated.status_code, 200, updated.text)
         self.app.state.manager.update_profile(profile.id, ProfileWriteRequest(
             display_name="Changed settings", per_request={"temperature": 0.75}))
@@ -327,7 +534,8 @@ class ChatAdmissionTests(unittest.TestCase):
     def test_queue_setup_refreeze_replaces_agent_defaults_but_preserves_chat_additions(self):
         addition = self.post("/v1/knowledge/entries", {
             "scope": "user", "kind": "memory", "content": "Explicit Chat context"})
-        queued = self.enqueue(self.request("replace-agent-defaults", memory_entry_ids=[addition["id"]]))
+        queued = self.enqueue(self.request("replace-agent-defaults", memory_entry_ids=[addition["id"]],
+            input_policy={"reference_loading": {addition['id']: 'always'}}))
         self.assertCountEqual(queued.execution_snapshot.selection.configuration.memory_version_refs,
             [self.memory["current_version_id"], addition["current_version_id"]])
         replacement = self.post("/v1/agent-setups", {

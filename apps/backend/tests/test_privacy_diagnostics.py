@@ -352,6 +352,7 @@ class PrivacyDiagnosticsApiTests(unittest.TestCase):
             "deployment_id": self.deployment_id,
             "task": "Echo the synthetic marker using the echo tool.",
             "presented_tools": ["echo"],
+            "input_policy": {"tool_loading": "always"},
             **extra,
         }
         response = self.client.post("/v1/agent-runs", json=payload)

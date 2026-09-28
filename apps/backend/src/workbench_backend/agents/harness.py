@@ -14,13 +14,14 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
 from deepagents import create_deep_agent
 from deepagents.backends import StateBackend
 from deepagents.middleware.summarization import SummarizationMiddleware, SUMMARIZATION_EVENT_KEY, compute_summarization_defaults
-from langchain.agents.middleware import TodoListMiddleware
+from langchain.agents.middleware import TodoListMiddleware, HumanInTheLoopMiddleware
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
@@ -29,8 +30,9 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
 
 from workbench_backend.agents.effective_setup import resolve_effective_setup
+from workbench_backend.agents.input_sources import WORKBENCH_CORE_INSTRUCTIONS
 from workbench_backend.agents.setup_service import SetupService, configuration_from_request, cleared_configuration_fields
-from workbench_backend.agents.setup_schemas import ProjectCreateRequest, InstructionLayer, FrozenHelperSelection, ReviewConfiguration, FrozenExecutionSelection
+from workbench_backend.agents.setup_schemas import AgentInputPolicy, ProjectCreateRequest, InstructionLayer, FrozenHelperSelection, ReviewConfiguration, FrozenExecutionSelection
 from workbench_backend.inference.schemas import SettingsBags
 from workbench_backend.agents.helpers import freeze_helpers, freeze_settings, prepare_frozen_model, require_accepted_model_identity
 from workbench_backend.agents.execution_policy import ExecutionControl, PLAN_TOOLS, PLAN_INSTRUCTIONS, require_setup_capabilities
@@ -69,6 +71,11 @@ from workbench_backend.agents.host_shell import (
     validated_decision_payloads,
 )
 from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
+from workbench_backend.agents.tool_disclosure import (
+    FIND_TOOLS, ToolDisclosureMiddleware, DeferredToolCollection, CapabilitySetupBoundary,
+    LeanFilesystemMiddleware, LeanTodoListMiddleware, COMPACT_DESCRIPTIONS, deferred_tools, has_input_policy, discovery_context,
+    always_skill_dependencies,
+)
 from workbench_backend.assets.capture_backend import CaptureBackend
 from workbench_backend.assets.schemas import RetainedAssetListFilters, RetainedAssetOrigin
 from workbench_backend.agents.replay import FixtureBank
@@ -358,23 +365,32 @@ class HarnessService:
             self._start_cancel_guards.pop((thread_id, input_message_id), None)
 
     def _desktop_scope_snapshot(
-        self, request: AgentStartRequest, presented: list[str],
+        self, request: AgentStartRequest, presented: list[str], *, essential_tools=(),
     ) -> tuple[str, dict[str, int | float] | None]:
         """Freeze the narrower live conversation grant at turn admission."""
 
         from workbench_backend.desktop_automation.service import DESKTOP_TOOL_NAMES, DesktopAutomationError
+        from workbench_backend.desktop_automation.runtime import WinAppRuntimeError
 
         if not set(presented).intersection(DESKTOP_TOOL_NAMES):
             return "off", None
+        essential = set(essential_tools) | (set(request.input_policy.pinned_tools) if request.input_policy is not None else set())
+        desktop_essential = bool(essential.intersection(DESKTOP_TOOL_NAMES))
         if (self.desktop_automation is None or request.source_surface != "chat"
             or not request.thread_id or request.work_mode != "work"
             or request.tool_mode is not ToolMode.live_tool):
+            if deferred_tools(request) and not desktop_essential and request.source_surface == "chat" and request.thread_id:
+                return request.desktop_access, None
             raise HarnessError("Window tools need a live Work-mode Chat conversation.",
                 code="desktop_grant_required", status_code=409)
         try:
+            if desktop_essential:
+                self.desktop_automation.runtime.command_path()
             current, identity = self.desktop_automation.snapshot_grant(request.thread_id, request.desktop_access)
-        except DesktopAutomationError as exc:
-            raise HarnessError(str(exc), code=exc.code, status_code=409) from exc
+        except (DesktopAutomationError, WinAppRuntimeError) as exc:
+            if deferred_tools(request) and not desktop_essential:
+                return str(request.desktop_access), None
+            raise HarnessError(str(exc), code=exc.code if isinstance(exc, DesktopAutomationError) else "desktop_runtime_unavailable", status_code=409) from exc
         if identity is not None:
             return "selected", {
                 "hwnd": identity.hwnd,
@@ -491,7 +507,10 @@ class HarnessService:
 
     def _start_admitted(self, request: AgentStartRequest, *, instruction_snapshot: list[InstructionLayer] | None = None, helper_snapshot: list[FrozenHelperSelection] | None = None, execution_snapshot: FrozenExecutionSelection | None = None) -> AgentRun:
         self._reconcile_startup_once()
-        selection_service = SetupService(self.store, self.manager, self._knowledge_provider() if self._knowledge_provider else None, connection_available=self.connections.available, connection_tools=lambda ident: [tool.name for tool in self.connections.get(ident).tools])
+        selection_service = SetupService(self.store, self.manager, self._knowledge_provider() if self._knowledge_provider else None,
+            connection_available=self.connections.available, connection_exists=self.connections.exists,
+            connection_tools=lambda ident: [tool.name for tool in self.connections.tool_definitions(ident)],
+            connection_tool_definitions=self.connections.tool_definitions)
         if request.project_path and not request.project_id and not request.workspace_id:
             project = selection_service.create_project(ProjectCreateRequest(path=request.project_path))
             request = request.model_copy(update={"project_id": project.id})
@@ -504,12 +523,18 @@ class HarnessService:
             prepare_model=True,
         )
         if execution_snapshot is not None:
-            issues = selection_service.dependencies(selection.configuration, frozen=True)
+            issues = selection_service.dependencies(selection.configuration, frozen=True,
+                connection_snapshots=execution_snapshot.connection_snapshots,
+                project_bound=bool(request.project_path or request.project_id))
             if issues:
                 raise HarnessError("The queued setup has unavailable dependencies. Edit its selections before running.", code="setup_dependencies_missing", status_code=409,
                     details={"missing_dependencies": [item.model_dump() for item in issues]})
         if instruction_snapshot is not None:
             selection = selection.model_copy(update={"instruction_layers": instruction_snapshot})
+        from workbench_backend.agents.setup_schemas import AgentInputPolicy
+        input_policy = (selection.configuration.input_policy if execution_snapshot is not None
+            else selection.configuration.input_policy or AgentInputPolicy())
+        request = request.model_copy(update={"input_policy": input_policy})
         selected = selection.configuration.model_dump(exclude_none=True, exclude={"instructions", "requires_project", "requires_host_shell", "bundle_id"})
         if execution_snapshot is not None:
             # A queued turn cannot broaden live-desktop access beyond its frozen setup.
@@ -529,7 +554,8 @@ class HarnessService:
         if request.criteria and request.criteria.review_prompt and not request.review.enabled:
             request = request.model_copy(update={"review": ReviewConfiguration(enabled=True, criteria=request.criteria.review_prompt)})
         helpers = helper_snapshot if helper_snapshot is not None else freeze_helpers(selection_service,
-            request.helper_agent_ids, project_id=request.project_id, parent_configuration=selection.configuration)
+            request.helper_agent_ids, project_id=request.project_id, parent_configuration=selection.configuration,
+            connection_snapshot=self.connections.snapshot)
         if helper_snapshot is not None and set(request.helper_agent_ids) != {item.agent_id for item in helper_snapshot}:
             raise HarnessError("The frozen helper selection does not match this queued turn.", code="helper_snapshot_mismatch", status_code=409)
         if not request.deployment_id:
@@ -571,10 +597,11 @@ class HarnessService:
             from workbench_backend.agents.memory_skills import memory_selection_notice
             # The native memory middleware derives the same model-only notice.
             # Preserve the exact submitted input in run records and graph state.
-            model_content_blocks = [*(request.content_blocks or []), memory_selection_notice(refs.memory_version_refs)]
+            model_content_blocks = [*(request.content_blocks or []), *([memory_selection_notice(refs.memory_version_refs)] if input_policy is None else [])]
             knowledge_plan = plan_knowledge_materialization(
                 versions,
                 resource_loader=self._knowledge_provider().resource_bytes if self._knowledge_provider else None,
+                input_policy=input_policy,
             )
             profile = None
             project_path = _resolved_project_path(request.project_path)
@@ -585,7 +612,29 @@ class HarnessService:
             from workbench_backend.assets.tools import validate_retained_selection
             validate_retained_selection(self.store, request.retained_asset_ids,
                 thread_id=request.thread_id, project_path=str(project_path) if project_path else None)
-            connection_snapshots = self.connections.snapshot(request.connection_ids or [], tools_enabled=request.presented_tools != [])
+            deferred_connections = input_policy is not None and input_policy.tool_loading == "when_needed"
+            accepted_connections = getattr(execution_snapshot, "connection_snapshots", None)
+            if accepted_connections is not None:
+                connection_snapshots = [item.model_copy(deep=True) for item in accepted_connections]
+                expected_connections = set(request.connection_ids or []) if request.presented_tools != [] else set()
+                if {item.id for item in connection_snapshots} != expected_connections:
+                    raise HarnessError("The selected connections differ from this accepted input. Start a new message.",
+                        code="connection_changed", status_code=409)
+                if not deferred_connections:
+                    for item in connection_snapshots:
+                        self.connections.validate_snapshot(item)
+                    self.connections.snapshot(request.connection_ids or [], tools_enabled=request.presented_tools != [])
+            else:
+                connection_snapshots = self.connections.snapshot(request.connection_ids or [], tools_enabled=request.presented_tools != [],
+                    allow_unready=deferred_connections)
+            if input_policy is not None and input_policy.pinned_tools:
+                pinned_connections = [item.id for item in connection_snapshots
+                    if set(input_policy.pinned_tools).intersection(tool.name for tool in item.tools)]
+                if pinned_connections:
+                    for item in connection_snapshots:
+                        if item.id in pinned_connections:
+                            self.connections.validate_snapshot(item)
+                    self.connections.snapshot(pinned_connections)
             external_names = [tool.name for connection in connection_snapshots for tool in connection.tools]
             capture_session = (
                 self.assets.session_for_thread(request.thread_id)
@@ -630,14 +679,20 @@ class HarnessService:
                     code="tool_denied",
                     status_code=400,
                 )
-            if filesystem_blocked:
+            progressive = input_policy is not None and input_policy.tool_loading == "when_needed"
+            if progressive:
+                pinned_blocked = set(input_policy.pinned_tools).intersection([*filesystem_blocked, *shell_blocked])
+                if pinned_blocked:
+                    raise HarnessError("Pinned file and shell tools need a project folder.", code="filesystem_requires_project", status_code=409)
+                presented.extend(name for name in [*filesystem_blocked, *shell_blocked] if name not in presented)
+            if filesystem_blocked and not progressive:
                 raise HarnessError(
                     "Filesystem tools require a bound project folder.",
                     code="filesystem_requires_project",
                     status_code=400,
                     details={"tools": filesystem_blocked},
                 )
-            if shell_blocked:
+            if shell_blocked and not progressive:
                 raise HarnessError(
                     "The host shell and project preview require a bound project folder. "
                     "A home-directory default is not invented.",
@@ -669,9 +724,40 @@ class HarnessService:
                 )
             if helpers and request.presented_tools != []:
                 presented = [*presented, "task"]
+            if input_policy is not None:
+                excluded = {source.removeprefix("tool:") for source in input_policy.excluded_sources if source.startswith("tool:")}
+                presented = [name for name in presented if name not in excluded]
+                if request.presented_tools != []:
+                    if input_policy.tool_loading == "when_needed":
+                        presented.append(FIND_TOOLS)
+                    helper_refs = any((helper.configuration.memory_entry_ids or helper.configuration.memory_version_refs
+                        or helper.configuration.skill_entry_ids or helper.configuration.skill_version_refs) for helper in helpers)
+                    if helper_refs or getattr(knowledge_plan, "references", None) and any(row.mode == "when_needed" for row in knowledge_plan.references):
+                        presented.append("read_reference")
+                presented = [name for name in presented if name not in excluded]
             if request.work_mode == "plan":
                 presented = [name for name in presented if name in PLAN_TOOLS]
-            desktop_scope, desktop_window = self._desktop_scope_snapshot(request, presented)
+            required_tools, required_connections = always_skill_dependencies(SimpleNamespace(
+                input_policy=input_policy, presented_tools=presented, framework_read_paths=framework_read_paths,
+                work_mode=request.work_mode, connection_snapshots=connection_snapshots, project_path=project_path), knowledge_plan)
+            if required_tools.intersection([*filesystem_blocked, *shell_blocked]):
+                raise HarnessError("Required file and shell tools need a project folder.", code="filesystem_requires_project", status_code=409)
+            essential_connections = required_connections | {item.id for item in connection_snapshots
+                if required_tools.intersection(tool.name for tool in item.tools)}
+            if essential_connections:
+                for item in connection_snapshots:
+                    if item.id in essential_connections:
+                        self.connections.validate_snapshot(item)
+                self.connections.snapshot(sorted(essential_connections))
+            if input_policy is not None:
+                from workbench_backend.browser.service import BROWSER_TOOL_NAMES
+                eager_browser = set(presented).intersection(BROWSER_TOOL_NAMES).intersection(
+                    presented if input_policy.tool_loading == "always" else set(input_policy.pinned_tools) | required_tools)
+                if eager_browser:
+                    if self.browser is None:
+                        raise HarnessError("Configure the optional Browser worker before pinning its tools.", code="browser_worker_missing", status_code=409)
+                    self.browser.runtime.require_installed()
+            desktop_scope, desktop_window = self._desktop_scope_snapshot(request, presented, essential_tools=required_tools)
             require_setup_capabilities(selection.configuration,
                 project_bound=project_path is not None, presented_tools=presented)
             if request.resume_checkpoint_id:
@@ -714,7 +800,7 @@ class HarnessService:
                 knowledge_refs=refs,
                 knowledge_versions=versions,
                 surface_system_prompt=request.system_prompt,
-                default_system_prompt=DEFAULT_SYSTEM_PROMPT,
+                default_system_prompt=DEFAULT_SYSTEM_PROMPT if input_policy is None else WORKBENCH_CORE_INSTRUCTIONS,
                 embedding_deployment=embedding_deployment,
                 selected_embedding_deployment_id=request.embedding_deployment_id,
                 retrieval_requested=retrieval_requested,
@@ -728,6 +814,8 @@ class HarnessService:
                 selected_agent_setup_id=selection.agent_setup_id,
                 selected_agent_setup_version_id=selection.agent_setup_version_id,
                 selected_connection_ids=request.connection_ids,
+                input_policy=input_policy,
+                input_sources=selection.input_sources if selection.input_sources else None,
             )
             if execution_snapshot is not None:
                 setup.selected_profile_id = request.profile_id
@@ -742,11 +830,19 @@ class HarnessService:
                 setup.bags.per_request = accepted_settings.per_request
             from workbench_backend.inference.response_budget import bind_output_budget
             setup.bags.per_request = bind_output_budget(deployment, setup.bags.per_request)
-            setup.system_prompt = "\n\n".join((setup.system_prompt, approval_mode_instructions(request.approval_mode)))
+            setup.system_prompt = "\n\n".join((setup.system_prompt, approval_mode_instructions(request.approval_mode, compact=input_policy is not None)))
             if request.work_mode == "plan":
                 setup.system_prompt += "\n\n" + PLAN_INSTRUCTIONS
             if execution_snapshot is not None and execution_snapshot.system_prompt is not None:
                 setup.system_prompt = execution_snapshot.system_prompt
+            from workbench_backend.agents.memory_skills import reference_context
+            selected_reference_context = reference_context(knowledge_plan)
+            if selected_reference_context and selected_reference_context not in setup.system_prompt:
+                setup.system_prompt += "\n\n" + selected_reference_context
+            guidance = discovery_context(SimpleNamespace(input_policy=input_policy, presented_tools=presented,
+                work_mode=request.work_mode, framework_read_paths=framework_read_paths, connection_snapshots=connection_snapshots))
+            if guidance and guidance not in setup.system_prompt:
+                setup.system_prompt += "\n\n" + guidance
             if request.content_blocks:
                 self._validate_content_capabilities(deployment, request, setup.bags.per_request)
             _, structured_output = response_format_for_run(
@@ -775,6 +871,8 @@ class HarnessService:
                     content_blocks=request.content_blocks,
                     enabled_tools=enabled,
                     presented_tools=presented,
+                    input_policy=input_policy,
+                    input_sources=setup.input_sources,
                     framework_read_paths=framework_read_paths,
                     denied_tools=[],
                     system_prompt=setup.system_prompt,
@@ -862,6 +960,8 @@ class HarnessService:
                 content_blocks=request.content_blocks,
                 enabled_tools=enabled,
                 presented_tools=presented,
+                input_policy=input_policy,
+                input_sources=setup.input_sources,
                 approval_mode=request.approval_mode,
                 requires_project=bool(selection.configuration.requires_project),
                 requires_host_shell=bool(selection.configuration.requires_host_shell),
@@ -1342,6 +1442,27 @@ class HarnessService:
         # Session-bound tools enter here on the common loop and stay open across
         # native approval waits. Synchronous setup/file work cannot block it.
         async with AsyncExitStack() as stack:
+            if has_input_policy(run):
+                loader = DeferredToolCollection(run, stack, connections=self.connections,
+                    browser=self.browser, desktop=self.desktop_automation,
+                    publish=lambda: self._publish_control_update(run))
+                required_tools, required_connections = (always_skill_dependencies(run, self._knowledge_plan_for_run(run))
+                    if run.skill_version_refs and "always" in run.input_policy.reference_loading.values() else (set(), set()))
+                from workbench_backend.agents.tools import FILESYSTEM_TOOL_NAMES, SHELL_TOOL_NAMES
+                if not run.project_path and required_tools.intersection({*FILESYSTEM_TOOL_NAMES, *SHELL_TOOL_NAMES, "start_preview", "stop_preview", "preview_status"}) - {"read_file", "ls"}:
+                    raise HarnessError("Required file and shell tools need a project folder.", code="filesystem_requires_project", status_code=409)
+                for name in sorted(required_tools):
+                    if loader.owns(name):
+                        await loader.require_ready(name)
+                essential_connections = required_connections | {item.id for item in run.connection_snapshots
+                    if required_tools.intersection(tool.name for tool in item.tools)}
+                if essential_connections:
+                    for item in run.connection_snapshots:
+                        if item.id in essential_connections:
+                            await asyncio.to_thread(self.connections.validate_snapshot, item)
+                    await asyncio.to_thread(self.connections.snapshot, sorted(essential_connections))
+                yield loader
+                return
             external_tools = await stack.enter_async_context(self.connections.open_tools(run))
             browser_tools = (
                 await stack.enter_async_context(self.browser.open_tools(run))
@@ -1433,12 +1554,14 @@ class HarnessService:
         is_child: bool = False,
     ) -> Any:
         execution_control = execution_control or ExecutionControl(run, lambda: self._publish_control_update(run))
+        knowledge_plan = self._knowledge_plan_for_run(run)
+        always_skill_dependencies(run, knowledge_plan)
         visual_access = any(name in {"browser_take_screenshot", "desktop_screenshot"} for name in run.presented_tools)
         if not visual_access and run.capture_routes_enabled and "read_file" in run.presented_tools and self.assets is not None:
             session = self.assets.session_for_run(run)
             visual_access = bool(session and self.assets.list_assets(RetainedAssetListFilters(
                 session_id=session.id, origin=RetainedAssetOrigin.capture)))
-        if not inspection_only and run.capture_routes_enabled and visual_access:
+        if not inspection_only and run.capture_routes_enabled and visual_access and not deferred_tools(run):
             from workbench_backend.inference.capabilities import capability_support
             deployment = self.manager.ensure_deployment_ready(run.deployment_id)
             per_request = run.effective_setup.bags.per_request if run.effective_setup is not None else None
@@ -1475,7 +1598,6 @@ class HarnessService:
             image_inputs_allowed=image_inputs_allowed, capture_backend=capture_backend,
             cancel_requested=lambda: (execution_control.root.status in {AgentRunStatus.cancel_requested, AgentRunStatus.cancelled}
                 or bool((cancel_event := self._cancels.get(execution_control.root.id)) and cancel_event.is_set())))
-        knowledge_plan = self._knowledge_plan_for_run(run)
         if backend is not None:
             agent_kwargs["backend"] = backend
             if not inspection_only:
@@ -1550,7 +1672,7 @@ class HarnessService:
             if self.preview is not None:
                 tools.extend(tool for tool in self.preview.tools_for_run(run)
                     if tool.name in run.presented_tools)
-            if self.desktop_automation is not None:
+            if self.desktop_automation is not None and not has_input_policy(run):
                 tools.extend(tool for tool in self.desktop_automation.tools_for_run(run)
                     if tool.name in run.presented_tools)
         if "propose_memory" in run.presented_tools and self._knowledge_provider is not None:
@@ -1597,6 +1719,27 @@ class HarnessService:
             tool_image_preparer=None if inspection_only else prepare_tool_images,
             generation_recorder=None if inspection_only else lambda: self._merge_latest_generation_sample(run),
         )
+        native_approval = HumanInTheLoopMiddleware(interrupt_on or {}) if has_input_policy(run) else None
+        def ensure_deferred_approval(name):
+            if native_approval is None:
+                return
+            refreshed = HumanInTheLoopMiddleware(interrupt_on_for_run(run, PreferenceStore(self.store)) or {})
+            native_approval.interrupt_on.update(refreshed.interrupt_on)
+            external = {tool.name for connection in run.connection_snapshots if connection.kind == "mcp" for tool in connection.tools}
+            if name in external and name not in native_approval.interrupt_on:
+                raise HarnessError("This external tool has no frozen approval policy.", code="tool_approval_missing", status_code=409)
+        disclosure = (ToolDisclosureMiddleware(run,
+            loader=external_tools if isinstance(external_tools, DeferredToolCollection) else None,
+            on_setup=None if inspection_only else CapabilitySetupBoundary(run, lambda: self._publish_control_update(run)),
+            ensure_approval=ensure_deferred_approval) if has_input_policy(run) else None)
+        if disclosure is not None:
+            disclosure.reference_requirements = knowledge_plan.skill_requirements
+            if "read_reference" in run.presented_tools:
+                from workbench_backend.agents.memory_skills import reference_tool_for_plan
+                reference_tool = reference_tool_for_plan(backend, knowledge_plan,
+                    allowed_tools=set(run.presented_tools), require_ready=disclosure.require_reference_ready)
+                if reference_tool is not None:
+                    tools.append(reference_tool)
         summarization = BudgetedSummarizationMiddleware(
             model=model, backend=backend or (lambda runtime: StateBackend(runtime)),
             allowed_tools=set(run.presented_tools) | ({"read_file"} if run.framework_read_paths else set()),
@@ -1604,7 +1747,8 @@ class HarnessService:
             keep=native_summarization["keep"] if native_summarization else ("messages", 6),
             token_counter=token_counter_for_model(model, response_format=provider_format,
                 message_projection=workbench_middleware.tool_image_messages_for_count),
-            request_preparer=workbench_middleware._with_outline,
+            request_preparer=(lambda value: workbench_middleware._with_outline(disclosure.prepare_request(value)))
+                if disclosure is not None else workbench_middleware._with_outline,
             execution_control=execution_control, run=run,
             on_context_failure=retain_failed_context,
             trim_tokens_to_summarize=None,
@@ -1621,20 +1765,31 @@ class HarnessService:
         ensure_ordinary_chat_profile(model)
         from workbench_backend.agents.review import review_middleware
         from workbench_backend.agents.helper_execution import compiled_helpers
+        from workbench_backend.agents.memory_skills import configured_skills_middleware
         if run.helper_snapshots and "task" in run.presented_tools and not is_child:
             agent_kwargs["subagents"] = compiled_helpers(self, run, execution_control,
                 inspection_only=inspection_only)
+        from deepagents.middleware.subagents import SubAgentMiddleware
+        lean_helpers = ([SubAgentMiddleware(backend=backend or StateBackend(), subagents=agent_kwargs["subagents"],
+            task_description="Delegate a self-contained task with the needed context to a selected helper. Helpers retain this input's access bounds and cannot delegate further.\n{available_agents}")]
+            if disclosure is not None and agent_kwargs.get("subagents") else [])
         return create_deep_agent(
             model=model,
             tools=tools,
             system_prompt=run.system_prompt,
             middleware=[
+                *([LeanFilesystemMiddleware(disclosure=disclosure, backend=backend or StateBackend(),
+                    _permissions=permissions, custom_tool_descriptions=COMPACT_DESCRIPTIONS)] if disclosure is not None else []),
                 summarization,
                 *configured_memory_middleware(backend, knowledge_plan),
-                *([TodoListMiddleware()] if "write_todos" in run.presented_tools else []),
+                *configured_skills_middleware(backend, knowledge_plan),
+                *lean_helpers,
+                *([LeanTodoListMiddleware() if disclosure is not None else TodoListMiddleware()]
+                    if "write_todos" in run.presented_tools else []),
                 *([review_middleware(run, model, http_sink, execution_control, self._capture_settings,
                     lambda mutation=None: self._publish_control_update(run, mutation))] if run.review.enabled and not is_child else []),
                 workbench_middleware,
+                *([disclosure, native_approval] if disclosure is not None else []),
             ],
             name="workbench-embedded-harness",
             response_format=response_format,
@@ -2407,6 +2562,7 @@ class HarnessService:
         return plan_knowledge_materialization(
             versions,
             resource_loader=self._knowledge_provider().resource_bytes if self._knowledge_provider else None,
+            input_policy=run.input_policy,
         )
 
     async def _alink_run(self, run: AgentRun, agent: object) -> None:

@@ -12,6 +12,11 @@
 .setup-tool-choices {min-width: 0; padding: 0 var(--pad-compact) var(--pad-tight) calc(var(--pad-compact) + var(--pad-card)); border-top: var(--line-hairline) solid var(--border);}
 .setup-tool-choices[hidden] {display: none;}
 .setup-tool-choices .setting-row {min-height: calc(var(--control-height) + var(--pad-tight) * 2); padding-block: var(--pad-tight);}
+.setup-tool-choice, .setup-context-choice {display: flex; align-items: center; gap: var(--space-compact); flex-wrap: wrap; min-width: 0;}
+.setup-tool-choice > .setting-row, .setup-context-choice > .setting-row {flex: 1; min-width: min(100%, 14rem);}
+.setup-context-choice > select {width: auto; min-width: 9rem;}
+.setup-tool-pin {display: flex; align-items: center; gap: var(--space-tight); color: var(--muted); font-size: var(--text-small); white-space: nowrap; padding-right: var(--pad-compact);}
+.setup-tool-pin > input {width: auto;}
 .setup-helper-list {list-style: none; padding: 0; margin: var(--space-compact) 0; display: grid; gap: var(--space-tight);}
 .setup-helper-list li {display: flex; align-items: start; gap: var(--space-compact); padding: var(--pad-compact) 0; border-bottom: var(--line-hairline) solid var(--border);}
 .setup-helper-list li > svg {flex-shrink: 0; margin-top: var(--pad-tight);}

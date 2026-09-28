@@ -27,7 +27,6 @@ from workbench_backend.agents.execution_policy import CURRENT_TOOL_CALL
 from workbench_backend.browser.runtime import BrowserRuntime
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.ids import utc_now
-from workbench_backend.inference.image_validation import CANNOT_READ_IMAGE
 from workbench_backend.paths import WorkbenchPaths
 from workbench_backend.state.run_views import BrowserRunProjection
 
@@ -321,25 +320,38 @@ class BrowserSessionService:
             # initialization. Use its installation-time catalogue for tool
             # presentation, and acquire the real adapter only on first action.
             # This is metadata from the pinned server, not another tool adapter.
-            schemas = {definition["name"]: definition for definition in await asyncio.to_thread(self.runtime.read_tool_schemas)}
-            def lazy_tool(name: str) -> BaseTool:
-                definition = schemas[name]
-                args = copy.deepcopy(definition["inputSchema"])
-                args.get("properties", {}).pop("filename", None)
-                if "required" in args:
-                    args["required"] = [item for item in args["required"] if item != "filename"]
-                async def invoke(**arguments):
-                    session = await self._get_or_create(key)
-                    return await self._bind_tool(run, session, session.tools[name]).coroutine(**arguments)
-                return StructuredTool(name=name, description="Chat Chrome browser: " + definition.get("description", name)
-                    + _TOOL_GUIDANCE.get(name, "") + (" Paths must be project-relative or asset:<id> for a selected attachment." if name == "browser_file_upload" else ""),
-                    args_schema=args, coroutine=invoke, response_format="content_and_artifact",
-                    metadata={"browser_worker": True, "browser_read_only": name in BROWSER_READ_TOOLS}, handle_tool_error=True)
-            yield [lazy_tool(name) for name in BROWSER_TOOL_NAMES if name in selected]
+            yield await asyncio.to_thread(self.schema_tools_for_run, run)
             return
         session = await self._get_or_create(key)
         self._refresh_idle(session)
         yield [self._bind_tool(run, session, session.tools[name]) for name in BROWSER_TOOL_NAMES if name in selected]
+
+    def schema_tools_for_run(self, run) -> list[BaseTool]:
+        """Use installation-time schemas without starting Chrome or an MCP client."""
+        selected = set(run.presented_tools).intersection(BROWSER_TOOL_NAMES)
+        if not selected:
+            return []
+        key = _safe_thread(run.thread_id)
+        schemas = {definition["name"]: definition for definition in self.runtime.read_tool_schemas()}
+        result = []
+        for name in BROWSER_TOOL_NAMES:
+            if name not in selected:
+                continue
+            if name not in schemas:
+                raise HarnessError("Refresh the browser worker's pinned tool catalogue.", code="browser_worker_schema_changed", status_code=409)
+            definition = schemas[name]
+            args = copy.deepcopy(definition["inputSchema"])
+            args.get("properties", {}).pop("filename", None)
+            if "required" in args:
+                args["required"] = [item for item in args["required"] if item != "filename"]
+            async def invoke(_name=name, **arguments):
+                session = await self._get_or_create(key)
+                return await self._bind_tool(run, session, session.tools[_name]).coroutine(**arguments)
+            result.append(StructuredTool(name=name, description="Chat Chrome browser: " + definition.get("description", name)
+                + _TOOL_GUIDANCE.get(name, "") + (" Paths must be project-relative or asset:<id> for a selected attachment." if name == "browser_file_upload" else ""),
+                args_schema=args, coroutine=invoke, response_format="content_and_artifact",
+                metadata={"browser_worker": True, "browser_read_only": name in BROWSER_READ_TOOLS}, handle_tool_error=True))
+        return result
 
     async def _get_or_create(self, key: str, *, owner: BrowserOwner | None = None) -> _Session:
         owner = owner or await asyncio.to_thread(self.resolve_owner, key)
@@ -541,15 +553,7 @@ class BrowserSessionService:
                     # directory is only a transient handoff from MCP.
                     await asyncio.to_thread(path.unlink, missing_ok=True)
                 virtual_path = published[1] if isinstance(published, tuple) else published
-                readable = None
-                if self.screenshot_reader is not None:
-                    try:
-                        readable = await asyncio.to_thread(self.screenshot_reader, run)
-                    except Exception:
-                        readable = False
                 message = f"Screenshot captured from {target}.\n{page}\nSaved screenshot: {virtual_path}"
-                if readable is False:
-                    message = f"{message}\n{CANNOT_READ_IMAGE}"
                 return text_result(message)
 
         return original.model_copy(update={

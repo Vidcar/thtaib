@@ -264,7 +264,7 @@ class MemorySkillsHarnessTests(unittest.TestCase):
         kinds = {item["kind"] for item in setup["materialized_knowledge"]}
         self.assertEqual(kinds, {"skill"})
         outbound = json.dumps(_RecordingHandler.requests[0]["body"])
-        self.assertIn("## Skills System", outbound)
+        self.assertIn("## Selected skills", outbound)
         self.assertNotIn("<agent_memory>", outbound)
         self.assertNotIn(SKILL_BODY, outbound)
 
@@ -312,7 +312,7 @@ class MemorySkillsHarnessTests(unittest.TestCase):
         self.assertEqual(finished["status"], "completed", finished.get("error"))
         blocked = self.client.post(
             f"/v1/chat/conversations/{created.json()['id']}/start",
-            json={"task": "Write.", "presented_tools": ["write_file"]},
+            json={"task": "Write.", "presented_tools": ["write_file"], "input_policy": {"tool_loading": "always"}},
         )
         self.assertEqual(blocked.status_code, 400, blocked.text)
         self.assertEqual(blocked.json()["code"], "filesystem_requires_project")

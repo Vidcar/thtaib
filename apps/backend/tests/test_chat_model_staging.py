@@ -51,6 +51,23 @@ class ChatModelStagingTests(unittest.TestCase):
         return self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
             display_name=name, startup=startup, per_request=response))
 
+    def test_cold_model_policy_preview_matches_partial_edits_and_reset_at_admission(self):
+        profile = self.profile('Cold policy preview', {'ctx_size': 32768})
+        created = self.post('/v1/chat/conversations', {'model_configuration_id': profile.id, 'presented_tools': ['echo'],
+            'input_policy': {'excluded_sources': ['project_outline'], 'instruction_override': 'Exact local text'}})
+        for authored in ({'pinned_tools': ['echo']}, None):
+            with self.subTest(authored=authored):
+                preview = self.post(f"/v1/chat/conversations/{created['id']}/readiness", {
+                    'overrides': {'model_configuration_id': profile.id, 'input_policy': authored}})
+                self.assertTrue(preview['can_send'], preview)
+                from workbench_backend.chat.schemas import ChatStartRequest
+                request = ChatStartRequest(task='Accepted policy', model_configuration_id=profile.id,
+                    input_policy=authored)
+                frozen = self.app.state.chat._admit_snapshot(self.app.state.chat.store.get(created['id']), request, persist=False)
+                self.assertEqual(preview['selection']['configuration']['input_policy'],
+                    frozen.selection.configuration.input_policy.model_dump(mode='json'))
+        self.assertEqual(self.ready_ids, [], 'Preview and acceptance stay cold')
+
     def ready(self, ident):
         # This fixture exercises the real harness/admission with an observed
         # scripted endpoint; it makes no claim about native process loading.
