@@ -698,102 +698,147 @@ def _verify_application_linkages(path: Path) -> None:
     conn.row_factory = sqlite3.Row
     try:
         tables = {item[0] for item in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if "runs" in tables and "run_diagnostic_captures" in tables:
-            row = conn.execute(
-                "SELECT run_id FROM run_diagnostic_captures WHERE json_valid(payload) = 0 LIMIT 1"
-            ).fetchone()
-            if row is not None:
-                raise BackupError("Application database has invalid diagnostic capture JSON.", code="application_db_invalid")
-            row = conn.execute(
-                """SELECT captures.run_id FROM run_diagnostic_captures AS captures
+        _verify_diagnostic_capture_json(conn, tables)
+        _verify_diagnostic_capture_run_links(conn, tables)
+        _verify_diagnostic_capture_sequence(conn, tables)
+        _verify_checkpoint_run_links(conn, tables)
+        _verify_run_file_links(conn, tables)
+        _verify_conversation_run_links(conn, tables)
+        # An asset's source session is immutable provenance. Deleting that
+        # session can leave a valid retained copy used by another consumer.
+        # Validate live consumer links below, not historical provenance.
+        _verify_retained_asset_consumer_links(conn, tables)
+        _verify_retained_asset_run_links(conn, tables)
+        _verify_retained_asset_session_links(conn, tables)
+        _verify_interaction_conversation_links(conn, tables)
+        _verify_interaction_run_links(conn, tables)
+        _verify_interaction_event_links(conn, tables)
+    finally:
+        conn.close()
+
+
+def _verify_diagnostic_capture_json(conn: sqlite3.Connection, tables: set[str]) -> None:
+    if "runs" in tables and "run_diagnostic_captures" in tables:
+        row = conn.execute(
+            "SELECT run_id FROM run_diagnostic_captures WHERE json_valid(payload) = 0 LIMIT 1"
+        ).fetchone()
+        if row is not None:
+            raise BackupError("Application database has invalid diagnostic capture JSON.", code="application_db_invalid")
+
+
+def _verify_diagnostic_capture_run_links(conn: sqlite3.Connection, tables: set[str]) -> None:
+    if "runs" in tables and "run_diagnostic_captures" in tables:
+        row = conn.execute(
+            """SELECT captures.run_id FROM run_diagnostic_captures AS captures
                    LEFT JOIN runs ON runs.id = captures.run_id
                    WHERE runs.id IS NULL LIMIT 1"""
-            ).fetchone()
-            if row is not None:
-                raise BackupError("Application database has diagnostic captures linked to a missing run.", code="application_linkage_invalid")
-            row = conn.execute(
-                """SELECT run_id FROM run_diagnostic_captures GROUP BY run_id
+        ).fetchone()
+        if row is not None:
+            raise BackupError("Application database has diagnostic captures linked to a missing run.", code="application_linkage_invalid")
+
+
+def _verify_diagnostic_capture_sequence(conn: sqlite3.Connection, tables: set[str]) -> None:
+    if "runs" in tables and "run_diagnostic_captures" in tables:
+        row = conn.execute(
+            """SELECT run_id FROM run_diagnostic_captures GROUP BY run_id
                    HAVING MIN(position) != 0 OR MAX(position) + 1 != COUNT(*) LIMIT 1"""
-            ).fetchone()
-            if row is not None:
-                raise BackupError("Application database has an incomplete diagnostic capture sequence.", code="application_linkage_invalid")
-        if "runs" in tables and "run_checkpoints" in tables:
-            row = conn.execute(
-                """
+        ).fetchone()
+        if row is not None:
+            raise BackupError("Application database has an incomplete diagnostic capture sequence.", code="application_linkage_invalid")
+
+
+def _verify_checkpoint_run_links(conn: sqlite3.Connection, tables: set[str]) -> None:
+    if "runs" in tables and "run_checkpoints" in tables:
+        row = conn.execute(
+            """
                 SELECT run_checkpoints.run_id
                 FROM run_checkpoints
                 LEFT JOIN runs ON runs.id = run_checkpoints.run_id
                 WHERE runs.id IS NULL
                 LIMIT 1
                 """
-            ).fetchone()
-            if row is not None:
-                raise BackupError("Application database has a checkpoint linked to a missing run.", code="application_linkage_invalid")
-        if "runs" in tables and "run_files" in tables:
-            row = conn.execute(
-                """
+        ).fetchone()
+        if row is not None:
+            raise BackupError("Application database has a checkpoint linked to a missing run.", code="application_linkage_invalid")
+
+
+def _verify_run_file_links(conn: sqlite3.Connection, tables: set[str]) -> None:
+    if "runs" in tables and "run_files" in tables:
+        row = conn.execute(
+            """
                 SELECT run_files.run_id
                 FROM run_files
                 LEFT JOIN runs ON runs.id = run_files.run_id
                 WHERE runs.id IS NULL
                 LIMIT 1
                 """
-            ).fetchone()
-            if row is not None:
-                raise BackupError("Application database has a file link for a missing run.", code="application_linkage_invalid")
-        if "conversations" in tables and "runs" in tables:
-            run_ids = {row["id"] for row in conn.execute("SELECT id FROM runs").fetchall()}
-            for row in conn.execute("SELECT id, payload FROM conversations").fetchall():
-                payload = json.loads(row["payload"])
-                for run_id in payload.get("run_ids") or []:
-                    if run_id not in run_ids:
-                        raise BackupError("Application database has a conversation linked to a missing run.", code="application_linkage_invalid")
-                source_run_id = payload.get("source_run_id")
-                if source_run_id and source_run_id not in run_ids:
-                    raise BackupError("Application database has a branch linked to a missing source run.", code="application_linkage_invalid")
-        # An asset's source session is immutable provenance. Deleting that
-        # session can leave a valid retained copy used by another consumer.
-        # Validate live consumer links below, not historical provenance.
-        if "retained_asset_consumers" in tables:
-            row = conn.execute(
-                """
+        ).fetchone()
+        if row is not None:
+            raise BackupError("Application database has a file link for a missing run.", code="application_linkage_invalid")
+
+
+def _verify_conversation_run_links(conn: sqlite3.Connection, tables: set[str]) -> None:
+    if "conversations" in tables and "runs" in tables:
+        run_ids = {row["id"] for row in conn.execute("SELECT id FROM runs").fetchall()}
+        for row in conn.execute("SELECT id, payload FROM conversations").fetchall():
+            payload = json.loads(row["payload"])
+            for run_id in payload.get("run_ids") or []:
+                if run_id not in run_ids:
+                    raise BackupError("Application database has a conversation linked to a missing run.", code="application_linkage_invalid")
+            source_run_id = payload.get("source_run_id")
+            if source_run_id and source_run_id not in run_ids:
+                raise BackupError("Application database has a branch linked to a missing source run.", code="application_linkage_invalid")
+
+
+def _verify_retained_asset_consumer_links(conn: sqlite3.Connection, tables: set[str]) -> None:
+    if "retained_asset_consumers" in tables:
+        row = conn.execute(
+            """
                 SELECT retained_asset_consumers.asset_id
                 FROM retained_asset_consumers
                 LEFT JOIN retained_assets ON retained_assets.id = retained_asset_consumers.asset_id
                 WHERE retained_assets.id IS NULL
                 LIMIT 1
                 """
-            ).fetchone()
-            if row is not None:
-                raise BackupError("Application database has a retained asset consumer linked to a missing asset.", code="application_linkage_invalid")
-            if "runs" in tables:
-                row = conn.execute(
-                    """
+        ).fetchone()
+        if row is not None:
+            raise BackupError("Application database has a retained asset consumer linked to a missing asset.", code="application_linkage_invalid")
+
+
+def _verify_retained_asset_run_links(conn: sqlite3.Connection, tables: set[str]) -> None:
+    if "retained_asset_consumers" in tables and "runs" in tables:
+        row = conn.execute(
+            """
                     SELECT consumer_id
                     FROM retained_asset_consumers
                     LEFT JOIN runs ON runs.id = retained_asset_consumers.consumer_id
                     WHERE consumer_kind = 'run' AND runs.id IS NULL
                     LIMIT 1
                     """
-                ).fetchone()
-                if row is not None:
-                    raise BackupError("Application database has a retained asset linked to a missing run.", code="application_linkage_invalid")
-            if "conversations" in tables:
-                row = conn.execute(
-                    """
+        ).fetchone()
+        if row is not None:
+            raise BackupError("Application database has a retained asset linked to a missing run.", code="application_linkage_invalid")
+
+
+def _verify_retained_asset_session_links(conn: sqlite3.Connection, tables: set[str]) -> None:
+    if "retained_asset_consumers" in tables and "conversations" in tables:
+        row = conn.execute(
+            """
                     SELECT consumer_id
                     FROM retained_asset_consumers
                     LEFT JOIN conversations ON conversations.id = retained_asset_consumers.consumer_id
                     WHERE consumer_kind = 'session' AND conversations.id IS NULL
                     LIMIT 1
                     """
-                ).fetchone()
-                if row is not None:
-                    raise BackupError("Application database has a retained asset linked to a missing session.", code="application_linkage_invalid")
-        if "interaction_threads" in tables:
-            if "conversations" in tables:
-                row = conn.execute(
-                    """
+        ).fetchone()
+        if row is not None:
+            raise BackupError("Application database has a retained asset linked to a missing session.", code="application_linkage_invalid")
+
+
+def _verify_interaction_conversation_links(conn: sqlite3.Connection, tables: set[str]) -> None:
+    if "interaction_threads" in tables and "conversations" in tables:
+        row = conn.execute(
+            """
                     SELECT interaction_threads.id
                     FROM interaction_threads
                     LEFT JOIN conversations ON conversations.id = interaction_threads.conversation_id
@@ -801,12 +846,15 @@ def _verify_application_linkages(path: Path) -> None:
                       AND conversations.id IS NULL
                     LIMIT 1
                     """
-                ).fetchone()
-                if row is not None:
-                    raise BackupError("Application database has an interaction linked to a missing conversation.", code="application_linkage_invalid")
-            if "runs" in tables:
-                row = conn.execute(
-                    """
+        ).fetchone()
+        if row is not None:
+            raise BackupError("Application database has an interaction linked to a missing conversation.", code="application_linkage_invalid")
+
+
+def _verify_interaction_run_links(conn: sqlite3.Connection, tables: set[str]) -> None:
+    if "interaction_threads" in tables and "runs" in tables:
+        row = conn.execute(
+            """
                     SELECT interaction_threads.id
                     FROM interaction_threads
                     LEFT JOIN runs ON runs.id = interaction_threads.run_id
@@ -814,23 +862,24 @@ def _verify_application_linkages(path: Path) -> None:
                       AND runs.id IS NULL
                     LIMIT 1
                     """
-                ).fetchone()
-                if row is not None:
-                    raise BackupError("Application database has an interaction linked to a missing run.", code="application_linkage_invalid")
-        if "interaction_events" in tables and "interaction_threads" in tables:
-            row = conn.execute(
-                """
+        ).fetchone()
+        if row is not None:
+            raise BackupError("Application database has an interaction linked to a missing run.", code="application_linkage_invalid")
+
+
+def _verify_interaction_event_links(conn: sqlite3.Connection, tables: set[str]) -> None:
+    if "interaction_events" in tables and "interaction_threads" in tables:
+        row = conn.execute(
+            """
                 SELECT interaction_events.thread_id
                 FROM interaction_events
                 LEFT JOIN interaction_threads ON interaction_threads.id = interaction_events.thread_id
                 WHERE interaction_threads.id IS NULL
                 LIMIT 1
                 """
-            ).fetchone()
-            if row is not None:
-                raise BackupError("Application database has interaction events linked to a missing interaction.", code="application_linkage_invalid")
-    finally:
-        conn.close()
+        ).fetchone()
+        if row is not None:
+            raise BackupError("Application database has interaction events linked to a missing interaction.", code="application_linkage_invalid")
 
 
 def _reconcile_restored_application_db(db_path: Path, destination: Path, source_root: Path) -> None:

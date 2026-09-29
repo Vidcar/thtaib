@@ -258,6 +258,17 @@ class ModelManager:
         startup: dict | None = None,
         refresh: bool = False,
     ) -> BundleConfigurationOptions:
+        deployment = self._deployment_for_bundle_options(bundle_id, deployment_id)
+        verified, metadata, cached, inspected_at = self._inspected_bundle_for_options(bundle_id, refresh=refresh)
+        profile = self._profile_for_bundle_options(bundle_id, configuration_id)
+        selected_bags, selected_startup = self._selected_startup_for_options(verified, profile, deployment, startup)
+        metadata, template_source = self._metadata_for_selected_template(verified, metadata, selected_startup)
+        return self._bundle_configuration_options_result(
+            verified, metadata, deployment, selected_bags, selected_startup, template_source, cached, inspected_at,
+            configuration_id=configuration_id, startup=startup,
+        )
+
+    def _deployment_for_bundle_options(self, bundle_id: str, deployment_id: str | None) -> Deployment | None:
         deployment = self.get_deployment(deployment_id) if deployment_id else None
         if deployment is not None and deployment.bundle_id != bundle_id:
             raise ManagerError(
@@ -270,6 +281,11 @@ class ModelManager:
                     "deployment_bundle_id": deployment.bundle_id,
                 },
             )
+        return deployment
+
+    def _inspected_bundle_for_options(
+        self, bundle_id: str, *, refresh: bool,
+    ) -> tuple[ModelBundle, GgufRuntimeMetadata, bool, str]:
         bundle = self.store.get_bundle(bundle_id)
         if bundle is None:
             raise ManagerError("Unknown bundle", code="bundle_missing", status_code=404)
@@ -281,9 +297,17 @@ class ModelManager:
                     invalidate_gguf_metadata(Path(item.path))
         metadata, cached, inspected_at = cached_inspection(self.store, verified, "runtime", GgufRuntimeMetadata,
             lambda: self._read_bundle_runtime_metadata(verified), refresh=refresh)
+        return verified, metadata, cached, inspected_at
+
+    def _profile_for_bundle_options(self, bundle_id: str, configuration_id: str | None) -> RunProfile | None:
         profile = self.get_profile(configuration_id) if configuration_id else None
         if profile is not None and profile.bundle_id != bundle_id:
             raise ManagerError("Configuration belongs to another model.", code="profile_bundle_mismatch", status_code=400)
+        return profile
+
+    def _selected_startup_for_options(
+        self, verified: ModelBundle, profile: RunProfile | None, deployment: Deployment | None, startup: dict | None,
+    ) -> tuple[SettingsBags, dict]:
         requested = dict(profile.bags.startup.requested if profile else deployment.settings.startup.requested if deployment else {})
         for key, value in (startup or {}).items():
             if value is None:
@@ -292,7 +316,11 @@ class ModelManager:
                 requested[key] = value
         initial_startup = model_default_values(self.store, verified, startup=requested)[0]
         selected_bags = resolve_bags(startup=requested, startup_defaults=initial_startup)
-        selected_startup = selected_bags.startup.applied
+        return selected_bags, selected_bags.startup.applied
+
+    def _metadata_for_selected_template(
+        self, verified: ModelBundle, metadata: GgufRuntimeMetadata, selected_startup: dict,
+    ) -> tuple[GgufRuntimeMetadata, str]:
         configuration = verified.huggingface_configuration
         template_source = "gguf_template"
         selected_file = selected_startup.get("chat_template_file")
@@ -320,6 +348,22 @@ class ModelManager:
             # the bundle's unrelated embedded template as the selected one.
             metadata = metadata.model_copy(update={"chat_template": inline if "{{" in inline or "{%" in inline else None})
             template_source = "configuration_template"
+        return metadata, template_source
+
+    def _bundle_configuration_options_result(
+        self,
+        verified: ModelBundle,
+        metadata: GgufRuntimeMetadata,
+        deployment: Deployment | None,
+        selected_bags: SettingsBags,
+        selected_startup: dict,
+        template_source: str,
+        cached: bool,
+        inspected_at: str,
+        *,
+        configuration_id: str | None,
+        startup: dict | None,
+    ) -> BundleConfigurationOptions:
         descriptor_deployment = deployment
         if deployment is not None and (configuration_id is not None or startup is not None):
             exact = (not has_response_startup_defaults(deployment.settings)

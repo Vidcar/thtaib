@@ -273,6 +273,21 @@ class ChatService:
         compatibility cannot yet be established from saved server properties.
         """
         conversation = self._require(conversation_id).model_copy(deep=True)
+        candidate = self._readiness_candidate(request)
+        selection = None
+        try:
+            if self._readiness_model_configuration_unloaded(candidate):
+                selection = self._resolve_unloaded_readiness_selection(conversation, request, candidate)
+                return self._readiness_when_model_must_load(conversation, request, candidate, selection)
+            selection = self._apply_start_configuration(conversation, candidate,
+                prepare_model=False, read_only=True)
+            if selection is None:
+                selection = self._resolve_readiness_selection(conversation, candidate)
+            return self._readiness_for_selection(conversation, request, candidate, selection)
+        except (ChatError, HarnessError, ManagerError) as exc:
+            return self._readiness_for_blocked_setup(conversation, request, candidate, selection, exc)
+
+    def _readiness_candidate(self, request: ChatReadinessRequest) -> ChatStartRequest:
         candidate_values = request.overrides.model_dump(exclude_unset=True)
         unsupported = sorted(key for key, value in candidate_values.items()
             if key not in ChatStartRequest.model_fields and value is not None)
@@ -290,104 +305,173 @@ class ChatService:
             candidate_values["agent_setup_version_id"] = request.agent_setup_version_id
         if "agent_setup_id" in request.model_fields_set:
             candidate_values["agent_setup_id"] = request.agent_setup_id
-        candidate = ChatStartRequest.model_validate({"task": "Preview", **candidate_values,
+        return ChatStartRequest.model_validate({"task": "Preview", **candidate_values,
             "shortcut_ids": request.shortcut_ids, "project_file_refs": request.project_file_refs,
             "attachment_ids": request.attachment_ids, "document_asset_ids": request.document_asset_ids})
-        selection = None
-        try:
-            if candidate.model_configuration_id and not candidate.deployment_id:
-                matching = self.manager.configuration_deployment(candidate.model_configuration_id)
-                if matching is None:
-                    self._apply_local_input_policy(conversation, candidate)
-                    pending = conversation.setup_overrides.model_dump(exclude_none=True)
-                    for key, value in request.overrides.model_dump(exclude_unset=True).items():
-                        if key == "input_policy":
-                            continue
-                        if value is None:
-                            pending.pop(key, None)
-                        else:
-                            pending[key] = value
-                    pending.pop("deployment_id", None)
-                    pending.pop("profile_id", None)
-                    selection = self._setups().resolve(project_id=conversation.project_id,
-                        agent_setup_version_id=(request.agent_setup_version_id
-                            if "agent_setup_version_id" in request.model_fields_set
-                            else conversation.agent_setup_version_id),
-                        agent_setup_id=(request.agent_setup_id if "agent_setup_id" in request.model_fields_set else conversation.agent_setup_id),
-                        overrides=SetupConfiguration.model_validate(pending), validate=True,
-                        read_only=True, latest_knowledge=True)
-                    self._validate_selected_context(conversation, candidate, selection.configuration, preview=True)
-                    return ChatReadiness(status="unverified", can_send=True, selection=selection,
-                        input_preview=self._input_preview(conversation, selection, request.include_input_content, candidate),
-                        issues=[ChatReadinessIssue(code="model_load_required",
-                            message="This configuration will load when the message starts.")])
+
+    def _readiness_model_configuration_unloaded(self, candidate: ChatStartRequest) -> bool:
+        if candidate.model_configuration_id and not candidate.deployment_id:
+            return self.manager.configuration_deployment(candidate.model_configuration_id) is None
+        return False
+
+    def _resolve_unloaded_readiness_selection(
+        self, conversation: ChatConversation, request: ChatReadinessRequest, candidate: ChatStartRequest,
+    ) -> ResolvedSetupSelection:
+        self._apply_local_input_policy(conversation, candidate)
+        pending = conversation.setup_overrides.model_dump(exclude_none=True)
+        for key, value in request.overrides.model_dump(exclude_unset=True).items():
+            if key == "input_policy":
+                continue
+            if value is None:
+                pending.pop(key, None)
+            else:
+                pending[key] = value
+        pending.pop("deployment_id", None)
+        pending.pop("profile_id", None)
+        return self._setups().resolve(project_id=conversation.project_id,
+            agent_setup_version_id=(request.agent_setup_version_id
+                if "agent_setup_version_id" in request.model_fields_set
+                else conversation.agent_setup_version_id),
+            agent_setup_id=(request.agent_setup_id if "agent_setup_id" in request.model_fields_set else conversation.agent_setup_id),
+            overrides=SetupConfiguration.model_validate(pending), validate=True,
+            read_only=True, latest_knowledge=True)
+
+    def _readiness_model_load_issues(self) -> list[ChatReadinessIssue]:
+        return [ChatReadinessIssue(code="model_load_required",
+            message="This configuration will load when the message starts.")]
+
+    def _readiness_when_model_must_load(
+        self, conversation: ChatConversation, request: ChatReadinessRequest, candidate: ChatStartRequest,
+        selection: ResolvedSetupSelection,
+    ) -> ChatReadiness:
+        self._validate_selected_context(conversation, candidate, selection.configuration, preview=True)
+        return ChatReadiness(status="unverified", can_send=True, selection=selection,
+            input_preview=self._input_preview(conversation, selection, request.include_input_content, candidate),
+            issues=self._readiness_model_load_issues())
+
+    def _resolve_readiness_selection(
+        self, conversation: ChatConversation, candidate: ChatStartRequest,
+    ) -> ResolvedSetupSelection:
+        effective = {key: value for key, value in self._prepared_config(conversation, candidate).items()
+            if key in SetupConfiguration.model_fields}
+        return self._setups().resolve(project_id=conversation.project_id,
+            agent_setup_version_id=conversation.agent_setup_version_id,
+            agent_setup_id=conversation.agent_setup_id,
+            overrides=SetupConfiguration.model_validate(effective), validate=True, read_only=True, latest_knowledge=True)
+
+    def _readiness_model_selection_issues(self) -> list[ChatReadinessIssue]:
+        return [ChatReadinessIssue(code="model_selection_required",
+            message="Choose a model for this chat.", action="Choose a model")]
+
+    def _readiness_history_issues(self, code: str) -> list[ChatReadinessIssue]:
+        return [ChatReadinessIssue(code=code,
+            message="Conversation compatibility will be checked when the model loads.")]
+
+    def _readiness_for_selection(
+        self, conversation: ChatConversation, request: ChatReadinessRequest, candidate: ChatStartRequest,
+        selection: ResolvedSetupSelection,
+    ) -> ChatReadiness:
+        conversation.input_policy = selection.configuration.input_policy
+        self._validate_selected_context(conversation, candidate, selection.configuration, preview=True)
+        preview = self._input_preview(conversation, selection, request.include_input_content, candidate)
+        history_uncertainty = self._preflight_start_request(conversation, candidate,
+            frozen_configuration=selection.configuration)
+        if not conversation.deployment_id:
+            return ChatReadiness(status="needs_action", can_send=False, selection=selection, input_preview=preview,
+                issues=self._readiness_model_selection_issues())
+        if history_uncertainty:
+            return ChatReadiness(status="unverified", can_send=True, selection=selection, input_preview=preview,
+                issues=self._readiness_history_issues(history_uncertainty))
+        return ChatReadiness(status="ready", can_send=True, selection=selection, input_preview=preview)
+
+    def _readiness_blocker_actions(self) -> dict[str, str]:
+        return {
+            "browser_worker_missing": "Install browser worker",
+            "browser_worker_schema_changed": "Refresh browser worker",
+            "browser_chrome_missing": "Install Chrome",
+            "browser_control_active": "Return to agent in Browser",
+            "browser_session_lost": "Reset browser",
+            "browser_unavailable": "Set up browser",
+            "desktop_grant_required": "Grant Windows access",
+            "desktop_window_required": "Choose a window",
+            "desktop_window_changed": "Choose the window again",
+            "desktop_unavailable": "Set up Windows control",
+            "desktop_worker_error": "Try Windows control again",
+            "desktop_runtime_unavailable": "Set up Windows control",
+            "deferred_reference_tools_off": "Include now, Remove, or Enable reading",
+            "deferred_reference_reader_excluded": "Include now, Remove, or Enable reading",
+            "skill_selection_required": "Update selected tools, connections or project",
+            "project_context_required": "Choose a project",
+            "context_file_tool_required": "Enable project file reading or remove the file",
+            "project_file_missing": "Choose another project file",
+            "retained_asset_unavailable": "Remove or replace the file",
+            "deploy_missing": "Choose a model",
+            "deployment_missing": "Choose a model",
+            "setup_deployment_required": "Choose a model",
+        }
+
+    def _readiness_section_issues(
+        self, code: str, message: str, action: str | None, codes: set[str],
+    ) -> list[ChatReadinessIssue]:
+        if code not in codes:
+            return []
+        return [ChatReadinessIssue(code=code, message=message, action=action)]
+
+    def _readiness_model_issues(self, code: str, message: str, action: str | None) -> list[ChatReadinessIssue]:
+        return self._readiness_section_issues(code, message, action, {
+            "deploy_missing", "deployment_missing", "setup_deployment_required",
+        })
+
+    def _readiness_project_issues(self, code: str, message: str, action: str | None) -> list[ChatReadinessIssue]:
+        return self._readiness_section_issues(code, message, action, {
+            "project_context_required", "project_file_missing", "retained_asset_unavailable",
+        })
+
+    def _readiness_tool_issues(self, code: str, message: str, action: str | None) -> list[ChatReadinessIssue]:
+        return self._readiness_section_issues(code, message, action, {
+            "browser_worker_missing", "browser_worker_schema_changed", "browser_chrome_missing",
+            "browser_control_active", "browser_session_lost", "browser_unavailable",
+            "desktop_grant_required", "desktop_window_required", "desktop_window_changed",
+            "desktop_unavailable", "desktop_worker_error", "desktop_runtime_unavailable",
+            "deferred_reference_tools_off", "deferred_reference_reader_excluded",
+            "skill_selection_required", "context_file_tool_required",
+        })
+
+    def _readiness_blocked_issues(self, exc: ChatError | HarnessError | ManagerError) -> list[ChatReadinessIssue]:
+        code = getattr(exc, "code", "setup_unavailable")
+        message = str(exc)
+        action = self._readiness_blocker_actions().get(code)
+        issues = [
+            *self._readiness_model_issues(code, message, action),
+            *self._readiness_project_issues(code, message, action),
+            *self._readiness_tool_issues(code, message, action),
+        ]
+        return issues or [ChatReadinessIssue(code=code, message=message, action=action)]
+
+    def _readiness_for_blocked_setup(
+        self, conversation: ChatConversation, request: ChatReadinessRequest, candidate: ChatStartRequest,
+        selection: ResolvedSetupSelection | None, exc: ChatError | HarnessError | ManagerError,
+    ) -> ChatReadiness:
+        code = getattr(exc, "code", "setup_unavailable")
+        if selection is None and code in {"setup_dependencies_missing", "deferred_reference_tools_off", "deferred_reference_reader_excluded", "skill_selection_required"}:
+            # Missing optional reference setup must leave its controls
+            # inspectable, without validating or executing it a second time.
             selection = self._apply_start_configuration(conversation, candidate,
-                prepare_model=False, read_only=True)
+                prepare_model=False, read_only=True, validate_setup=False)
             if selection is None:
                 effective = {key: value for key, value in self._prepared_config(conversation, candidate).items()
                     if key in SetupConfiguration.model_fields}
                 selection = self._setups().resolve(project_id=conversation.project_id,
                     agent_setup_version_id=conversation.agent_setup_version_id,
                     agent_setup_id=conversation.agent_setup_id,
-                    overrides=SetupConfiguration.model_validate(effective), validate=True, read_only=True, latest_knowledge=True)
-            conversation.input_policy = selection.configuration.input_policy
-            self._validate_selected_context(conversation, candidate, selection.configuration, preview=True)
-            preview = self._input_preview(conversation, selection, request.include_input_content, candidate)
-            history_uncertainty = self._preflight_start_request(conversation, candidate,
-                frozen_configuration=selection.configuration)
-            if not conversation.deployment_id:
-                return ChatReadiness(status="needs_action", can_send=False, selection=selection, input_preview=preview,
-                    issues=[ChatReadinessIssue(code="model_selection_required",
-                        message="Choose a model for this chat.", action="Choose a model")])
-            if history_uncertainty:
-                return ChatReadiness(status="unverified", can_send=True, selection=selection, input_preview=preview,
-                    issues=[ChatReadinessIssue(code=history_uncertainty,
-                        message="Conversation compatibility will be checked when the model loads.")])
-            return ChatReadiness(status="ready", can_send=True, selection=selection, input_preview=preview)
-        except (ChatError, HarnessError, ManagerError) as exc:
-            code = getattr(exc, "code", "setup_unavailable")
-            if selection is None and code in {"setup_dependencies_missing", "deferred_reference_tools_off", "deferred_reference_reader_excluded", "skill_selection_required"}:
-                # Missing optional reference setup must leave its controls
-                # inspectable, without validating or executing it a second time.
-                selection = self._apply_start_configuration(conversation, candidate,
-                    prepare_model=False, read_only=True, validate_setup=False)
-                if selection is None:
-                    effective = {key: value for key, value in self._prepared_config(conversation, candidate).items()
-                        if key in SetupConfiguration.model_fields}
-                    selection = self._setups().resolve(project_id=conversation.project_id,
-                        agent_setup_version_id=conversation.agent_setup_version_id,
-                        agent_setup_id=conversation.agent_setup_id,
-                        overrides=SetupConfiguration.model_validate(effective),
-                        override_cleared_fields=conversation.setup_cleared_fields,
-                        validate=False, read_only=True, latest_knowledge=True)
-            action = {
-                "browser_worker_missing": "Install browser worker",
-                "browser_worker_schema_changed": "Refresh browser worker",
-                "browser_chrome_missing": "Install Chrome",
-                "browser_control_active": "Return to agent in Browser",
-                "browser_session_lost": "Reset browser",
-                "browser_unavailable": "Set up browser",
-                "desktop_grant_required": "Grant Windows access",
-                "desktop_window_required": "Choose a window",
-                "desktop_window_changed": "Choose the window again",
-                "desktop_unavailable": "Set up Windows control",
-                "desktop_worker_error": "Try Windows control again",
-                "desktop_runtime_unavailable": "Set up Windows control",
-                "deferred_reference_tools_off": "Include now, Remove, or Enable reading",
-                "deferred_reference_reader_excluded": "Include now, Remove, or Enable reading",
-                "skill_selection_required": "Update selected tools, connections or project",
-                "project_context_required": "Choose a project",
-                "context_file_tool_required": "Enable project file reading or remove the file",
-                "project_file_missing": "Choose another project file",
-                "retained_asset_unavailable": "Remove or replace the file",
-                "deploy_missing": "Choose a model",
-                "deployment_missing": "Choose a model",
-                "setup_deployment_required": "Choose a model",
-            }.get(code)
-            return ChatReadiness(status="needs_action" if action else "incompatible", can_send=False,
-                selection=selection,
-                input_preview=self._input_preview(conversation, selection, request.include_input_content, candidate) if selection is not None else None,
-                issues=[ChatReadinessIssue(code=code, message=str(exc), action=action)])
+                    overrides=SetupConfiguration.model_validate(effective),
+                    override_cleared_fields=conversation.setup_cleared_fields,
+                    validate=False, read_only=True, latest_knowledge=True)
+        issues = self._readiness_blocked_issues(exc)
+        return ChatReadiness(status="needs_action" if issues[0].action else "incompatible", can_send=False,
+            selection=selection,
+            input_preview=self._input_preview(conversation, selection, request.include_input_content, candidate) if selection is not None else None,
+            issues=issues)
 
     def _input_preview(self, conversation: ChatConversation, selection: ResolvedSetupSelection,
         include_content: bool = False, request: ChatStartRequest | None = None) -> AgentInputPreview:
@@ -1451,29 +1535,10 @@ class ChatService:
         frozen_connections: list[ConnectionSnapshot] | None = None,
         frozen_configuration: SetupConfiguration | None = None,
     ) -> str | None:
-        policy = frozen_configuration.input_policy if frozen_configuration is not None else conversation.input_policy
-        defer_optional = policy is not None and policy.tool_loading == "when_needed"
-        pinned = set(policy.pinned_tools) if defer_optional else None
-        required_tools, required_connections = self._setups().always_skill_requirements(frozen_configuration) if frozen_configuration is not None else (set(), set())
-        if pinned is not None:
-            # Required setup is checked before an Always-included skill body;
-            # this does not pin its tool schemas or expand selected capabilities.
-            pinned.update(required_tools)
-        browser = getattr(self.harness, "browser", None)
-        if browser is not None and conversation.thread_id and browser.status(conversation.thread_id).get("control", "agent") != "agent":
-            raise ChatError("Return browser control to the agent before starting more work.", code="browser_control_active", status_code=409)
-        try:
-            deployment = self.manager.get_deployment(conversation.deployment_id)
-        except ManagerError as exc:
-            if exc.code != "deployment_missing":
-                raise
-            raise ChatError(
-                "The Chat conversation is bound to a deployment that is no longer available. "
-                "Select a deployment to continue.",
-                code="deploy_missing",
-                status_code=409,
-                details={"deployment_id": conversation.deployment_id},
-            ) from exc
+        defer_optional, pinned, required_tools, required_connections = self._preflight_optional_tool_policy(
+            conversation, frozen_configuration)
+        self._preflight_agent_browser_control(conversation)
+        deployment = self._preflight_conversation_deployment(conversation)
         connection_snapshots = self._preflight_connection_readiness(
             conversation, frozen_connections, defer_optional=defer_optional,
             pinned=pinned, required_connections=required_connections)
@@ -1484,6 +1549,38 @@ class ChatService:
             conversation, _presented, defer_optional=defer_optional, pinned=pinned, required_tools=required_tools)
         self._preflight_helper_availability(conversation, _presented, frozen_helpers=frozen_helpers)
         return self._retained_history_preflight(conversation, deployment)
+
+    def _preflight_optional_tool_policy(
+        self, conversation: ChatConversation, frozen_configuration: SetupConfiguration | None,
+    ) -> tuple[bool, set[str] | None, set[str], set[str]]:
+        policy = frozen_configuration.input_policy if frozen_configuration is not None else conversation.input_policy
+        defer_optional = policy is not None and policy.tool_loading == "when_needed"
+        pinned = set(policy.pinned_tools) if defer_optional else None
+        required_tools, required_connections = self._setups().always_skill_requirements(frozen_configuration) if frozen_configuration is not None else (set(), set())
+        if pinned is not None:
+            # Required setup is checked before an Always-included skill body;
+            # this does not pin its tool schemas or expand selected capabilities.
+            pinned.update(required_tools)
+        return defer_optional, pinned, required_tools, required_connections
+
+    def _preflight_agent_browser_control(self, conversation: ChatConversation) -> None:
+        browser = getattr(self.harness, "browser", None)
+        if browser is not None and conversation.thread_id and browser.status(conversation.thread_id).get("control", "agent") != "agent":
+            raise ChatError("Return browser control to the agent before starting more work.", code="browser_control_active", status_code=409)
+
+    def _preflight_conversation_deployment(self, conversation: ChatConversation):
+        try:
+            return self.manager.get_deployment(conversation.deployment_id)
+        except ManagerError as exc:
+            if exc.code != "deployment_missing":
+                raise
+            raise ChatError(
+                "The Chat conversation is bound to a deployment that is no longer available. "
+                "Select a deployment to continue.",
+                code="deploy_missing",
+                status_code=409,
+                details={"deployment_id": conversation.deployment_id},
+            ) from exc
 
     def _preflight_connection_readiness(
         self,
@@ -2178,70 +2275,97 @@ class ChatService:
         fingerprint = self._request_fingerprint(request)
         with self._knowledge_admission_lock(), self.app_store._lock, self._model_admission_lock():
             current = self._require(conversation.id).model_copy(deep=True)
-            if request.input_message_id and persist:
-                existing = current.accepted_inputs.get(request.input_message_id)
-                if existing is not None:
-                    if existing.request_fingerprint != fingerprint:
-                        raise ChatError("This input identity belongs to different accepted work.", code="submission_identity_conflict", status_code=409)
-                    return existing
-            selected = current.model_copy(deep=True)
-            if replace_overrides:
-                selected.setup_overrides = SetupConfiguration()
-                selected.setup_cleared_fields = []
-            elif editable_snapshot is not None and editable_snapshot.conversation_overrides is not None:
-                selected.setup_overrides = editable_snapshot.conversation_overrides.model_copy(deep=True)
-                selected.setup_cleared_fields = list(editable_snapshot.cleared_fields)
-            selection = self._apply_start_configuration(selected, request, prepare_model=False, read_only=True)
-            if selection is None:
-                selection = self._setups().resolve(project_id=selected.project_id,
-                    overrides=SetupConfiguration.model_validate({key: value for key, value in self._prepared_config(selected, request).items() if key in SetupConfiguration.model_fields}),
-                    latest_knowledge=True, read_only=True)
-                for key, value in selection.configuration.model_dump(exclude_none=True).items():
-                    if key in type(selected).model_fields:
-                        if key == "review":
-                            value = ReviewConfiguration.model_validate(value)
-                        elif key == "input_policy":
-                            value = AgentInputPolicy.model_validate(value)
-                        setattr(selected, key, value)
-            self._validate_selected_context(selected, request, selection.configuration)
-            helpers = freeze_helpers(self._setups(), selection.configuration.helper_agent_ids or [],
-                project_id=selected.project_id, parent_configuration=selection.configuration, latest_knowledge=True,
-                connection_snapshot=self.harness.connections.snapshot)
-            connection_snapshots = self.harness.connections.snapshot(selection.configuration.connection_ids,
-                tools_enabled=selection.configuration.presented_tools != [],
-                allow_unready=bool(selection.configuration.input_policy and selection.configuration.input_policy.tool_loading == "when_needed"))
-            shortcuts = resolve_shortcuts(request.shortcut_ids)
-            excluded = set(selection.configuration.input_policy.excluded_sources) if selection.configuration.input_policy else set()
-            shortcuts = [item for item in shortcuts if f"task:{item['id']}" not in excluded]
-            settings = freeze_settings(self.manager, selection.configuration)
-            deployment = self.manager.store.get_deployment(selection.configuration.deployment_id or "")
-            if not selection.configuration.profile_id and selection.configuration.inherit_deployment_settings is not False and deployment and deployment.profile_id:
-                selection = selection.model_copy(update={"configuration": selection.configuration.model_copy(update={"profile_id": deployment.profile_id})})
-                selected.profile_id = deployment.profile_id
-            frozen = FrozenExecutionSelection(selection=selection, settings=settings,
-                shortcuts=shortcuts, helper_snapshots=helpers, connection_snapshots=connection_snapshots,
-                intended_config=self._prepared_config(selected, request), request_fingerprint=fingerprint,
-                conversation_overrides=selected.setup_overrides, cleared_fields=list(selected.setup_cleared_fields))
-            if shortcuts:
-                from workbench_backend.agents.setup_schemas import InstructionLayer
-                frozen.selection.instruction_layers.extend(InstructionLayer(name=f"Task: {item['name']}", source_id=f"{item['id']}:{item['version']}", content=item["prompt"]) for item in shortcuts)
-            if request.project_file_refs:
-                from workbench_backend.agents.setup_schemas import InstructionLayer
-                paths = [path for path in dict.fromkeys(request.project_file_refs) if f"project_file:{path}" not in excluded]
-                if paths and not selected.project_id:
-                    raise ChatError("Choose a project before adding project files.", code="project_context_required", status_code=409)
-                tools = selection.configuration.presented_tools
-                if paths and tools is not None and "read_file" not in tools:
-                    raise ChatError("Enable project file reading in this agent to use selected files.", code="context_file_tool_required", status_code=409)
-                if paths:
-                    frozen.selection.instruction_layers.append(InstructionLayer(name="Selected project files", source_id=selected.project_id,
-                        content="The user selected these authorized project-relative files as context:\n" + "\n".join(paths)))
-            frozen.selection.input_sources.extend(self._context_input_sources(selected, request,
-                selection.configuration.input_policy))
-            if persist and request.input_message_id:
-                current.accepted_inputs[request.input_message_id] = frozen
-                self.store.put(current)
+            existing = self._matching_admitted_input(current, request, fingerprint, persist=persist)
+            if existing is not None:
+                return existing
+            selected, selection, frozen, shortcuts, excluded = self._freeze_admission_selection(
+                current, request, fingerprint, editable_snapshot=editable_snapshot, replace_overrides=replace_overrides)
+            self._attach_admission_inputs(frozen, selected, request, selection, shortcuts, excluded)
+            self._persist_admitted_input(current, request, frozen, persist=persist)
             return frozen
+
+    def _matching_admitted_input(
+        self, current: ChatConversation, request: ChatStartRequest, fingerprint: str, *, persist: bool,
+    ) -> FrozenExecutionSelection | None:
+        if request.input_message_id and persist:
+            existing = current.accepted_inputs.get(request.input_message_id)
+            if existing is not None:
+                if existing.request_fingerprint != fingerprint:
+                    raise ChatError("This input identity belongs to different accepted work.", code="submission_identity_conflict", status_code=409)
+                return existing
+        return None
+
+    def _freeze_admission_selection(
+        self, current: ChatConversation, request: ChatStartRequest, fingerprint: str, *,
+        editable_snapshot: FrozenExecutionSelection | None, replace_overrides: bool,
+    ) -> tuple[ChatConversation, ResolvedSetupSelection, FrozenExecutionSelection, list, set[str]]:
+        selected = current.model_copy(deep=True)
+        if replace_overrides:
+            selected.setup_overrides = SetupConfiguration()
+            selected.setup_cleared_fields = []
+        elif editable_snapshot is not None and editable_snapshot.conversation_overrides is not None:
+            selected.setup_overrides = editable_snapshot.conversation_overrides.model_copy(deep=True)
+            selected.setup_cleared_fields = list(editable_snapshot.cleared_fields)
+        selection = self._apply_start_configuration(selected, request, prepare_model=False, read_only=True)
+        if selection is None:
+            selection = self._setups().resolve(project_id=selected.project_id,
+                overrides=SetupConfiguration.model_validate({key: value for key, value in self._prepared_config(selected, request).items() if key in SetupConfiguration.model_fields}),
+                latest_knowledge=True, read_only=True)
+            for key, value in selection.configuration.model_dump(exclude_none=True).items():
+                if key in type(selected).model_fields:
+                    if key == "review":
+                        value = ReviewConfiguration.model_validate(value)
+                    elif key == "input_policy":
+                        value = AgentInputPolicy.model_validate(value)
+                    setattr(selected, key, value)
+        self._validate_selected_context(selected, request, selection.configuration)
+        helpers = freeze_helpers(self._setups(), selection.configuration.helper_agent_ids or [],
+            project_id=selected.project_id, parent_configuration=selection.configuration, latest_knowledge=True,
+            connection_snapshot=self.harness.connections.snapshot)
+        connection_snapshots = self.harness.connections.snapshot(selection.configuration.connection_ids,
+            tools_enabled=selection.configuration.presented_tools != [],
+            allow_unready=bool(selection.configuration.input_policy and selection.configuration.input_policy.tool_loading == "when_needed"))
+        shortcuts = resolve_shortcuts(request.shortcut_ids)
+        excluded = set(selection.configuration.input_policy.excluded_sources) if selection.configuration.input_policy else set()
+        shortcuts = [item for item in shortcuts if f"task:{item['id']}" not in excluded]
+        settings = freeze_settings(self.manager, selection.configuration)
+        deployment = self.manager.store.get_deployment(selection.configuration.deployment_id or "")
+        if not selection.configuration.profile_id and selection.configuration.inherit_deployment_settings is not False and deployment and deployment.profile_id:
+            selection = selection.model_copy(update={"configuration": selection.configuration.model_copy(update={"profile_id": deployment.profile_id})})
+            selected.profile_id = deployment.profile_id
+        frozen = FrozenExecutionSelection(selection=selection, settings=settings,
+            shortcuts=shortcuts, helper_snapshots=helpers, connection_snapshots=connection_snapshots,
+            intended_config=self._prepared_config(selected, request), request_fingerprint=fingerprint,
+            conversation_overrides=selected.setup_overrides, cleared_fields=list(selected.setup_cleared_fields))
+        return selected, selection, frozen, shortcuts, excluded
+
+    def _attach_admission_inputs(
+        self, frozen: FrozenExecutionSelection, selected: ChatConversation, request: ChatStartRequest,
+        selection: ResolvedSetupSelection, shortcuts: list, excluded: set[str],
+    ) -> None:
+        if shortcuts:
+            from workbench_backend.agents.setup_schemas import InstructionLayer
+            frozen.selection.instruction_layers.extend(InstructionLayer(name=f"Task: {item['name']}", source_id=f"{item['id']}:{item['version']}", content=item["prompt"]) for item in shortcuts)
+        if request.project_file_refs:
+            from workbench_backend.agents.setup_schemas import InstructionLayer
+            paths = [path for path in dict.fromkeys(request.project_file_refs) if f"project_file:{path}" not in excluded]
+            if paths and not selected.project_id:
+                raise ChatError("Choose a project before adding project files.", code="project_context_required", status_code=409)
+            tools = selection.configuration.presented_tools
+            if paths and tools is not None and "read_file" not in tools:
+                raise ChatError("Enable project file reading in this agent to use selected files.", code="context_file_tool_required", status_code=409)
+            if paths:
+                frozen.selection.instruction_layers.append(InstructionLayer(name="Selected project files", source_id=selected.project_id,
+                    content="The user selected these authorized project-relative files as context:\n" + "\n".join(paths)))
+        frozen.selection.input_sources.extend(self._context_input_sources(selected, request,
+            selection.configuration.input_policy))
+
+    def _persist_admitted_input(
+        self, current: ChatConversation, request: ChatStartRequest, frozen: FrozenExecutionSelection, *, persist: bool,
+    ) -> None:
+        if persist and request.input_message_id:
+            current.accepted_inputs[request.input_message_id] = frozen
+            self.store.put(current)
 
     @staticmethod
     def _request_fingerprint(request: ChatStartRequest) -> str:
@@ -2370,6 +2494,31 @@ class ChatService:
         )
 
     def _view(self, conversation: ChatConversation, *, persist: bool = False) -> ChatConversationView:
+        conversation, current, events = self._view_current_run(conversation, persist=persist)
+        thread_id = conversation.thread_id or ""
+        deploy_health = self._view_deploy_health(conversation, current)
+        conversation = self._view_queue_progress(conversation)
+        return ChatConversationView(
+            **conversation.model_dump(),
+            display_title=_display_title(conversation),
+            current_run=current,
+            events=events,
+            pending_cancel_input_ids=self.app_store.pending_chat_submission_cancels(conversation.id),
+            continuity=ChatContinuity(
+                conversation_id=conversation.id,
+                thread_id=thread_id,
+                run_ids=list(conversation.run_ids),
+                current_run_id=conversation.current_run_id,
+            ),
+            deploy_health=deploy_health,
+            filesystem_tools_available=bool(conversation.project_path),
+            shell_tools_available=bool(conversation.project_path),
+            enabled_tools=enabled_for_project(bool(conversation.project_path)),
+        )
+
+    def _view_current_run(
+        self, conversation: ChatConversation, *, persist: bool,
+    ) -> tuple[ChatConversation, AgentRun | None, list[dict[str, object]]]:
         current: AgentRun | None = None
         events: list[dict[str, object]] = []
         current_run_id = conversation.current_run_id
@@ -2392,14 +2541,16 @@ class ChatService:
                                 current = None
                             if current is not None:
                                 events = [event.model_dump(mode="json") for event in current.events]
-        thread_id = conversation.thread_id or ""
+        return conversation, current, events
+
+    def _view_deploy_health(self, conversation: ChatConversation, current: AgentRun | None) -> ChatDeployHealth:
         try:
             deployment = self.manager.get_deployment(conversation.deployment_id)
-            deploy_health = report_chat_deploy_health(deployment, current)
+            return report_chat_deploy_health(deployment, current)
         except ManagerError as exc:
             if exc.code != "deployment_missing":
                 raise
-            deploy_health = ChatDeployHealth(
+            return ChatDeployHealth(
                 deployment_id=conversation.deployment_id,
                 deployment_status="missing",
                 healthy=False,
@@ -2410,6 +2561,8 @@ class ChatService:
                 ),
                 detail="The bound deployment record was not found.",
             )
+
+    def _view_queue_progress(self, conversation: ChatConversation) -> ChatConversation:
         if conversation.project_path and any(item.status == "queued" for item in conversation.queue):
             conversation = conversation.model_copy(deep=True)
             blocker = self.harness.project_blocker(conversation.project_path)
@@ -2432,23 +2585,7 @@ class ChatService:
                 item.waiting_run_id = blocker["run_id"] if blocker else None
                 item.waiting_thread_id = blocker["thread_id"] if blocker else None
                 item.waiting_owner_title = owner_title
-        return ChatConversationView(
-            **conversation.model_dump(),
-            display_title=_display_title(conversation),
-            current_run=current,
-            events=events,
-            pending_cancel_input_ids=self.app_store.pending_chat_submission_cancels(conversation.id),
-            continuity=ChatContinuity(
-                conversation_id=conversation.id,
-                thread_id=thread_id,
-                run_ids=list(conversation.run_ids),
-                current_run_id=conversation.current_run_id,
-            ),
-            deploy_health=deploy_health,
-            filesystem_tools_available=bool(conversation.project_path),
-            shell_tools_available=bool(conversation.project_path),
-            enabled_tools=enabled_for_project(bool(conversation.project_path)),
-        )
+        return conversation
 
     def _reconcile_terminal_assistant(
         self,
