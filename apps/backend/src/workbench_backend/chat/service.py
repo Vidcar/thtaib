@@ -55,7 +55,6 @@ from workbench_backend.knowledge.schemas import KnowledgeRefs
 from workbench_backend.knowledge.service import KnowledgeService
 from workbench_backend.lab.service import LabService
 from workbench_backend.paths import WorkbenchPaths
-from workbench_backend.state.checkpointer import checkpoint_history
 from workbench_backend.state.migrate import open_application_store
 from workbench_backend.state.store import ApplicationStore
 
@@ -2649,23 +2648,8 @@ class ChatService:
         return updated or conversation, run.status.value
 
     def _update_branch_head(self, conversation: ChatConversation, run: AgentRun) -> ChatConversation:
-        checkpoint_id = self._latest_retained_checkpoint_id(run)
-        if not checkpoint_id or conversation.branch_head_checkpoint_id == checkpoint_id:
-            return conversation
-        updated = conversation.model_copy(deep=True)
-        updated.branch_head_checkpoint_id = checkpoint_id
-        updated.updated_at = utc_now()
-        return self.store.put(updated)
-
-    def _latest_retained_checkpoint_id(self, run: AgentRun) -> str | None:
-        retained = set(run.checkpoint_ids)
-        if not run.thread_id or not retained:
-            return None
-        for saved in checkpoint_history(self.manager.paths.checkpoints_db, {"configurable": {"thread_id": run.thread_id, "checkpoint_ns": ""}}):
-            ident = saved.config["configurable"]["checkpoint_id"]
-            if ident in retained:
-                return ident
-        return None
+        from workbench_backend.chat.branches import update_branch_head
+        return update_branch_head(self.store, conversation, run, self.manager.paths.checkpoints_db)
 
     def _pause_queue(self, conversation: ChatConversation, reason: str) -> ChatConversation:
         if not any(item.status == "queued" for item in conversation.queue):

@@ -417,3 +417,26 @@ def _contains_assistant_answer(value: Any) -> bool:
 
 def _assistant_answer_count(messages: list[Any]) -> int:
     return sum(1 for message in messages if _contains_assistant_answer(message))
+
+
+def update_branch_head(store, conversation, run, checkpoints_db):
+    """Record the newest retained checkpoint as this conversation's branch head."""
+
+    checkpoint_id = latest_retained_checkpoint_id(checkpoints_db, run)
+    if not checkpoint_id or conversation.branch_head_checkpoint_id == checkpoint_id:
+        return conversation
+    updated = conversation.model_copy(deep=True)
+    updated.branch_head_checkpoint_id = checkpoint_id
+    updated.updated_at = utc_now()
+    return store.put(updated)
+
+
+def latest_retained_checkpoint_id(checkpoints_db, run) -> str | None:
+    retained = set(run.checkpoint_ids)
+    if not run.thread_id or not retained:
+        return None
+    for saved in checkpoint_history(checkpoints_db, {"configurable": {"thread_id": run.thread_id, "checkpoint_ns": ""}}):
+        ident = saved.config["configurable"]["checkpoint_id"]
+        if ident in retained:
+            return ident
+    return None
