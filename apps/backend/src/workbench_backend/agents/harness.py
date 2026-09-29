@@ -40,7 +40,7 @@ from workbench_backend.agents.evidence import build_completion
 from workbench_backend.agents.context import ContextObservation, SummaryDispatchModel, observe_context, observe_payload, token_counter_for_model, validate_retained_messages
 from workbench_backend.agents.tool_outcomes import reconcile_effects, failure_for_run, result_outcome
 from workbench_backend.agents.harness_backend import build_run_backend, is_reserved_framework_path, harness_scratch_root, canonical_root, roots_overlap
-from workbench_backend.agents.project_admission import holds_project, root_runs
+from workbench_backend.agents.project_admission import holds_project, project_blocker_locked, root_runs
 from workbench_backend.agents.harness_profile import ensure_ordinary_chat_profile
 from workbench_backend.agents.memory_skills import (
     KnowledgeMaterializePlan,
@@ -363,24 +363,12 @@ class HarnessService:
         with self._lock:
             self._start_cancel_guards.pop((thread_id, input_message_id), None)
 
-    def _project_blocker_locked(self, project_path: str) -> dict[str, Any] | None:
-        for token, (path, owner_thread) in self._project_admissions.items():
-            if owner_thread != threading.get_ident() and roots_overlap(project_path, path):
-                return {"run_id": None, "thread_id": None, "task": "Starting another task", "project_path": path, "uncertain": False}
-        stored = {item.id: item for item in self.store.list_run_lifecycle()}
-        stored.update(self._runs)
-        for run in root_runs(list(stored.values())):
-            if run.project_path and holds_project(run) and roots_overlap(project_path, run.project_path):
-                return {"run_id": run.id, "thread_id": run.thread_id, "task": run.task[:160],
-                        "project_path": run.project_path, "uncertain": not is_run_lifecycle_live(run.status)}
-        return None
-
     def project_blocker(self, project_path: str | None) -> dict[str, Any] | None:
         self._reconcile_startup_once()
         if not project_path:
             return None
         with self._lock:
-            return self._project_blocker_locked(project_path)
+            return project_blocker_locked(self._project_admissions, self.store, self._runs, project_path)
 
     @contextmanager
     def project_admission(self, project_path: str | None):
@@ -391,7 +379,7 @@ class HarnessService:
             return
         token = new_id("admission")
         with self._lock:
-            blocker = self._project_blocker_locked(project_path)
+            blocker = project_blocker_locked(self._project_admissions, self.store, self._runs, project_path)
             if blocker is not None:
                 raise HarnessError("Another task owns this project. Wait for it to finish or resolve its unconfirmed effects before starting this task.",
                     code="project_busy", status_code=409, details=blocker)
