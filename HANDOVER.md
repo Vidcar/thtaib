@@ -1,6 +1,6 @@
 # Current handover
 
-Updated 2026-09-29. Chat branch-head updates now live in `chat/branches.py`. `update_branch_head` writes the newest retained checkpoint onto the conversation, and `latest_retained_checkpoint_id` reads that checkpoint. ChatService still calls it when a turn finishes. Deep Agents `create_deep_agent` is unchanged. No OpenSpec edit.
+Updated 2026-09-29. Chat branch-head updates now live in `chat/branches.py`. `update_branch_head` writes the newest retained checkpoint onto the conversation, and `latest_retained_checkpoint_id` reads that checkpoint. ChatService still calls it when a turn finishes. Deep Agents `create_deep_agent` is unchanged. No OpenSpec edit. This branch-head move is pull request #203.
 
 Checks for this move: backend `uv run python -m tests.run` (1235 tests, 1 skip) and `uv run python -m tests.run --tier integration --durations 10` (213 tests, 3 skips). `tests.test_chat_branches` and `test_terminal_reconciliation_updates_branch_head_checkpoint` passed first. Desktop files did not change. The running app was left as it was: port 9222 stayed closed, no second Electron was started, and the live backend was not restarted. No weights were downloaded or deleted.
 
