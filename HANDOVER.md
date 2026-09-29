@@ -1,6 +1,6 @@
 # Current handover
 
-Updated 2026-09-29. `startup-catalogue` implementation and validation are complete on `codex/startup-catalogue` (base `3cd3fee`); PR/merge is the remaining delivery step. Archived record: [tasks](openspec/changes/archive/2026-09-29-startup-catalogue/tasks.md).
+Updated 2026-09-29. `startup-catalogue` is complete in [PR #208](https://github.com/Vidcar/thtaib/pull/208), delivery branch `codex/startup-catalogue` (base `3cd3fee`). Archived record: [tasks](openspec/changes/archive/2026-09-29-startup-catalogue/tasks.md). No implementation work remains for this bounded change.
 
 Each sidebar list now owns readiness/error for its current selection. Failures remain visible and retry at 1/2/4/8 seconds, capped at eight, until success or disposal. Empty copy needs a successful response. Selection/unmount cancels timers; late results cannot overwrite replacements. Chat refresh bypasses obsolete shared requests. Lightweight reads, saved transcripts, token maintenance and passive no-model-start paths remain intact.
 
