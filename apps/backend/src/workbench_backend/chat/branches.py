@@ -82,116 +82,132 @@ class ChatBranches:
                 else self._checkpoint(conversation, run, request.mode)
             )
             source_run = run if request.mode in {"continue", "regenerate"} or index == 0 else chat.harness.get_run_operational(conversation.run_ids[index - 1])
-            branch = conversation.model_copy(deep=True)
-            branch.id = new_id("chat")
-            branch.thread_id = new_id("thread")
-            label = "branch" if request.mode == "continue" else ("regenerate" if request.mode == "regenerate" else "retry")
-            branch.title = f"{conversation.title or 'Chat'} — {label}"
-            branch.source_conversation_id = conversation.id
-            branch.source_run_id = run.id
-            branch.source_checkpoint_id = source_checkpoint
-            branch.branch_head_checkpoint_id = source_checkpoint
-            branch.current_run_id = None
-            branch.archived = False
-            branch.archived_at = None
-            branch.queue = []
-            branch.created_at = branch.updated_at = utc_now()
-            kept = set(conversation.run_ids[:index + (1 if request.mode in {"continue", "regenerate"} else 0)])
-            branch.run_ids = [ident for ident in conversation.run_ids if ident in kept]
-            branch.transcript = [
-                message for message in conversation.transcript
-                if message.run_id in kept and not (request.mode == "regenerate" and message.run_id == run.id and message.role == "assistant")
-            ]
-            branch.deployment_id = run.deployment_id
-            branch.profile_id = run.profile_id
-            branch.memory_version_refs = list(run.memory_version_refs)
-            branch.document_asset_ids = list(run.retained_asset_ids)
-            branch.skill_version_refs = list(run.skill_version_refs)
-            branch.protected_instruction_version_refs = list(run.protected_instruction_version_refs)
-            branch.embedding_deployment_id = run.embedding_deployment_id
-            branch.retrieval_project_paths = [] if run.project_path else list(run.retrieval_project_paths)
-            branch.draft = None if request.mode in {"continue", "regenerate"} else ChatDraft(
-                content=request.edited_task if request.mode == "edit" else run.task,
-                content_blocks=[block.model_dump(mode="json") for block in run.content_blocks] if run.content_blocks else None,
-                intended_config={"deployment_id": run.deployment_id, "profile_id": run.profile_id,
-                    "presented_tools": list(run.presented_tools),
-                    "per_request_overrides": dict(run.effective_setup.bags.per_request.requested) if run.effective_setup else {}},
-                updated_at=utc_now())
-            workspace = None
-            destination = None
-            if run.project_path:
-                snapshot_id = run.final_snapshot_id if request.mode in {"continue", "regenerate"} else run.starting_snapshot_id
-                manifest = SnapshotManifest.model_validate_json((chat.manager.paths.snapshots / snapshot_id / "manifest.json").read_text(encoding="utf-8"))
-                workspace_id = new_id("ws")
-                destination = chat.manager.paths.workspaces / workspace_id
-                workspace = LabWorkspace(id=workspace_id, display_name=branch.title, path=str(destination),
-                    origin="restored", parent_workspace_id=run.workspace_id, snapshot_id=manifest.id, created_at=utc_now())
-                branch.workspace_id = workspace.id
-                branch.project_path = workspace.path
+            branch = self._branch_from_turn(conversation, run, request, source_checkpoint, index)
+            workspace, destination, manifest = self._branch_workspace(chat, branch, run, request)
             try:
                 if source_checkpoint:
                     clone_terminal_checkpoint(
                         chat.manager.paths.checkpoints_db, source_run.thread_id, source_checkpoint, branch.thread_id,
                         include_tip_writes=request.mode != "regenerate",
                     )
-
                 if workspace is not None:
                     restore_snapshot_tree(Path(manifest.tree_path), destination, included_files=manifest.included_files)
                     chat.lab.store.put_workspace(workspace)
                 saved = chat.store.put(branch)
-                # A branch inherits only documents available to its selected
-                # source turn; a new session id alone grants no source access.
-                inherited_assets = dict.fromkeys([*branch.document_asset_ids,
-                    *(asset_id for message in branch.transcript for asset_id in message.attachment_ids)])
-                for asset_id in inherited_assets:
-                    chat.assets._load_content(asset_id, session_id=conversation.id, project_path=conversation.project_path)
-                    chat.assets.store.add_consumer(asset_id, kind="session", consumer_id=branch.id, recorded_at=utc_now())
+                self._inherit_branch_assets(chat, conversation, branch)
                 if request.mode == "regenerate":
-                    accepted = self._find_existing_regeneration_run(run.id, branch.thread_id)
-                    if accepted is None:
-                        accepted = chat.harness.start(
-                            AgentStartRequest(
-                                deployment_id=branch.deployment_id,
-                                task=run.task,
-                                input_message_id=run.input_message_id,
-                                content_blocks=run.content_blocks,
-                                output_schema=run.output_schema,
-                                presented_tools=[],
-                                approval_mode=branch.approval_mode,
-                                system_prompt=run.system_prompt,
-                                workspace_id=branch.workspace_id,
-                                project_path=branch.project_path,
-                                profile_id=branch.profile_id,
-                                inherit_deployment_settings=branch.inherit_deployment_settings,
-                                per_request_overrides=(run.effective_setup.bags.per_request.requested if run.effective_setup else {}),
-                                source_surface="chat",
-                                thread_id=branch.thread_id,
-                                resume_checkpoint_id=source_checkpoint,
-                                parent_run_id=run.id,
-                                memory_version_refs=branch.memory_version_refs,
-                                skill_version_refs=branch.skill_version_refs,
-                                protected_instruction_version_refs=branch.protected_instruction_version_refs,
-                                embedding_deployment_id=branch.embedding_deployment_id,
-                                retrieval_project_paths=list(branch.retrieval_project_paths),
-                            )
-                        )
-                    saved = saved.model_copy(deep=True)
-                    saved.current_run_id = accepted.id
-                    if accepted.id not in saved.run_ids:
-                        saved.run_ids.append(accepted.id)
-                    saved.updated_at = utc_now()
-                    saved = chat.store.put(saved)
+                    saved = self._accept_regeneration(chat, saved, branch, run, source_checkpoint)
             except Exception:
                 accepted = self._find_existing_regeneration_run(run.id, branch.thread_id) if request.mode == "regenerate" else None
                 if accepted is None:
-                    _delete_branch_conversation(chat, branch.id)
-                    delete_checkpoint_thread(chat.manager.paths.checkpoints_db, branch.thread_id)
-                    if workspace is not None:
-                        chat.lab.store.delete_workspace_record(workspace.id)
-                    if destination is not None and destination.is_relative_to(chat.manager.paths.workspaces.resolve()) and destination.is_dir():
-                        shutil.rmtree(destination)
+                    self._discard_branch(chat, branch, workspace, destination)
                 raise
             return chat._view(saved)
+
+    def _branch_from_turn(self, conversation, run, request, source_checkpoint, index):
+        branch = conversation.model_copy(deep=True)
+        branch.id = new_id("chat")
+        branch.thread_id = new_id("thread")
+        label = "branch" if request.mode == "continue" else ("regenerate" if request.mode == "regenerate" else "retry")
+        branch.title = f"{conversation.title or 'Chat'} — {label}"
+        branch.source_conversation_id = conversation.id
+        branch.source_run_id = run.id
+        branch.source_checkpoint_id = source_checkpoint
+        branch.branch_head_checkpoint_id = source_checkpoint
+        branch.current_run_id = None
+        branch.archived = False
+        branch.archived_at = None
+        branch.queue = []
+        branch.created_at = branch.updated_at = utc_now()
+        kept = set(conversation.run_ids[:index + (1 if request.mode in {"continue", "regenerate"} else 0)])
+        branch.run_ids = [ident for ident in conversation.run_ids if ident in kept]
+        branch.transcript = [
+            message for message in conversation.transcript
+            if message.run_id in kept and not (request.mode == "regenerate" and message.run_id == run.id and message.role == "assistant")
+        ]
+        branch.deployment_id = run.deployment_id
+        branch.profile_id = run.profile_id
+        branch.memory_version_refs = list(run.memory_version_refs)
+        branch.document_asset_ids = list(run.retained_asset_ids)
+        branch.skill_version_refs = list(run.skill_version_refs)
+        branch.protected_instruction_version_refs = list(run.protected_instruction_version_refs)
+        branch.embedding_deployment_id = run.embedding_deployment_id
+        branch.retrieval_project_paths = [] if run.project_path else list(run.retrieval_project_paths)
+        branch.draft = None if request.mode in {"continue", "regenerate"} else ChatDraft(
+            content=request.edited_task if request.mode == "edit" else run.task,
+            content_blocks=[block.model_dump(mode="json") for block in run.content_blocks] if run.content_blocks else None,
+            intended_config={"deployment_id": run.deployment_id, "profile_id": run.profile_id,
+                "presented_tools": list(run.presented_tools),
+                "per_request_overrides": dict(run.effective_setup.bags.per_request.requested) if run.effective_setup else {}},
+            updated_at=utc_now())
+        return branch
+
+    def _branch_workspace(self, chat, branch, run, request):
+        if not run.project_path:
+            return None, None, None
+        snapshot_id = run.final_snapshot_id if request.mode in {"continue", "regenerate"} else run.starting_snapshot_id
+        manifest = SnapshotManifest.model_validate_json((chat.manager.paths.snapshots / snapshot_id / "manifest.json").read_text(encoding="utf-8"))
+        workspace_id = new_id("ws")
+        destination = chat.manager.paths.workspaces / workspace_id
+        workspace = LabWorkspace(id=workspace_id, display_name=branch.title, path=str(destination),
+            origin="restored", parent_workspace_id=run.workspace_id, snapshot_id=manifest.id, created_at=utc_now())
+        branch.workspace_id = workspace.id
+        branch.project_path = workspace.path
+        return workspace, destination, manifest
+
+    def _inherit_branch_assets(self, chat, conversation, branch) -> None:
+        # A branch inherits only documents available to its selected
+        # source turn; a new session id alone grants no source access.
+        inherited_assets = dict.fromkeys([*branch.document_asset_ids,
+            *(asset_id for message in branch.transcript for asset_id in message.attachment_ids)])
+        for asset_id in inherited_assets:
+            chat.assets._load_content(asset_id, session_id=conversation.id, project_path=conversation.project_path)
+            chat.assets.store.add_consumer(asset_id, kind="session", consumer_id=branch.id, recorded_at=utc_now())
+
+    def _accept_regeneration(self, chat, saved, branch, run, source_checkpoint):
+        accepted = self._find_existing_regeneration_run(run.id, branch.thread_id)
+        if accepted is None:
+            accepted = chat.harness.start(self._regeneration_request(branch, run, source_checkpoint))
+        saved = saved.model_copy(deep=True)
+        saved.current_run_id = accepted.id
+        if accepted.id not in saved.run_ids:
+            saved.run_ids.append(accepted.id)
+        saved.updated_at = utc_now()
+        return chat.store.put(saved)
+
+    def _regeneration_request(self, branch, run, source_checkpoint) -> AgentStartRequest:
+        return AgentStartRequest(
+            deployment_id=branch.deployment_id,
+            task=run.task,
+            input_message_id=run.input_message_id,
+            content_blocks=run.content_blocks,
+            output_schema=run.output_schema,
+            presented_tools=[],
+            approval_mode=branch.approval_mode,
+            system_prompt=run.system_prompt,
+            workspace_id=branch.workspace_id,
+            project_path=branch.project_path,
+            profile_id=branch.profile_id,
+            inherit_deployment_settings=branch.inherit_deployment_settings,
+            per_request_overrides=(run.effective_setup.bags.per_request.requested if run.effective_setup else {}),
+            source_surface="chat",
+            thread_id=branch.thread_id,
+            resume_checkpoint_id=source_checkpoint,
+            parent_run_id=run.id,
+            memory_version_refs=branch.memory_version_refs,
+            skill_version_refs=branch.skill_version_refs,
+            protected_instruction_version_refs=branch.protected_instruction_version_refs,
+            embedding_deployment_id=branch.embedding_deployment_id,
+            retrieval_project_paths=list(branch.retrieval_project_paths),
+        )
+
+    def _discard_branch(self, chat, branch, workspace, destination) -> None:
+        _delete_branch_conversation(chat, branch.id)
+        delete_checkpoint_thread(chat.manager.paths.checkpoints_db, branch.thread_id)
+        if workspace is not None:
+            chat.lab.store.delete_workspace_record(workspace.id)
+        if destination is not None and destination.is_relative_to(chat.manager.paths.workspaces.resolve()) and destination.is_dir():
+            shutil.rmtree(destination)
 
     def _find_existing_regeneration_run(self, source_run_id: str, branch_thread_id: str):
         for candidate in self.chat.harness.list_runs_operational():

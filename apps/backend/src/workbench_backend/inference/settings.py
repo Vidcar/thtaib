@@ -444,93 +444,74 @@ def normalize_startup_enum(key: str, value: Any) -> str | None:
     return None
 
 
+def _store_normalized(cleaned: dict[str, Any], invalid: list[str], key: str, normalized: Any) -> None:
+    if normalized is None:
+        invalid.append(key)
+        cleaned.pop(key, None)
+        return
+    cleaned[key] = normalized
+
+
+def _normalize_chat_template_kwargs(value: Any) -> str | None:
+    normalized = normalize_json_object_string(value)
+    if normalized is None:
+        return None
+    kwargs = json.loads(normalized)
+    if any(key in kwargs and not isinstance(kwargs[key], bool) for key in ("enable_thinking", "preserve_reasoning", "preserve_thinking")):
+        return None
+    if "reasoning_effort" in kwargs and normalize_string(kwargs["reasoning_effort"]) is None:
+        return None
+    return normalized
+
+
+# ctx_size "auto" is omitted from the saved bag. It is not an invalid value.
+_OMIT_STARTUP_VALUE = object()
+
+
+def _normalize_startup_int(key: str, value: Any) -> Any:
+    if key == "ctx_size" and isinstance(value, str) and value.strip().lower() == "auto":
+        return _OMIT_STARTUP_VALUE
+    normalized = normalize_int(value, allow_negative=key in {"reasoning_budget", "threads", "threads_batch", "parallel", "spec_draft_threads", "spec_draft_threads_batch"})
+    if key == "port" and normalized is not None and not 1 <= normalized <= 65535:
+        return None
+    if key in {"threads", "threads_batch", "parallel", "spec_draft_threads", "spec_draft_threads_batch", "reasoning_budget"} and normalized is not None and normalized < -1:
+        return None
+    if key in {"parallel", "batch_size"} and normalized == 0:
+        return None
+    return normalized
+
+
 def normalize_startup_requested(requested: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     """Normalise startup values. Invalid values become unsupported."""
     cleaned = {key: value for key, value in requested.items() if value is not None}
     invalid: list[str] = []
     for key in STARTUP_ENUMS:
-        if key not in cleaned:
-            continue
-        normalized = normalize_startup_enum(key, cleaned[key])
-        if normalized is None:
-            invalid.append(key)
-            del cleaned[key]
-        else:
-            cleaned[key] = normalized
+        if key in cleaned:
+            _store_normalized(cleaned, invalid, key, normalize_startup_enum(key, cleaned[key]))
     for key in STARTUP_BOOL_FLAGS:
-        if key not in cleaned:
-            continue
-        normalized = normalize_bool(cleaned[key])
-        if normalized is None:
-            invalid.append(key)
-            del cleaned[key]
-        else:
-            cleaned[key] = normalized
+        if key in cleaned:
+            _store_normalized(cleaned, invalid, key, normalize_bool(cleaned[key]))
     for key in STARTUP_INTS:
         if key not in cleaned:
             continue
-        if key == "ctx_size" and isinstance(cleaned[key], str) and cleaned[key].strip().lower() == "auto":
+        normalized = _normalize_startup_int(key, cleaned[key])
+        if normalized is _OMIT_STARTUP_VALUE:
             cleaned.pop(key)
             continue
-        normalized = normalize_int(cleaned[key], allow_negative=key in {"reasoning_budget", "threads", "threads_batch", "parallel", "spec_draft_threads", "spec_draft_threads_batch"})
-        if key == "port" and normalized is not None and not 1 <= normalized <= 65535:
-            normalized = None
-        if key in {"threads", "threads_batch", "parallel", "spec_draft_threads", "spec_draft_threads_batch", "reasoning_budget"} and normalized is not None and normalized < -1:
-            normalized = None
-        if key in {"parallel", "batch_size"} and normalized == 0:
-            normalized = None
-        if normalized is None:
-            invalid.append(key)
-            del cleaned[key]
-        else:
-            cleaned[key] = normalized
+        _store_normalized(cleaned, invalid, key, normalized)
     for key in STARTUP_GPU_LAYERS:
-        if key not in cleaned:
-            continue
-        normalized = normalize_gpu_layers(cleaned[key])
-        if normalized is None:
-            invalid.append(key)
-            del cleaned[key]
-        else:
-            cleaned[key] = normalized
+        if key in cleaned:
+            _store_normalized(cleaned, invalid, key, normalize_gpu_layers(cleaned[key]))
     for key in STARTUP_FLOATS:
-        if key not in cleaned:
-            continue
-        normalized = normalize_probability(cleaned[key])
-        if normalized is None:
-            invalid.append(key)
-            del cleaned[key]
-        else:
-            cleaned[key] = normalized
+        if key in cleaned:
+            _store_normalized(cleaned, invalid, key, normalize_probability(cleaned[key]))
     if "chat_template_kwargs" in cleaned:
-        normalized = normalize_json_object_string(cleaned["chat_template_kwargs"])
-        if normalized is not None:
-            kwargs = json.loads(normalized)
-            if any(key in kwargs and not isinstance(kwargs[key], bool) for key in ("enable_thinking", "preserve_reasoning", "preserve_thinking")):
-                normalized = None
-            if "reasoning_effort" in kwargs and normalize_string(kwargs["reasoning_effort"]) is None:
-                normalized = None
-        if normalized is None:
-            invalid.append("chat_template_kwargs")
-            del cleaned["chat_template_kwargs"]
-        else:
-            cleaned["chat_template_kwargs"] = normalized
+        _store_normalized(cleaned, invalid, "chat_template_kwargs", _normalize_chat_template_kwargs(cleaned["chat_template_kwargs"]))
     if "spec_type" in cleaned:
-        normalized = normalize_spec_type(cleaned["spec_type"])
-        if normalized is None:
-            invalid.append("spec_type")
-            del cleaned["spec_type"]
-        else:
-            cleaned["spec_type"] = normalized
+        _store_normalized(cleaned, invalid, "spec_type", normalize_spec_type(cleaned["spec_type"]))
     for key in STARTUP_STRINGS:
-        if key not in cleaned:
-            continue
-        normalized = normalize_string(cleaned[key])
-        if normalized is None:
-            invalid.append(key)
-            del cleaned[key]
-        else:
-            cleaned[key] = normalized
+        if key in cleaned:
+            _store_normalized(cleaned, invalid, key, normalize_string(cleaned[key]))
     if cleaned.get("flash_attn") == "off" and str(cleaned.get("cache_type_v", "f16")).startswith(("q", "iq")):
         invalid.append("cache_type_v")
         cleaned.pop("cache_type_v", None)
@@ -659,6 +640,59 @@ def normalize_probability(value: Any) -> float | None:
     return parsed
 
 
+def _logit_weight(raw: Any) -> float | bool | None:
+    return False if raw is False else normalize_float(raw)
+
+
+def _normalize_logit_bias(value: Any) -> dict[str, float | bool] | list[list[Any]] | None:
+    if isinstance(value, dict):
+        normalized = {str(token): weight for token, raw in value.items() if (weight := _logit_weight(raw)) is not None}
+        if len(normalized) != len(value):
+            return None
+        return normalized
+    if isinstance(value, list):
+        normalized_pairs: list[list[Any]] = []
+        for pair in value:
+            if (not isinstance(pair, list) or len(pair) != 2 or isinstance(pair[0], bool)
+                    or not isinstance(pair[0], int | str) or isinstance(pair[0], int) and pair[0] < 0
+                    or (weight := _logit_weight(pair[1])) is None):
+                return None
+            normalized_pairs.append([pair[0], weight])
+        return normalized_pairs
+    return None
+
+
+def _normalize_per_request_value(key: str, value: Any, facts: dict[str, Any]) -> Any:
+    domain = facts.get("domain")
+    if key == "seed":
+        normalized = normalize_seed(value)
+    elif domain == "integer":
+        normalized = normalize_int(value, allow_negative=facts.get("minimum", 0) < 0)
+    elif domain == "number":
+        normalized = normalize_float(value)
+    elif key == "reasoning":
+        normalized = normalize_on_off_auto(value, allow_auto=True)
+    elif key == "reasoning_preserve":
+        normalized = normalize_bool(value)
+    elif key == "reasoning_format":
+        normalized = normalize_startup_enum(key, value)
+    elif key == "reasoning_effort":
+        normalized = normalize_string(value)
+    elif key == "reasoning_budget_message":
+        normalized = value if isinstance(value, str) else None
+    elif key == "stop":
+        normalized = value if isinstance(value, str) or (isinstance(value, list) and all(isinstance(item, str) for item in value)) else None
+    elif key == "logit_bias":
+        normalized = _normalize_logit_bias(value)
+    else:
+        normalized = value
+    if isinstance(normalized, int | float) and not isinstance(normalized, bool):
+        if (facts.get("minimum") is not None and normalized < facts["minimum"]
+                or facts.get("maximum") is not None and normalized > facts["maximum"]):
+            return None
+    return normalized
+
+
 def normalize_per_request_requested(requested: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     """Validate request values once for save, preview and every dispatch path."""
     cleaned = {key: value for key, value in requested.items() if value is not None}
@@ -667,53 +701,7 @@ def normalize_per_request_requested(requested: dict[str, Any]) -> tuple[dict[str
         if key not in PER_REQUEST_KEYS:
             continue
         facts = CONTROL_FACTS.get(key, {})
-        domain = facts.get("domain")
-        normalized = value
-        if key == "seed":
-            normalized = normalize_seed(value)
-        elif domain == "integer":
-            normalized = normalize_int(value, allow_negative=facts.get("minimum", 0) < 0)
-        elif domain == "number":
-            normalized = normalize_float(value)
-        elif key == "reasoning":
-            normalized = normalize_on_off_auto(value, allow_auto=True)
-        elif key == "reasoning_preserve":
-            normalized = normalize_bool(value)
-        elif key == "reasoning_format":
-            normalized = normalize_startup_enum(key, value)
-        elif key == "reasoning_effort":
-            normalized = normalize_string(value)
-        elif key == "reasoning_budget_message":
-            normalized = value if isinstance(value, str) else None
-        elif key == "stop":
-            normalized = value if isinstance(value, str) or (isinstance(value, list) and all(isinstance(item, str) for item in value)) else None
-        elif key == "logit_bias":
-            def bias(raw):
-                return False if raw is False else normalize_float(raw)
-            if isinstance(value, dict):
-                normalized = {str(token): weight for token, raw in value.items() if (weight := bias(raw)) is not None}
-                if len(normalized) != len(value):
-                    normalized = None
-            elif isinstance(value, list):
-                normalized = []
-                for pair in value:
-                    if (not isinstance(pair, list) or len(pair) != 2 or isinstance(pair[0], bool)
-                            or not isinstance(pair[0], int | str) or isinstance(pair[0], int) and pair[0] < 0
-                            or (weight := bias(pair[1])) is None):
-                        normalized = None
-                        break
-                    normalized.append([pair[0], weight])
-            else:
-                normalized = None
-        if isinstance(normalized, int | float) and not isinstance(normalized, bool):
-            if (facts.get("minimum") is not None and normalized < facts["minimum"]
-                    or facts.get("maximum") is not None and normalized > facts["maximum"]):
-                normalized = None
-        if normalized is None:
-            invalid.append(key)
-            cleaned.pop(key, None)
-        else:
-            cleaned[key] = normalized
+        _store_normalized(cleaned, invalid, key, _normalize_per_request_value(key, value, facts))
     return cleaned, invalid
 
 

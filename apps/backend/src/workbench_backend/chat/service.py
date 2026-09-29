@@ -884,14 +884,14 @@ class ChatService:
         with self.harness.project_admission(conversation.project_path):
             return self._dispatch_request_admitted(conversation, request, queue_item=queue_item, admitted_snapshot=frozen)
 
-    def _dispatch_request_admitted(
+    def _apply_dispatch_admission(
         self,
         conversation: ChatConversation,
         request: ChatStartRequest,
         *,
-        queue_item: ChatQueueItem | None = None,
-        admitted_snapshot: FrozenExecutionSelection | None = None,
-    ) -> ChatConversation:
+        queue_item: ChatQueueItem | None,
+        admitted_snapshot: FrozenExecutionSelection | None,
+    ) -> tuple[ChatConversation, FrozenExecutionSelection | None]:
         next_conversation = conversation.model_copy(deep=True)
         self._reject_session_area_change(next_conversation, request)
         frozen = admitted_snapshot or (queue_item.execution_snapshot if queue_item is not None else None)
@@ -917,13 +917,17 @@ class ChatService:
                 next_conversation.setup_overrides = frozen.conversation_overrides
                 next_conversation.setup_cleared_fields = list(frozen.cleared_fields)
             next_conversation.accepted_inputs.update(self._require(conversation.id).accepted_inputs)
-        self._preflight_start_request(next_conversation, request,
-            frozen_helpers=frozen.helper_snapshots if frozen is not None else None,
-            frozen_connections=frozen.connection_snapshots if frozen is not None else None,
-            frozen_configuration=frozen.selection.configuration if frozen is not None else None)
-        self._ensure_thread(next_conversation)
-        now = utc_now()
-        next_conversation.history_replaced = False
+        return next_conversation, frozen
+
+    def _record_dispatch_input(
+        self,
+        next_conversation: ChatConversation,
+        request: ChatStartRequest,
+        *,
+        queue_item: ChatQueueItem | None,
+        frozen: FrozenExecutionSelection | None,
+        now: str,
+    ) -> tuple[ChatConversation, str, list[object], list[str]]:
         input_message_id = self._dispatch_input_message_id(request, queue_item)
         selected_document_ids = self._selected_document_ids(next_conversation, request)
         if queue_item is None:
@@ -967,6 +971,91 @@ class ChatService:
                     item.frozen_config = dict(queue_item.intended_config) if frozen is not None else prepared_config
                     item.updated_at = now
                     break
+        return next_conversation, input_message_id, content_blocks, selected_document_ids
+
+    def _build_dispatch_start(
+        self,
+        next_conversation: ChatConversation,
+        request: ChatStartRequest,
+        *,
+        input_message_id: str,
+        content_blocks: list[object],
+        selected_document_ids: list[str],
+        frozen: FrozenExecutionSelection | None,
+    ) -> tuple[AgentStartRequest, dict[str, object]]:
+        start_request = AgentStartRequest(
+            deployment_id=next_conversation.deployment_id,
+            task=request.task.strip(),
+            input_message_id=input_message_id,
+            content_blocks=content_blocks or None,
+            retained_asset_ids=selected_document_ids,
+            output_schema=request.output_schema,
+            presented_tools=next_conversation.presented_tools,
+            input_policy=next_conversation.input_policy,
+            approval_mode=next_conversation.approval_mode,
+            work_mode=next_conversation.work_mode,
+            desktop_access=next_conversation.desktop_access,
+            helper_agent_ids=next_conversation.helper_agent_ids,
+            review=next_conversation.review,
+            model_configuration_id=next_conversation.model_configuration_id,
+            startup_overrides=next_conversation.startup_overrides,
+            system_prompt=(
+                None if next_conversation.input_policy is not None else CHAT_SYSTEM_PROMPT
+                if next_conversation.project_path
+                else CHAT_SYSTEM_PROMPT_WITHOUT_PROJECT
+            ),
+            workspace_id=next_conversation.workspace_id,
+            project_id=next_conversation.project_id,
+            agent_setup_version_id=next_conversation.agent_setup_version_id,
+            connection_ids=next_conversation.connection_ids,
+            instructions=next_conversation.setup_overrides.instructions,
+            project_path=next_conversation.project_path,
+            profile_id=next_conversation.profile_id,
+            inherit_deployment_settings=next_conversation.inherit_deployment_settings,
+            per_request_overrides=next_conversation.per_request_overrides,
+            source_surface="chat",
+            thread_id=next_conversation.thread_id,
+            memory_version_refs=next_conversation.memory_version_refs,
+            skill_version_refs=next_conversation.skill_version_refs,
+            protected_instruction_version_refs=next_conversation.protected_instruction_version_refs,
+            embedding_deployment_id=next_conversation.embedding_deployment_id,
+            retrieval_project_paths=list(next_conversation.retrieval_project_paths),
+        )
+        snapshot_kwargs: dict[str, object] = {
+            **({"instruction_snapshot": frozen.selection.instruction_layers} if frozen is not None else {}),
+            **({"helper_snapshot": frozen.helper_snapshots} if frozen is not None else {}),
+            **({"execution_snapshot": frozen} if frozen is not None else {}),
+        }
+        return start_request, snapshot_kwargs
+
+    def _dispatch_request_admitted(
+        self,
+        conversation: ChatConversation,
+        request: ChatStartRequest,
+        *,
+        queue_item: ChatQueueItem | None = None,
+        admitted_snapshot: FrozenExecutionSelection | None = None,
+    ) -> ChatConversation:
+        next_conversation, frozen = self._apply_dispatch_admission(
+            conversation,
+            request,
+            queue_item=queue_item,
+            admitted_snapshot=admitted_snapshot,
+        )
+        self._preflight_start_request(next_conversation, request,
+            frozen_helpers=frozen.helper_snapshots if frozen is not None else None,
+            frozen_connections=frozen.connection_snapshots if frozen is not None else None,
+            frozen_configuration=frozen.selection.configuration if frozen is not None else None)
+        self._ensure_thread(next_conversation)
+        now = utc_now()
+        next_conversation.history_replaced = False
+        next_conversation, input_message_id, content_blocks, selected_document_ids = self._record_dispatch_input(
+            next_conversation,
+            request,
+            queue_item=queue_item,
+            frozen=frozen,
+            now=now,
+        )
         next_conversation.updated_at = now
         next_conversation = self.store.put(next_conversation)
 
@@ -983,49 +1072,15 @@ class ChatService:
                     input_message_id,
                     cancel_event,
                 )
-                accepted = self.harness.start(
-                    AgentStartRequest(
-                        deployment_id=next_conversation.deployment_id,
-                        task=request.task.strip(),
-                        input_message_id=input_message_id,
-                        content_blocks=content_blocks or None,
-                        retained_asset_ids=selected_document_ids,
-                        output_schema=request.output_schema,
-                        presented_tools=next_conversation.presented_tools,
-                        input_policy=next_conversation.input_policy,
-                        approval_mode=next_conversation.approval_mode,
-                        work_mode=next_conversation.work_mode,
-                        desktop_access=next_conversation.desktop_access,
-                        helper_agent_ids=next_conversation.helper_agent_ids,
-                        review=next_conversation.review,
-                        model_configuration_id=next_conversation.model_configuration_id,
-                        startup_overrides=next_conversation.startup_overrides,
-                        system_prompt=(
-                            None if next_conversation.input_policy is not None else CHAT_SYSTEM_PROMPT
-                            if next_conversation.project_path
-                            else CHAT_SYSTEM_PROMPT_WITHOUT_PROJECT
-                        ),
-                        workspace_id=next_conversation.workspace_id,
-                        project_id=next_conversation.project_id,
-                        agent_setup_version_id=next_conversation.agent_setup_version_id,
-                        connection_ids=next_conversation.connection_ids,
-                        instructions=next_conversation.setup_overrides.instructions,
-                        project_path=next_conversation.project_path,
-                        profile_id=next_conversation.profile_id,
-                        inherit_deployment_settings=next_conversation.inherit_deployment_settings,
-                        per_request_overrides=next_conversation.per_request_overrides,
-                        source_surface="chat",
-                        thread_id=next_conversation.thread_id,
-                        memory_version_refs=next_conversation.memory_version_refs,
-                        skill_version_refs=next_conversation.skill_version_refs,
-                        protected_instruction_version_refs=next_conversation.protected_instruction_version_refs,
-                        embedding_deployment_id=next_conversation.embedding_deployment_id,
-                        retrieval_project_paths=list(next_conversation.retrieval_project_paths),
-                    ),
-                    **({"instruction_snapshot": frozen.selection.instruction_layers} if frozen is not None else {}),
-                    **({"helper_snapshot": frozen.helper_snapshots} if frozen is not None else {}),
-                    **({"execution_snapshot": frozen} if frozen is not None else {}),
+                start_request, snapshot_kwargs = self._build_dispatch_start(
+                    next_conversation,
+                    request,
+                    input_message_id=input_message_id,
+                    content_blocks=content_blocks,
+                    selected_document_ids=selected_document_ids,
+                    frozen=frozen,
                 )
+                accepted = self.harness.start(start_request, **snapshot_kwargs)
             except (HarnessError, ManagerError) as exc:
                 recovered = self._find_chat_run_by_input(next_conversation, input_message_id)
                 if recovered is not None:

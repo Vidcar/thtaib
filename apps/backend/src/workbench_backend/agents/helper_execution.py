@@ -37,23 +37,7 @@ def _saved_child_message_identities(child):
     return seen
 
 
-def _child_run(owner, parent, snapshot, call_id, payload):
-    child_id = _child_run_id(parent, snapshot, call_id)
-    existing = owner.store.get_execution_run(child_id)
-    if existing is not None:
-        return existing
-    config = snapshot.configuration
-    input_policy = config.input_policy
-    if not config.deployment_id and (config.bundle_id or config.model_configuration_id):
-        raise HarnessError(f"Helper {snapshot.name} has no saved model deployment.", code="helper_model_unavailable", status_code=409)
-    # The parent has yielded its model call while this native Deep Agents
-    # helper runs. The managed llama.cpp router may hand the sole model slot to
-    # this helper and reload the parent model for its continuation.
-    accepted = SettingsBags.model_validate(snapshot.settings_snapshot) if snapshot.settings_snapshot is not None else None
-    deployment_id = config.deployment_id or parent.deployment_id
-    require_accepted_model_identity(owner.manager.get_deployment(deployment_id), accepted)
-    deployment = owner.manager.ensure_deployment_ready(deployment_id)
-    require_accepted_model_identity(deployment, accepted)
+def _narrow_presented_tools(parent, config, input_policy):
     selected_tools = config.presented_tools if config.presented_tools is not None else parent.presented_tools
     presented = [name for name in selected_tools if name in parent.presented_tools and name != "task"]
     if input_policy is not None:
@@ -62,10 +46,18 @@ def _child_run(owner, parent, snapshot, call_id, payload):
     if work_mode == "plan":
         presented = [name for name in presented if name in PLAN_TOOLS]
     require_setup_capabilities(config, project_bound=bool(parent.project_path), presented_tools=presented)
+    return selected_tools, presented, work_mode
+
+
+def _narrow_child_access(parent, config):
     rank = {"ask": 0, "full_access": 1}
     approval = min((parent.approval_mode, config.approval_mode or parent.approval_mode), key=rank.__getitem__)
     desktop_rank = {"off": 0, "selected": 1, "all": 2}
     desktop_access = min((parent.desktop_access, config.desktop_access or parent.desktop_access), key=desktop_rank.__getitem__)
+    return approval, desktop_access
+
+
+def _select_child_connections(parent, snapshot, config, presented):
     selected_connections = [ident for ident in (config.connection_ids if config.connection_ids is not None else parent.connection_ids) if ident in parent.connection_ids]
     if snapshot.connection_snapshots is None:
         connection_snapshots = [item.model_copy(deep=True) for item in parent.connection_snapshots if item.id in selected_connections]
@@ -81,6 +73,10 @@ def _child_run(owner, parent, snapshot, call_id, payload):
                     raise HarnessError("The accepted helper connection differs from its parent's frozen selection. Start a new message with current connections.",
                         code="connection_changed", status_code=409)
                 connection_snapshots.append(original.model_copy(deep=True))
+    return selected_connections, connection_snapshots
+
+
+def _resolve_child_setup(owner, parent, snapshot, config, input_policy, deployment, presented, work_mode, approval, selected_connections, connection_snapshots):
     request = AgentStartRequest(deployment_id=deployment.id, task="Helper task",
         memory_version_refs=list(config.memory_version_refs or []), skill_version_refs=list(config.skill_version_refs or []),
         input_policy=input_policy,
@@ -124,6 +120,10 @@ def _child_run(owner, parent, snapshot, call_id, payload):
                 connection_ids=[item.id for item in connection_snapshots], project_bound=bool(parent.project_path))
             if error is not None:
                 raise error
+    return presented, setup, refs
+
+
+def _child_run_record(parent, snapshot, config, payload, child_id, deployment, input_policy, presented, selected_tools, approval, work_mode, desktop_access, setup, refs, selected_connections, connection_snapshots):
     messages = payload.get("messages", [])
     task = str(getattr(messages[-1], "content", "Delegated task")) if messages else "Delegated task"
     model_content_blocks = [memory_selection_notice(refs.memory_version_refs)] if input_policy is None else []
@@ -158,6 +158,30 @@ def _child_run(owner, parent, snapshot, call_id, payload):
         status=AgentRunStatus.running, created_at=now, updated_at=now, finished_at=None,
         pending_interrupt=None, error=None, stop_reason=None))
     return child
+
+
+def _child_run(owner, parent, snapshot, call_id, payload):
+    child_id = _child_run_id(parent, snapshot, call_id)
+    existing = owner.store.get_execution_run(child_id)
+    if existing is not None:
+        return existing
+    config = snapshot.configuration
+    input_policy = config.input_policy
+    if not config.deployment_id and (config.bundle_id or config.model_configuration_id):
+        raise HarnessError(f"Helper {snapshot.name} has no saved model deployment.", code="helper_model_unavailable", status_code=409)
+    # The parent has yielded its model call while this native Deep Agents
+    # helper runs. The managed llama.cpp router may hand the sole model slot to
+    # this helper and reload the parent model for its continuation.
+    accepted = SettingsBags.model_validate(snapshot.settings_snapshot) if snapshot.settings_snapshot is not None else None
+    deployment_id = config.deployment_id or parent.deployment_id
+    require_accepted_model_identity(owner.manager.get_deployment(deployment_id), accepted)
+    deployment = owner.manager.ensure_deployment_ready(deployment_id)
+    require_accepted_model_identity(deployment, accepted)
+    selected_tools, presented, work_mode = _narrow_presented_tools(parent, config, input_policy)
+    approval, desktop_access = _narrow_child_access(parent, config)
+    selected_connections, connection_snapshots = _select_child_connections(parent, snapshot, config, presented)
+    presented, setup, refs = _resolve_child_setup(owner, parent, snapshot, config, input_policy, deployment, presented, work_mode, approval, selected_connections, connection_snapshots)
+    return _child_run_record(parent, snapshot, config, payload, child_id, deployment, input_policy, presented, selected_tools, approval, work_mode, desktop_access, setup, refs, selected_connections, connection_snapshots)
 
 
 def compiled_helpers(owner, parent, control, *, inspection_only=False):
