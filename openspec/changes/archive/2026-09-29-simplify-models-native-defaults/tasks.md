@@ -27,4 +27,4 @@
 - [x] 5.1 Generate shared contracts and run relevant backend/default/integration, desktop build, OpenSpec and whitespace checks; record actual results and resolve failures.
 - [x] 5.2 Validate real Qwen native arguments/requests, full-context compaction/counting, memory edits/failures and continuously open responsive desktop; retain isolated evidence and report limitations truthfully.
 - [x] 5.3 Reset authorised disposable everyday model settings, safely reload and verify the restored example through the launcher/source/build/health/tool chain without deleting weights or unrelated state.
-- [ ] 5.4 Review and deliver the complete change through Git/PR/merge, synchronise/archive affected OpenSpec contracts and refresh HANDOVER.md with final usable state and checks.
+- [x] 5.4 Review and deliver the complete change through Git/PR/merge, synchronise/archive affected OpenSpec contracts and refresh HANDOVER.md with final usable state and checks.
