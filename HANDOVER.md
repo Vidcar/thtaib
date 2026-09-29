@@ -1,6 +1,6 @@
 # Current handover
 
-Updated 2026-09-29. The project-busy lookup now lives in `project_admission.py`. `project_blocker_locked` takes the admission table, the run store, and the in-memory runs. HarnessService still reserves and releases the project, and Chat still calls `project_blocker`. Deep Agents `create_deep_agent` is unchanged. No OpenSpec edit.
+Updated 2026-09-29. The project-busy lookup now lives in `project_admission.py`. `project_blocker_locked` takes the admission table, the run store, and the in-memory runs. HarnessService still reserves and releases the project, and Chat still calls `project_blocker`. Deep Agents `create_deep_agent` is unchanged. No OpenSpec edit. This lookup move is pull request #202.
 
 Checks for this move: backend `uv run python -m tests.run` (1235 tests, 1 skip) and `uv run python -m tests.run --tier integration --durations 10` (213 tests, 3 skips). Desktop files did not change. The running app was left as it was: port 9222 stayed closed, no second Electron was started, and the live backend was not restarted. No weights were downloaded or deleted.
 
