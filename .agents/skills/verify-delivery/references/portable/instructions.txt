@@ -1,0 +1,16 @@
+# Tiny settings example
+
+This repository uses Python's standard library. From the repository root, run
+`python -m unittest discover -s src -p test_*.py` to check it. Read relevant source
+and tests; use repository engineering skills when they fit the task. Do not use
+commands or product contracts from another repository.
+
+The service owns saved values. Controls own the accepted local selection. After
+a successful save, the selection must reflect the saved value even if a later
+status refresh fails. Show refresh failures separately and retry observation
+without saving again. A rejected save must preserve the prior selection.
+
+Draft records intentionally retain editor notes. Execution records omit notes;
+both may share selected values without sharing the complete payload shape.
+
+Tests alone do not prove an existing window runs the newly built artifact.
