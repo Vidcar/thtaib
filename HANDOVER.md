@@ -1,6 +1,6 @@
 # Current handover
 
-Updated 2026-09-29. Checkpoint reads and the screenshot check now live with compile. `graph_checkpoint_snapshot`, the inert checkpoint model, and the screenshot evidence helpers are in `harness_compile.py`. HarnessService still sequences a checkpoint read and still exposes `screenshot_reading_available` and `prepare_screenshot_reading`, so Chat branches, admission, and the existing patches call the same methods. Deep Agents `create_deep_agent` is unchanged. No OpenSpec edit.
+Updated 2026-09-29. Checkpoint reads and the screenshot check now live with compile. `graph_checkpoint_snapshot`, the inert checkpoint model, and the screenshot evidence helpers are in `harness_compile.py`. HarnessService still sequences a checkpoint read and still exposes `screenshot_reading_available` and `prepare_screenshot_reading`, so Chat branches, admission, and the existing patches call the same methods. Deep Agents `create_deep_agent` is unchanged. No OpenSpec edit. This compile move is pull request #200.
 
 Checks for this move: backend `uv run python -m tests.run` (1235 tests, 1 skip) and `uv run python -m tests.run --tier integration --durations 10` (213 tests, 3 skips). Desktop files did not change. The running app was left as it was: port 9222 stayed closed, no second Electron was started, and the live backend was not restarted over the Ready model. No weights were downloaded or deleted.
 
