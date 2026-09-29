@@ -14,6 +14,7 @@ const calls = [];
 let scope = { scope: "off", selected_window: null, stale: false };
 let sessionState = "active";
 let failWindows = false;
+let failRuntime = false;
 const previousFetch = globalThis.fetch;
 globalThis.fetch = async (url, init = {}) => {
   const pathValue = new URL(String(url)).pathname;
@@ -22,7 +23,7 @@ globalThis.fetch = async (url, init = {}) => {
   if (pathValue === "/v1/browser/runtime") value = { supported: true, installed: true };
   else if (pathValue === "/v1/browser/sessions/thread_1") value = { thread_id: "thread_1", state: sessionState };
   else if (pathValue === "/v1/browser/sessions/thread_1/reset") value = { thread_id: "thread_1", state: "closed" };
-  else if (pathValue === "/v1/window-testing/runtime") value = { available: true, installed: true };
+  else if (pathValue === "/v1/window-testing/runtime") { if (failRuntime) throw new Error("Window runtime unavailable"); value = { available: true, installed: true }; }
   else if (pathValue === "/v1/window-testing/windows") { if (failWindows) throw new Error("Window list unavailable"); value = [{ hwnd: 42, title: "Fixture", process_name: "fixture.exe", process_id: 1234 }]; }
   else if (pathValue === "/v1/window-testing/conversations/chat_1/scope") {
     if (init.method === "PUT") { const body = JSON.parse(init.body); scope = { scope: body.scope, selected_window: body.hwnd ? { hwnd: body.hwnd, title: "Fixture", process_name: "fixture.exe", process_id: 1234 } : null, stale: false }; }
@@ -99,6 +100,9 @@ try {
   const lostBaseline = readinessChanges;
   await act(async () => { for (const poll of intervalCallbacks.values()) poll(); await Promise.resolve(); });
   assert.equal(readinessChanges, lostBaseline, "unchanged runtime polls do not churn readiness");
+  failRuntime = true;
+  await act(async () => { for (const poll of intervalCallbacks.values()) poll(); await Promise.resolve(); await Promise.resolve(); });
+  assert.match(text(renderer.toJSON()), /Window runtime unavailable/, "a later runtime poll shows its failure");
   await act(async () => renderer.unmount());
   assert.equal(intervalCallbacks.size, 0, "closing the tool menu stops runtime polling");
   console.log("Visual testing grants and scoped setup checks passed.");

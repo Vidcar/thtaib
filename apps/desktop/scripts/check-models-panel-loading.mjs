@@ -835,13 +835,14 @@ function capabilityMark(renderer, label) {
 }
 
 async function checkSavedCapabilities(ModelCapabilities) {
-  let renderer, requests = 0, posts = 0, fail = false;
+  let renderer, requests = 0, posts = 0, fail = false, failPost = false;
   const evidence = { id: "saved", capability: "tools", status: "passed", fingerprint: "setup-one", tested_at: "2026-09-22T10:00:00Z", observations: {}, note: "A real tool call completed." };
   let report = { current_fingerprint: "setup-one", current_support: { tools: "passed" }, evidence: [evidence], image_setup: { selected_projector: null, projector_present: null, runtime_support: false } };
   globalThis.fetch = async (_url, init = {}) => {
     requests++;
     if (fail) throw new Error("Service unavailable");
     if (init.method === "POST") {
+      if (failPost) throw new Error("Capability check failed");
       posts++;
       report = { ...report, current_support: { ...report.current_support, tools: "passed" }, evidence: [...report.evidence, { ...evidence, fingerprint: report.current_fingerprint }] };
       return jsonResponse(report.evidence.at(-1));
@@ -863,6 +864,16 @@ async function checkSavedCapabilities(ModelCapabilities) {
     });
     assert.equal(posts, 1, "a healthy model runs an untested check once");
     assert.equal(capabilityMark(renderer, "Tools").props["data-state"], "passed", "the completed check replaces the unchecked icon");
+    failPost = true;
+    report = { ...report, current_fingerprint: "setup-three", current_support: { tools: "untested" } };
+    await act(async () => {
+      renderer.update(React.createElement(ModelCapabilities, { deployment: { ...deployment }, busy: "", action }));
+      for (let attempt = 0; attempt < 6; attempt++) await tick();
+    });
+    assert.match(textOf(renderer.root), /Capability check failed/, "a thrown capability check stays visible");
+    assert.equal(capabilityMark(renderer, "Tools").props["data-state"], "untested", "a thrown check does not invent a pass");
+    assert.equal(textOf(renderer.root).includes("Saved results unavailable"), false, "a probe failure is separate from a missing saved report");
+    failPost = false;
     fail = true;
     await act(async () => { renderer.update(React.createElement(ModelCapabilities, { deployment: { ...deployment }, busy: "", action })); await tick(); });
     assert.ok(textOf(renderer.root).includes("Saved results unavailable"), "fetch failures are visible instead of silently showing a pass");

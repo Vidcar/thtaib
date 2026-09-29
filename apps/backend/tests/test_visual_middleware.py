@@ -21,6 +21,7 @@ from langchain.agents.middleware import ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.errors import GraphInterrupt
 
 from tests.scripted_model import ScriptedChatModel
 from workbench_backend.agents.effective_setup import EffectiveSetup
@@ -422,3 +423,40 @@ class VisualMiddlewareTests(unittest.TestCase):
         self.assert_tool_image_response(delivered.messages[-1], encoded)
         self.assertEqual(delivered.messages[-2], shot, "Original page text and capture reference remain paired")
         self.assertEqual(captures.reads, ["/" + path.removeprefix("/captures/")])
+
+    def test_rejected_screenshot_check_keeps_page_text_and_withholds_pixels(self) -> None:
+        encoded, _, captures, middleware, _, _ = self._setup()
+        path = "/captures/asset_" + "a" * 32 + ".png"
+        captures.image_inputs_allowed = True
+        shot = ToolMessage(
+            content=f"Screenshot captured from https://news.example.\n- heading \"City news\"\nSaved screenshot: {path}",
+            name="browser_take_screenshot", tool_call_id="shot",
+        )
+        request = ModelRequest(model=ScriptedChatModel([AIMessage(content="ok")]),
+            messages=[
+                AIMessage(content="", tool_calls=[{"name": "browser_take_screenshot", "args": {}, "id": "shot"}]),
+                shot,
+            ], tools=[], model_settings={})
+
+        middleware.tool_image_preparer = lambda: False
+        rejected = middleware._with_current_tool_images(request)
+        self.assertEqual(rejected.messages[-1].content, f"<tool_response>\n{CANNOT_READ_IMAGE}\n</tool_response>")
+        self.assertFalse(any(block["type"] == "image" for message in rejected.messages for block in message.content_blocks))
+        self.assertNotIn(encoded, json.dumps([message.model_dump() for message in rejected.messages]))
+        self.assertEqual(captures.reads, [])
+
+        def explode() -> bool:
+            raise RuntimeError("probe transport failed")
+
+        middleware.tool_image_preparer = explode
+        failed = middleware._with_current_tool_images(request)
+        self.assertIn(CANNOT_READ_IMAGE, failed.messages[-1].content)
+        self.assertFalse(any(block["type"] == "image" for message in failed.messages for block in message.content_blocks))
+        self.assertEqual(captures.reads, [])
+
+        def interrupt() -> bool:
+            raise GraphInterrupt(())
+
+        middleware.tool_image_preparer = interrupt
+        with self.assertRaises(GraphInterrupt):
+            middleware._with_current_tool_images(request)

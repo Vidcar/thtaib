@@ -55,12 +55,13 @@ export function ModelCapabilities({ deployment, busy, action }: {
 }) {
   const [report, setReport] = useState<SchemaCapabilityProbeReport | null>(null);
   const [error, setError] = useState("");
+  const [probeError, setProbeError] = useState("");
   const [loading, setLoading] = useState(true);
   const [retesting, setRetesting] = useState("");
   const generation = useRef(0);
   async function load() {
     const current = ++generation.current;
-    setLoading(true); setError("");
+    setLoading(true); setError(""); setProbeError("");
     try {
       const result = await api.capabilityStatus(deployment.id);
       if (generation.current === current) setReport(result);
@@ -83,9 +84,11 @@ export function ModelCapabilities({ deployment, busy, action }: {
     const current = generation.current;
     let cancelled = false;
     void (async () => {
+      const probeFailures: string[] = [];
       for (const capability of pending) {
         if (cancelled || generation.current !== current) return;
-        try { await api.capabilityProbe(deployment.id, capability); } catch { /* The refreshed report keeps the outcome. */ }
+        try { await api.capabilityProbe(deployment.id, capability); }
+        catch (failure) { probeFailures.push(errorMessage(failure)); }
       }
       if (cancelled || generation.current !== current) return;
       try {
@@ -94,6 +97,7 @@ export function ModelCapabilities({ deployment, busy, action }: {
       } catch (failure) {
         if (!cancelled && generation.current === current) { setReport(null); setError(errorMessage(failure)); }
       }
+      if (!cancelled && generation.current === current && probeFailures.length) setProbeError(probeFailures.join(" "));
     })();
     return () => { cancelled = true; };
   }, [report, error, available, deployment]);
@@ -138,6 +142,7 @@ export function ModelCapabilities({ deployment, busy, action }: {
     <div className="setting-title"><span>Capabilities</span><Help label="Verified capabilities">Checks follow the model weights and vision file. Context, cache, GPU placement and MTP do not clear a saved check.</Help></div>
     {loading && !report && !error ? <p className="hint" role="status">Loading saved checks…</p> : null}
     {error ? <Notice tone="warn" role="status" action={<button type="button" disabled={Boolean(busy)} onClick={() => void load()}>Retry results</button>}>Saved results unavailable. {error}</Notice> : null}
+    {probeError ? <Notice tone="warn" role="status">{probeError}</Notice> : null}
     <CapabilityIconRow items={items} />
     {!available ? <p className="hint">Load this model to run a check.</p> : null}
   </section>;

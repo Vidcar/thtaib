@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 
 import type { BrowserWindow, Event as ElectronEvent, IpcMainInvokeEvent, OnBeforeSendHeadersListenerDetails } from "electron";
-import { shell, session } from "electron";
+import { dialog, shell, session } from "electron";
 
 import { WORKBENCH_BACKEND_ORIGIN, WORKBENCH_LOCAL_TOKEN_HEADER } from "./localTrust";
 
@@ -138,7 +138,10 @@ function openValidatedExternal(rawUrl: string, appUrl: string): void {
     return;
   }
   setImmediate(() => {
-    void shell.openExternal(parsed.toString()).catch(() => undefined);
+    void shell.openExternal(parsed.toString()).catch((error: unknown) => {
+      const detail = error instanceof Error ? error.message : "The link could not open.";
+      dialog.showErrorBox("Link could not open", detail);
+    });
   });
 }
 

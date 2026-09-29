@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+import logging
 import threading
 import hashlib
 import json
@@ -47,6 +48,7 @@ from workbench_backend.chat.store import ChatStore
 from workbench_backend.chat.shortcuts import resolve_shortcuts
 from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
 from workbench_backend.errors import ChatError, HarnessError, ManagerError
+from workbench_backend.state.backup import BackupError
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.knowledge.schemas import KnowledgeRefs
@@ -56,6 +58,8 @@ from workbench_backend.paths import WorkbenchPaths
 from workbench_backend.state.checkpointer import checkpoint_history
 from workbench_backend.state.migrate import open_application_store
 from workbench_backend.state.store import ApplicationStore
+
+log = logging.getLogger(__name__)
 
 CHAT_SYSTEM_PROMPT = (
     "You are the Local AI Workbench Chat surface. Complete the user's task "
@@ -364,8 +368,13 @@ class ChatService:
             message="Choose a model for this chat.", action="Choose a model")]
 
     def _readiness_history_issues(self, code: str) -> list[ChatReadinessIssue]:
-        return [ChatReadinessIssue(code=code,
-            message="Conversation compatibility will be checked when the model loads.")]
+        if code == "history_unverified":
+            message = "Saved conversation history could not be checked. You can still send, and compatibility is not confirmed."
+        elif code == "model_capabilities_unverified":
+            message = "This model's capabilities are not confirmed. You can still send."
+        else:
+            message = "Conversation compatibility will be checked when the model loads."
+        return [ChatReadinessIssue(code=code, message=message)]
 
     def _readiness_for_selection(
         self, conversation: ChatConversation, request: ChatReadinessRequest, candidate: ChatStartRequest,
@@ -826,16 +835,40 @@ class ChatService:
         dispatched = 0
         candidates.sort(key=lambda item: (item.queue[0].admission_order, item.queue[0].created_at, item.queue[0].id) if item.queue else (float("inf"), "", item.id))
         for item in candidates:
-            with self.store.conversation_lock(item.id):
-                conversation = self._require(item.id) if conversation_id is not None else self.store.get(item.id)
-                if conversation is None:
-                    continue
-                before_run_ids = set(conversation.run_ids)
-                conversation = self._recover_dispatching_queue(conversation)
-                updated = self._dispatch_next_queued(conversation)
-                if set(updated.run_ids) != before_run_ids:
-                    dispatched += 1
+            try:
+                with self.store.conversation_lock(item.id):
+                    conversation = self._require(item.id) if conversation_id is not None else self.store.get(item.id)
+                    if conversation is None:
+                        continue
+                    before_run_ids = set(conversation.run_ids)
+                    conversation = self._recover_dispatching_queue(conversation)
+                    updated = self._dispatch_next_queued(conversation)
+                    if set(updated.run_ids) != before_run_ids:
+                        dispatched += 1
+            except BackupError:
+                raise
+            except Exception as exc:
+                log.exception("Queued chat %s could not start", item.id)
+                self._record_unexpected_dispatch_failure(item.id, exc)
         return dispatched
+
+    def _record_unexpected_dispatch_failure(self, conversation_id: str, exc: Exception) -> None:
+        """Pause one queued turn when dispatch fails for a reason the queue does not already name."""
+
+        with self.store.conversation_lock(conversation_id):
+            conversation = self.store.get(conversation_id)
+            if conversation is None or not conversation.queue or conversation.queue[0].status != "queued":
+                return
+            updated = conversation.model_copy(deep=True)
+            head = updated.queue[0]
+            now = utc_now()
+            head.status = "paused"
+            head.pause_reason = "failed"
+            head.pause_error_code = "dispatch_failed"
+            head.pause_error = f"This queued message could not start. {exc}"
+            head.updated_at = now
+            updated.updated_at = now
+            self.store.put(updated)
 
     def cancel(
         self,

@@ -95,7 +95,7 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   useEffect(() => {
     if (bundles || !pickerOpen) return;
     let cancelled = false;
-    void api.bundles().then(items => { if (!cancelled) setFallbackBundles(items); }).catch(() => {});
+    void api.bundles().then(items => { if (!cancelled) setFallbackBundles(items); }).catch((failure: unknown) => { if (!cancelled) setError(errorMessage(failure)); });
     return () => { cancelled = true; };
   }, [bundles, pickerOpen]);
   const availableBundles = bundles ?? fallbackBundles;
@@ -204,11 +204,22 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
       if (loadAttempted) await latest.current.onReloaded();
       if (owner.current.generation === currentGeneration) close();
     } catch (failure) {
+      const parts = [errorMessage(failure)];
       if (owner.current.generation === currentGeneration && loadAttempted) {
-        await Promise.resolve(latest.current.onApply(candidate)).catch(() => {});
+        try {
+          await latest.current.onApply(candidate);
+        } catch (applyFailure) {
+          parts.push(errorMessage(applyFailure));
+        }
       }
-      if (owner.current.generation === currentGeneration) setError((loadAttempted ? (profile?.display_name ?? connected?.display_name ?? "Model") + " · " : "") + errorMessage(failure));
-      if (loadAttempted) await latest.current.onReloaded().catch(() => {});
+      if (loadAttempted) {
+        try {
+          await latest.current.onReloaded();
+        } catch (refreshFailure) {
+          parts.push(errorMessage(refreshFailure));
+        }
+      }
+      if (owner.current.generation === currentGeneration) setError((loadAttempted ? (profile?.display_name ?? connected?.display_name ?? "Model") + " · " : "") + parts.filter(Boolean).join(" "));
     } finally { pending.current = false; setBusy(false); setLoadingChoice(""); }
   }
 
@@ -246,8 +257,13 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
       contextDrafts.current.set(ownerKey, { context, base: context });
       close();
     } catch (failure) {
-      if (owner.current.generation === currentGeneration) setError(errorMessage(failure));
-      await latest.current.onReloaded().catch(() => {});
+      const parts = [errorMessage(failure)];
+      try {
+        await latest.current.onReloaded();
+      } catch (refreshFailure) {
+        parts.push(errorMessage(refreshFailure));
+      }
+      if (owner.current.generation === currentGeneration) setError(parts.filter(Boolean).join(" "));
     }
     finally { pending.current = false; setBusy(false); }
   }

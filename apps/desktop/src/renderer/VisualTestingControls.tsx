@@ -76,10 +76,11 @@ export function VisualTestingControls({ conversationId, threadId, browserEnabled
   useEffect(() => {
     let stale = false;
     const timer = window.setInterval(() => {
-      if (!windowsOnly) void api.browserRuntime().then(value => { if (!stale) setBrowserRuntime(value); }).catch(() => {});
-      void api.windowRuntime().then(value => { if (!stale) setWindowRuntime(value); }).catch(() => {});
-      if (threadId && !windowsOnly) void api.browserSession(threadId).then(value => { if (!stale) setBrowserSession(value); }).catch(() => {});
-      if (conversationId) void api.windowAccess(conversationId).then(value => { if (!stale) setWindowAccess(value); }).catch(() => {});
+      const showPollFailure = (failure: unknown) => { if (!stale) setError(errorMessage(failure)); };
+      if (!windowsOnly) void api.browserRuntime().then(value => { if (!stale) setBrowserRuntime(value); }).catch(showPollFailure);
+      void api.windowRuntime().then(value => { if (!stale) setWindowRuntime(value); }).catch(showPollFailure);
+      if (threadId && !windowsOnly) void api.browserSession(threadId).then(value => { if (!stale) setBrowserSession(value); }).catch(showPollFailure);
+      if (conversationId) void api.windowAccess(conversationId).then(value => { if (!stale) setWindowAccess(value); }).catch(showPollFailure);
     }, 5000);
     return () => { stale = true; window.clearInterval(timer); };
   }, [conversationId, threadId, windowsOnly]);

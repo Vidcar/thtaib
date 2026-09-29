@@ -8,6 +8,7 @@ import asyncio
 import base64
 import binascii
 import json
+import logging
 import re
 import sys
 from collections.abc import Callable
@@ -56,6 +57,8 @@ from workbench_backend.knowledge.diagnostics import apply_capture_policy
 from workbench_backend.knowledge.schemas import ContextCaptureSettings
 from workbench_backend.agents.execution_policy import ExecutionControl, PLAN_TOOLS, CURRENT_TOOL_CALL
 from workbench_backend.state.preferences import tool_authorization_metadata
+
+log = logging.getLogger(__name__)
 
 
 class WorkbenchHarnessMiddleware(AgentMiddleware):
@@ -424,15 +427,16 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         if self.capture_backend is None or not self.run.capture_routes_enabled:
             return request
         messages = list(request.messages)
+        deny_images = False
         if self.run.presented_tools and any(isinstance(message, ToolMessage) and self._saved_screenshot(message) for message in messages) and self.tool_image_preparer is not None:
             try:
-                self.tool_image_preparer()
+                deny_images = self.tool_image_preparer() is False
             except GraphInterrupt:
                 raise
             except Exception:
-                # A check that cannot finish leaves the page text usable.
-                pass
-        return request.override(messages=self._tool_image_messages(messages, hydrate=True))
+                log.exception("Screenshot check failed; the page text stays available")
+                deny_images = True
+        return request.override(messages=self._tool_image_messages(messages, hydrate=True, deny_images=deny_images))
 
     def tool_image_messages_for_count(self, messages: list[BaseMessage]) -> list[BaseMessage]:
         """Count the actual retained images without running capability probes.
@@ -443,14 +447,14 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         return self._tool_image_messages(messages, hydrate=True, enforce_byte_limit=False)
 
     def _tool_image_messages(self, messages: list[BaseMessage], *, hydrate: bool,
-                             enforce_byte_limit: bool = True) -> list[BaseMessage]:
+                             enforce_byte_limit: bool = True, deny_images: bool = False) -> list[BaseMessage]:
         if self.capture_backend is None or not self.run.capture_routes_enabled:
             return messages
         projected: list[BaseMessage] = []
         content: list[dict[str, Any]] = []
         image_bytes = 0
         denied = False
-        allowed = self._images_allowed_now()
+        allowed = False if deny_images else self._images_allowed_now()
         batch_calls: set[str] = set()
 
         def finish_batch() -> None:

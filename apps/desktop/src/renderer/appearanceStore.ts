@@ -150,13 +150,9 @@ function applyAppearanceToDocument(file: AppearanceFile, theme: "light" | "dark"
 }
 
 async function readStoredAppearance(): Promise<unknown> {
-  try {
-    if (window.workbench?.readAppearance) return await window.workbench.readAppearance();
-    const stored = window.localStorage?.getItem(STORAGE_KEY);
-    return stored ? JSON.parse(stored) as unknown : null;
-  } catch {
-    return null;
-  }
+  if (window.workbench?.readAppearance) return await window.workbench.readAppearance();
+  const stored = window.localStorage?.getItem(STORAGE_KEY);
+  return stored ? JSON.parse(stored) as unknown : null;
 }
 
 async function persistAppearance(file: AppearanceFile): Promise<void> {

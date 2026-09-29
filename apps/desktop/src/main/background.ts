@@ -64,8 +64,9 @@ export async function installBackground(openWindow: () => void): Promise<void> {
     requireTrustedIpc(event);
     try {
       return JSON.parse(await readFile(appearanceFilePath(), "utf8")) as unknown;
-    } catch {
-      return null;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
     }
   });
   ipcMain.handle("workbench:appearance-write", async (event, payload: unknown) => {

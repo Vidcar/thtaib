@@ -4,6 +4,7 @@ import { Icon } from "./Icon";
 import { EmptyState } from "./EmptyState";
 import { HoverHelp } from "./HoverHelp";
 import { Notice } from "./Notice";
+import { errorMessage } from "./errors";
 import { packet03Api, type AttentionItem } from "./packet03Api";
 import "./packet03Panels.css";
 
@@ -130,6 +131,7 @@ interface AttentionButtonProps {
 
 export function AttentionButton({ onOpen, active = false, collapsed = false, className = "" }: AttentionButtonProps) {
   const [count, setCount] = useState(0);
+  const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -138,11 +140,10 @@ export function AttentionButton({ onOpen, active = false, collapsed = false, cla
         const items = await packet03Api.attention();
         if (!cancelled) {
           setCount(items.length);
+          setLoadError("");
         }
-      } catch {
-        if (!cancelled) {
-          setCount(0);
-        }
+      } catch (error) {
+        if (!cancelled) setLoadError(errorMessage(error));
       }
     }
     void refresh();
@@ -157,11 +158,14 @@ export function AttentionButton({ onOpen, active = false, collapsed = false, cla
     };
   }, []);
 
+  const label = loadError
+    ? `Attention could not load. ${loadError}`
+    : `Attention, ${count} item${count === 1 ? "" : "s"}`;
   return (
-    <button type="button" className={`tab packet03-attention-button${active ? " active" : ""}${collapsed ? " is-collapsed" : ""} ${className}`} onClick={onOpen} aria-current={active ? "page" : undefined} aria-label={`Attention, ${count} item${count === 1 ? "" : "s"}`} title={`Attention · ${count} item${count === 1 ? "" : "s"}`}>
+    <button type="button" className={`tab packet03-attention-button${active ? " active" : ""}${collapsed ? " is-collapsed" : ""} ${className}`} onClick={onOpen} aria-current={active ? "page" : undefined} aria-label={label} title={label}>
       <Icon name="attention" size={18} />
       {!collapsed ? <span className="nav-label">Attention</span> : null}
-      {count ? <strong className="attention-count">{count}</strong> : null}
+      {loadError ? <strong className="attention-count">!</strong> : count ? <strong className="attention-count">{count}</strong> : null}
     </button>
   );
 }
