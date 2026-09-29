@@ -63,6 +63,7 @@ export function DeploymentsPanel({
   bundlesVersion = "",
   initialBundles = EMPTY_BUNDLES,
   initialProfiles = EMPTY_PROFILES,
+  catalogueReady = true,
   onBundlesChanged,
   onSelectBundle,
   onDirtyModelsChange,
@@ -75,6 +76,7 @@ export function DeploymentsPanel({
   bundlesVersion?: string;
   initialBundles?: ModelBundle[];
   initialProfiles?: RunProfile[];
+  catalogueReady?: boolean;
   onBundlesChanged?: () => Promise<void>;
   onSelectBundle?: (id: string) => void;
   onDirtyModelsChange?: (ids: ReadonlySet<string>) => void;
@@ -141,6 +143,7 @@ export function DeploymentsPanel({
   const editorProfile = draftProfile.current?.id === profileId ? draftProfile.current : selectedProfile;
   const responseChanges = settingOverrides(selectedProfile?.bags.per_request.requested ?? {}, response);
   const selected = bundles.find(b => b.id === selectedBundleId);
+  const editorReady = catalogueReady && hydrated.current.bundle === selectedBundleId;
   const current = deployments.filter(d => d.status !== "stopped");
   const extraConnections = current.filter(d => d.scope === "connected" && current.some(other => other.scope === "managed" && other.endpoint === d.endpoint && other.health?.healthy));
   const visibleCurrent = current.filter(d => !extraConnections.includes(d));
@@ -182,7 +185,7 @@ export function DeploymentsPanel({
   // include external changes and removals; the draft still owns its authoring base.
   const setupPreview = useSetupPreview({ bundle_id: selectedBundleId || null, model_configuration_id: profileId || null,
     startup_overrides: startupChanges, per_request_overrides: responseChanges }, null, null, "conversation",
-    `${bundlesVersion}:${selectedProfile?.revision ?? 0}:${selectedRunning?.updated_at ?? ""}:${configurationRevision}`, Boolean(active && selectedBundleId && stagedStartup));
+    `${bundlesVersion}:${selectedProfile?.revision ?? 0}:${selectedRunning?.updated_at ?? ""}:${configurationRevision}`, Boolean(active && editorReady && selectedBundleId && stagedStartup));
   const modelFacts = Object.fromEntries(Object.entries(setupPreview.data?.effective_values ?? {})
     .map(([key, fact]) => [key, fact.source === "Turn overrides" && key.startsWith("per_request.") && Object.hasOwn(responseChanges, key.slice(12))
       ? { ...fact, source: "Unsaved changes" }
@@ -254,7 +257,8 @@ export function DeploymentsPanel({
   }
   useEffect(() => { if (active) void refresh().catch(error => setLoadError(errorMessage(error))); }, [bundlesVersion, active]);
   useEffect(() => {
-    if (!loaded) return;
+    // Saved records own the draft. Runtime observations may arrive much later.
+    if (!catalogueReady) return;
     const changedModel = hydrated.current.bundle !== selectedBundleId;
     const saved = (!changedModel ? selectedProfile : undefined) ?? profiles.find(item => item.id === (selectedRunning?.profile_id ?? selected?.default_configuration_id)) ?? profiles.find(item => item.bundle_id === selectedBundleId);
     const changedProfile = saved && (hydrated.current.profile !== saved.id || hydrated.current.revision !== saved.revision);
@@ -286,7 +290,7 @@ export function DeploymentsPanel({
     }
     }
   // Load existing settings once per selection; stopping a model must not erase edits.
-  }, [selectedBundleId, loaded, selectedRunning?.id, profiles.length, selectedProfile?.id, selectedProfile?.revision, selected?.default_configuration_id]);
+  }, [selectedBundleId, catalogueReady, selectedRunning?.id, profiles.length, selectedProfile?.id, selectedProfile?.revision, selected?.default_configuration_id]);
   useEffect(() => {
     if (!active || !loaded || !selectedBundleId || stagedStartupError) return;
     let cancelled = false;
@@ -343,12 +347,12 @@ export function DeploymentsPanel({
     setSettings(next); setAdvancedStartup(Object.keys(extra).length ? JSON.stringify(extra, null, 2) : "");
   }
   useEffect(() => {
-    if (!active || !loaded || !openConfigurationId || !profiles.some(profile => profile.id === openConfigurationId && profile.bundle_id === selectedBundleId)) return;
+    if (!active || !editorReady || !openConfigurationId || !profiles.some(profile => profile.id === openConfigurationId && profile.bundle_id === selectedBundleId)) return;
     const request = `${openRequest ?? 0}:${openConfigurationId}`;
     if (openedRequest.current === request) return;
     openedRequest.current = request;
     selectProfile(openConfigurationId);
-  }, [active, loaded, openConfigurationId, openRequest, selectedBundleId, profiles]);
+  }, [active, editorReady, openConfigurationId, openRequest, selectedBundleId, profiles]);
   async function action(key: string, operation: () => Promise<unknown>) {
     if (actionPending.current) return;
     actionPending.current = true;
@@ -542,7 +546,7 @@ export function DeploymentsPanel({
   </section>;
   else if (panelView === "runtime") panelContent = <>
     <h4>Selected model loads</h4>
-    {selectedCurrent.length ? <ul className="plain-list">{selectedCurrent.map(renderDeployment)}</ul> : <p className="hint">This saved setup is not loaded.</p>}
+    {selectedCurrent.length ? <ul className="plain-list">{selectedCurrent.map(renderDeployment)}</ul> : <p className="hint">{!loaded ? loadError ? "Loaded model status unavailable." : "Checking loaded models…" : "This saved setup is not loaded."}</p>}
     {otherVariants.length ? <details open><summary>Other saved setups loaded for this model</summary><ul className="plain-list">{otherVariants.map(renderDeployment)}</ul></details> : null}
     {otherCurrent.length ? <details><summary>Other loaded models</summary>{otherCurrent.map(item => <button type="button" key={item.id} onClick={() => onSelectBundle?.(item.bundle_id ?? "")}>{bundles.find(bundle => bundle.id === item.bundle_id)?.display_name ?? item.display_name}</button>)}<ul className="plain-list">{otherCurrent.map(renderDeployment)}</ul></details> : null}
     {selectedConnections.length ? <ul className="plain-list">{selectedConnections.map(renderDeployment)}</ul> : null}
@@ -566,7 +570,7 @@ export function DeploymentsPanel({
   return <section className="model-configuration">
     {loadError ? <Notice tone="error">{loadError}<button type="button" onClick={() => void refresh().catch(error => setLoadError(errorMessage(error)))}>Try again</button></Notice> : null}
 
-    {selected ? <section className="model-setup"><form id="model-settings-form" ref={formRef} className="model-settings" onSubmit={event => { event.preventDefault(); if (formRef.current?.reportValidity()) void action("save", () => saveConfiguration(creatingVariant)); }}>
+    {selected && !editorReady ? <p role="status">Loading saved setup…</p> : selected ? <section className="model-setup"><form id="model-settings-form" ref={formRef} className="model-settings" onSubmit={event => { event.preventDefault(); if (formRef.current?.reportValidity()) void action("save", () => saveConfiguration(creatingVariant)); }}>
       <header className="model-setup-head">
         <div className="model-setup-identity"><h3 className="selected-model-name">{selected.display_name}</h3><span className="model-weight-variant" title={selected.primary_path ?? modelFileLabel(selected)}>{modelFileLabel(selected)}</span>{!selected.disk_matches ? <span className="model-file-attention">Files need attention</span> : null}</div>
         <button type="button" disabled={Boolean(busy)} onClick={() => openPanel("presets")}>Model card</button>
@@ -577,7 +581,7 @@ export function DeploymentsPanel({
           {close => <div className="model-setup-actions"><button type="button" onClick={() => { close(); openPanel("files"); }}>Files &amp; model information</button><button type="button" onClick={() => { close(); openPanel("runtime"); }}>Loaded model details</button><button type="button" disabled={Boolean(busy)} onClick={() => { close(); openPanel("checks"); void action("preview", () => preview()); }}>Validate draft</button><label htmlFor="model-configuration-name">Rename setup<input id="model-configuration-name" value={configurationName} disabled={Boolean(busy)} onChange={event => { dirty.current = true; setConfigurationName(event.target.value); }} /></label><button type="button" disabled={Boolean(busy)} onClick={() => { setCreatingVariant(true); setVariantName(`${configurationName} copy`); close(); }}><Icon name="copy" size={14} />Save a copy</button>{selectedProfile && selected.default_configuration_id !== selectedProfile.id ? <button type="button" disabled={Boolean(busy)} onClick={() => { close(); void action("default", async () => { await api.setDefaultConfiguration(selectedBundleId, selectedProfile.id); await onBundlesChanged?.(); }); }}>Make model default</button> : null}<button type="button" disabled={Boolean(busy)} onClick={() => { drafts.current.delete(activeDraftKey.current); dirty.current = false; presetApplied.current = false; selectProfile(profileId); close(); }}>Revert edits</button><button type="button" disabled={Boolean(busy)} onClick={() => { close(); openPanel("setup"); }}>Manage setups</button>{selectedActive ? <button type="button" disabled={Boolean(busy)} onClick={() => { close(); void action("unload", async () => { await api.stop(selectedActive.id); await refresh(); }); }}>{busy === "unload" ? "Unloading…" : "Unload"}</button> : null}</div>}
         </MenuPopover>
         <div className="model-lifecycle-actions"><button type="button" disabled={Boolean(busy) || !profileId || !runtimeReady || !selected.disk_matches || Boolean(selectedActive && !selectedRunning)} title={dirty.current ? "Load the saved setup. Save edits first to use pending values." : "Load the saved setup using its loading settings."} onClick={() => void action("load", loadSavedSetup)}>{busy === "load" ? "Loading…" : dirty.current ? "Load saved" : "Load"}</button>{selectedActive ? <button type="button" disabled={Boolean(busy)} title="Stop this running model, restore it if a settings change failed, and start the same record." onClick={() => void action("reload", reloadRunningModel)}>{busy === "reload" ? "Reloading…" : "Reload"}</button> : null}</div>
-        <button type="button" className="text-button model-setup-readiness" aria-label="Loaded model details" onClick={() => openPanel("runtime")}><StatusBadge {...(selectedCurrent.length ? stateOf(selectedCurrent[0]) : { label: "Not loaded", tone: "neutral" as const })} /></button>
+        <button type="button" className="text-button model-setup-readiness" aria-label="Loaded model details" onClick={() => openPanel("runtime")}><StatusBadge {...(selectedCurrent.length ? stateOf(selectedCurrent[0]) : { label: !loaded ? loadError ? "Unavailable" : "Checking…" : "Not loaded", tone: "neutral" as const })} /></button>
       <div className="model-toolbar-status" role="status" data-tone={stagedStartupError || setupPreview.error || (healthPollError && !toolbarMessage) ? "error" : messageTone}>{stagedStartupError || setupPreview.error || toolbarMessage || healthPollError || (!loaded ? "Checking local engine…" : !runtimeReady ? "Set up the local engine in Settings" : "\u00a0")}</div>
       </header>
       {creatingVariant ? <CompactDialog title="Save a setup copy" labelledBy="setup-copy-title" busy={Boolean(busy)} onClose={() => setCreatingVariant(false)}><label htmlFor="model-variant-name">New setup name</label><input autoFocus id="model-variant-name" value={variantName} onChange={event => setVariantName(event.target.value)} /><button type="button" className="primary-button" disabled={Boolean(busy) || !variantName.trim()} onClick={() => void action("save", () => saveConfiguration(true))}>Save copy</button></CompactDialog> : null}

@@ -30,6 +30,7 @@ try {
   const { settingValue } = await vite.ssrLoadModule("/src/renderer/effectiveSettings.ts");
   assert.equal(settingValue(0.949999988079071), "0.95", "server float noise should not leak into the settings readout");
   await checkModelsRenderBeforeDeferredRuntimeAndConfiguration(ModelsPanel);
+  for (const pending of ["runtime", "deployments", "profiles", "profiles-failure", "runtime-failure"]) await checkInitialModelDraftOwnership(ModelsPanel, pending);
   await checkRefreshFailureKeepsModelDraft(ModelsPanel);
   await checkSavedLoadingRetainsRunningModel(DeploymentsPanel);
   await checkDraftRevisionConflicts(DeploymentsPanel);
@@ -325,6 +326,118 @@ async function checkModelsRenderBeforeDeferredRuntimeAndConfiguration(ModelsPane
     assert.equal(renderer.root.findAll(node => node.type === "label" && textOf(node).startsWith("Saved preset")).length, 0, "Models has one configuration editor instead of a second preset selection");
     await act(async () => renderer.unmount());
   } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+async function checkInitialModelDraftOwnership(ModelsPanel, pending) {
+  const originalFetch = globalThis.fetch;
+  const initial = createDeferred(), metadata = createDeferred(), background = createDeferred(), backgroundRuntime = createDeferred();
+  const bag = requested => ({ requested, applied: requested, unsupported: [], retired: [], overridden: [], unverified: [] });
+  const models = ["first", "second"].map(id => ({ ...bundle(id, `Model ${id}`), default_configuration_id: `${id}-saved` }));
+  let profiles = models.map((model, index) => ({ id: model.default_configuration_id, bundle_id: model.id, display_name: `Saved ${model.id}`, revision: 1,
+    bags: { startup: bag({ ctx_size: 8192 + index * 8192 }), per_request: bag({ temperature: index ? 0.6 : 0 }), agent: bag({}) } }));
+  let renderer, initialComplete = false, holdBackground = false, failProfiles = pending === "profiles-failure", failRuntime = pending === "runtime-failure";
+  const savedRequests = [];
+  globalThis.fetch = async (url, init = {}) => {
+    const address = String(url), body = init.body ? JSON.parse(init.body) : null;
+    if (address.endsWith("/v1/bundles")) return jsonResponse(models);
+    if (address.endsWith("/v1/profiles")) {
+      if (failProfiles) throw new Error("Initial saved setups unavailable");
+      if (!initialComplete && pending === "profiles") return initial.promise;
+      if (holdBackground) return background.promise;
+      return jsonResponse(profiles);
+    }
+    if (address.endsWith("/v1/runtime")) {
+      if (failRuntime) throw new Error("Initial engine observation unavailable");
+      if (holdBackground) return backgroundRuntime.promise;
+      return !initialComplete && pending === "runtime" ? initial.promise : jsonResponse(runtimeReady());
+    }
+    if (address.endsWith("/v1/deployments")) return !initialComplete && pending === "deployments" ? initial.promise : jsonResponse([]);
+    if (address.endsWith("/v1/runtime/models")) return jsonResponse({ max_loaded_models: 1, loaded_deployment_ids: [], loading_deployment_ids: [], router_status: "stopped" });
+    if (address.endsWith("/v1/imports")) return jsonResponse([]);
+    if (address.endsWith("/v1/paths")) return jsonResponse({ models: "D:\\Models" });
+    if (address.endsWith("/v1/models/storage")) return jsonResponse({ future_install_root: "D:\\Models", locations: [] });
+    if (address.endsWith("/projectors")) return jsonResponse({ selected_path: null, candidates: [] });
+    if (address.includes("/configuration-options")) return metadata.promise;
+    if (address.endsWith("/v1/setup-resolution")) return jsonResponse({ configuration: body.overrides, effective_values: {}, instruction_layers: [] });
+    if (address.endsWith("/v1/settings/preview")) return jsonResponse({ startup: bag(body.startup), per_request: bag(body.per_request), agent: bag(body.agent ?? {}) });
+    if (address.endsWith("/configurations")) {
+      savedRequests.push(body);
+      return { ok: false, status: 409, json: async () => ({ error: "changed elsewhere", code: "configuration_revision_conflict" }) };
+    }
+    throw new Error(`Unexpected initial ownership request: ${address}`);
+  };
+  const temperature = () => renderer.root.findAllByType("input").find(node => node.props.id === "model-response-temperature");
+  const button = label => renderer.root.findAllByType("button").find(node => textOf(node) === label);
+  const chooseModel = async id => act(async () => { renderer.root.findAllByProps({ className: "catalogue-row" }).find(node => textOf(node).includes(`Model ${id}`)).props.onClick(); await tick(); });
+  const assertDraft = () => {
+    assert.equal(temperature().props.value, 0.25, `${pending}: deferred replies retain the edited response`);
+    assert.equal(contextInput(renderer).props["data-token-value"], 12288, `${pending}: deferred replies retain the edited context`);
+    assert.equal(renderer.root.findByProps({ className: "model-edit-state" }).props["data-dirty"], true);
+  };
+  try {
+    await act(async () => { renderer = create(React.createElement(ModelsPanel), { createNodeMock: element => element.type === "form" ? { reportValidity: () => true } : null }); await tick(); });
+    assert.ok(textOf(renderer.root).includes("Model first"), "the library is usable before the authoring base arrives");
+    if (pending.startsWith("profiles")) {
+      assert.equal(Boolean(temperature()), false, "an unknown initial saved setup is not presented as an editable empty draft");
+      assert.ok(textOf(renderer.root).includes("Loading saved setup"));
+      await chooseModel("second");
+      initialComplete = true;
+      await act(async () => {
+        if (failProfiles) { failProfiles = false; button("Retry").props.onClick(); }
+        else initial.resolve(jsonResponse(profiles));
+        await tick();
+      });
+      assert.equal(temperature().props.value, 0.6, "late initial profiles hydrate the currently selected model");
+      assert.equal(contextInput(renderer).props["data-token-value"], 16384);
+      await chooseModel("first");
+    }
+    assert.ok(temperature(), "the saved authoring base is available independently from runtime checks");
+    assert.equal(temperature().props.disabled, false, "saved setups can be edited while runtime or metadata checks are pending");
+    assert.equal(temperature().props.value, 0, "editing starts from the saved authoring base");
+    assert.equal(contextInput(renderer).props["data-token-value"], 8192);
+    if (["runtime", "deployments"].includes(pending)) assert.equal(textOf(renderer.root.findByProps({ "aria-label": "Loaded model details" })), "Checking…", "unverified runtime observation cannot assert the model is not loaded");
+    await act(async () => { temperature().props.onChange({ target: { value: "0.25" } }); changeContext(renderer, 12288); });
+    assertDraft();
+    if (failRuntime) {
+      assert.equal(textOf(renderer.root.findByProps({ "aria-label": "Loaded model details" })), "Unavailable", "a failed initial observation must not claim Not loaded");
+      await act(async () => { failRuntime = false; button("Try again").props.onClick(); await tick(); });
+      assertDraft();
+    }
+    await chooseModel("second");
+    assert.equal(temperature().props.value, 0.6);
+    initialComplete = true;
+    await act(async () => { initial.resolve(jsonResponse(pending === "runtime" ? runtimeReady() : [])); await tick(); });
+    assert.equal(temperature().props.value, 0.6, "late runtime/deployment data cannot restore the previous model's editor");
+    await chooseModel("first");
+    assertDraft();
+    assert.equal(textOf(renderer.root.findByProps({ "aria-label": "Loaded model details" })), "Not loaded", "a verified empty deployment list can report not loaded");
+    const mountedInput = temperature();
+    // A background catalogue and descriptor refresh must keep the mounted editor usable.
+    holdBackground = true;
+    await act(async () => { renderer.update(React.createElement(ModelsPanel, { active: false })); await tick(); });
+    await act(async () => { renderer.update(React.createElement(ModelsPanel, { active: true })); await tick(); });
+    assert.equal(temperature(), mountedInput, "background checks preserve the field and focus target");
+    assert.equal(temperature().props.disabled, false);
+    profiles = [{ ...profiles[0], revision: 2, bags: { ...profiles[0].bags, per_request: bag({ temperature: 0.4 }) } }, profiles[1]];
+    await act(async () => { background.resolve(jsonResponse(profiles)); backgroundRuntime.reject(new Error("Background engine observation unavailable")); metadata.resolve(jsonResponse({ ...configurationOptions(), bundle_id: "first" })); await tick(); });
+    assert.ok(textOf(renderer.root).includes("Background engine observation unavailable"));
+    assert.equal(textOf(renderer.root.findByProps({ "aria-label": "Loaded model details" })), "Not loaded", "failed background checks retain the last verified observation with an error");
+    assertDraft();
+    await act(async () => { renderer.root.findByProps({ id: "model-settings-form" }).props.onSubmit({ preventDefault() {} }); await tick(); });
+    assert.equal(savedRequests.length, 1);
+    assert.equal(savedRequests[0].configuration_id, "first-saved");
+    assert.equal(savedRequests[0].expected_revision, 1, "the initial authoring revision survives all later observations");
+    assert.equal(savedRequests[0].per_request.temperature, 0.25);
+    assert.equal(savedRequests[0].startup.ctx_size, 12288);
+    assert.ok(textOf(renderer.root).includes("changed elsewhere"));
+    assertDraft();
+    await act(async () => button("Revert edits").props.onClick());
+    assert.equal(temperature().props.value, 0.4, "explicit revert adopts the latest saved setup");
+  } finally {
+    initial.resolve(jsonResponse([])); background.resolve(jsonResponse(profiles)); backgroundRuntime.resolve(jsonResponse(runtimeReady())); metadata.resolve(jsonResponse(configurationOptions()));
+    if (renderer) await act(async () => renderer.unmount());
     globalThis.fetch = originalFetch;
   }
 }

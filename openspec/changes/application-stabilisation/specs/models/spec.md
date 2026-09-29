@@ -61,3 +61,8 @@ The editor SHALL provide one contextual right panel for presets, optional checks
 - **THEN** Save SHALL compare against the draft's original saved revision and report a conflict without overwriting the intervening change or discarding the local draft
 - **AND** only an explicit revert or a confirmed save SHALL replace that draft's saved base; failed observation after a confirmed save SHALL not undo the save acknowledgement.
 - **AND** displayed effective values, validation and memory estimates SHALL describe the retained draft that Save or Save a copy would submit, including settings removed or added by the intervening save.
+
+#### Scenario: Initial saved setup and engine observations arrive independently
+- **WHEN** Models opens while saved configurations or engine observations are still being read
+- **THEN** the editor SHALL establish the selected saved authoring base before accepting edits, and an unverified model observation SHALL NOT claim that the model is unloaded
+- **AND** once established, the editor SHALL remain usable through background checks and later observations SHALL NOT discard its accepted draft.

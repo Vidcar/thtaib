@@ -2756,9 +2756,11 @@ async function testSingleToolMenuBeforeModelAndRuntimeCleanup(vite) {
 
 async function testToolReadinessActionsOpenRecovery(vite) {
   let issueCode = "browser_worker_missing";
+  const departingDraft = deferred();
   const navigations = [];
   const harness = makeHarness({ aRun: null, threadARun: null, browserInstalled: false, browserSessionState: "lost", readiness: () => ({ status: "needs_action", can_send: false, issues: [{ code: issueCode, message: issueCode === "browser_worker_missing" ? "Browser worker needs installation" : "Browser session was lost", action: issueCode === "browser_worker_missing" ? "Install browser worker" : "Reset browser" }], selection: null }) });
   harness.state.conversations.conv_a.thread_id = "native_thread_a";
+  harness.state.conversations.conv_b.thread_id = "native_thread_b";
   const renderer = await renderChat(vite, harness, { onNavigate: next => navigations.push(next) });
   const browser = () => renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "BrowserRail")[0];
   try {
@@ -2774,9 +2776,26 @@ async function testToolReadinessActionsOpenRecovery(vite) {
     issueCode = "browser_session_lost";
     harness.state.browserInstalled = true;
     await act(async () => button(renderer, "Conversation B").props.onClick());
-    await waitFor(() => assert.equal(pickerFor(renderer).props.conversationId, "conv_b"), "switch finishes");
+    await waitFor(() => {
+      assert.equal(pickerFor(renderer).props.conversationId, "conv_b");
+      assert.equal(pickerFor(renderer).props.disabled, false);
+      assert.ok(buttons(renderer, "Reset browser").length);
+    }, "B is bound and its recovery action is ready");
+    const departingWrites = harness.state.requests.draftUpdates.filter(item => item.id === "conv_b").length;
+    harness.state.barriers.draft.set("conv_b", departingDraft);
     await act(async () => button(renderer, "Conversation A").props.onClick());
-    await waitFor(() => assert.ok(buttons(renderer, "Reset browser").length), "lost session repair visible");
+    await waitFor(() => assert.ok(harness.state.requests.draftUpdates.filter(item => item.id === "conv_b").length > departingWrites), "A navigation waits for B's saved draft");
+    assert.equal(pickerFor(renderer).props.conversationId, "conv_b", "a matching recovery label alone cannot establish A's ownership");
+    await act(async () => button(renderer, "Reset browser").props.onClick());
+    await waitFor(() => assert.equal(browser()?.props.threadId, "native_thread_b"), "the still-visible B recovery action belongs to B");
+    departingDraft.resolve();
+    await waitFor(() => {
+      assert.equal(pickerFor(renderer).props.conversationId, "conv_a");
+      assert.equal(pickerFor(renderer).props.disabled, false);
+      assert.equal(renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatInteractionStream")[0]?.props.threadId, "thread_a");
+      assert.ok(buttons(renderer, "Reset browser").length);
+    }, "A is bound and its own lost-session repair is ready");
+    assert.equal(browser(), undefined, "B's earlier recovery cannot open A's Browser rail");
     await act(async () => button(renderer, "Reset browser").props.onClick());
     await waitFor(() => assert.equal(browser()?.props.threadId, "native_thread_a"), "lost-session repair opens Browser with native identity");
     await waitFor(() => assert.ok(browser().findAll(node => node.type === "button" && textOf(node) === "Reset").length), "Browser reset action ready");
@@ -2785,8 +2804,9 @@ async function testToolReadinessActionsOpenRecovery(vite) {
     await act(async () => browser().findAll(node => node.type === "button" && textOf(node) === "Clear sign-ins and reset")[0].props.onClick());
     await waitFor(() => assert.equal(harness.state.browserSessionState, "closed"), "confirmed recovery resets its session");
     assert.ok(harness.state.outgoingRequests.some(item => item.path === "/v1/browser/sessions/native_thread_a/reset"));
+    assert.ok(!harness.state.outgoingRequests.some(item => item.path === "/v1/browser/sessions/native_thread_b/reset"), "A's confirmation cannot reset B's Browser session");
     assert.ok(!harness.state.outgoingRequests.some(item => item.path.startsWith("/v1/browser/sessions/thread_a")), "stream identity cannot control browser processes");
-  } finally { await closeHarness(renderer, harness); }
+  } finally { departingDraft.resolve(); await closeHarness(renderer, harness); }
 }
 
 async function testArchivePreservesDraftBeforeLeaving(vite) {

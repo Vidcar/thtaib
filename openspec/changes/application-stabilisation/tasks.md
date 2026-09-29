@@ -8,7 +8,7 @@
 ## 2. Model and draft truth
 
 - [x] 2.1 Revalidate selected saved revisions in mounted Chat readiness/Thinking/context and complete accepted picker actions without weakening navigation guards; keep shared setup controls busy through model/agent preparation without blocking replacement owners; pass mounted checks and original-behaviour negative controls.
-- [x] 2.2 Preserve active/stashed Models draft base revisions, confirmed saves and explicit revert/copy semantics; prove conflict behaviour through mounted editor and actual backend CAS, including failed refresh after Save.
+- [x] 2.2 Preserve active/stashed Models draft base revisions, confirmed saves and explicit revert/copy semantics; prove conflict behaviour through mounted editor and actual backend CAS, including initial hydration and failed refresh after Save.
 
 ## 3. Queue and uncertain-effect ownership
 
