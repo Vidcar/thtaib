@@ -44,6 +44,22 @@ from workbench_backend.paths import WorkbenchPaths
 FUTURE_INSTALL_ROOT_KEY = "models.future_install_root"
 
 
+def _installed_draft_path(bundle: ModelBundle, startup: dict) -> dict:
+    """Point a pre-download MTP file name at the installed GGUF, or drop an unresolved draft."""
+    draft = startup.get("spec_draft_model")
+    if not isinstance(draft, str) or not draft or Path(draft).is_file():
+        return startup
+    normalized = draft.replace("\\", "/")
+    match = next((item for item in bundle.files if item.name.replace("\\", "/") == normalized), None)
+    if match is not None and Path(match.path).is_file():
+        startup["spec_draft_model"] = match.path
+        return startup
+    startup.pop("spec_draft_model", None)
+    if startup.get("spec_type") == "draft-mtp":
+        startup.pop("spec_type", None)
+    return startup
+
+
 class ImportJobRunner:
     """Owns asynchronous import workers and durable job state.
 
@@ -992,10 +1008,11 @@ class ImportJobRunner:
                     card_sha256=recipe.card_sha256, section=recipe.section)
             response.update(job.initial_per_request)
             now = utc_now()
-            initial_startup, response_defaults = model_default_values(self.store, bundle, startup=job.initial_startup)
+            startup = _installed_draft_path(bundle, dict(job.initial_startup))
+            initial_startup, response_defaults = model_default_values(self.store, bundle, startup=startup)
             profile = RunProfile(id=identity, bundle_id=bundle.id, display_name="Import settings",
                 settings_schema_version=2,
-                bags=resolve_bags(startup=dict(job.initial_startup),
+                bags=resolve_bags(startup=startup,
                     startup_defaults=initial_startup,
                     per_request={key: value for key, value in response.items() if value is not None},
                     per_request_defaults=response_defaults),

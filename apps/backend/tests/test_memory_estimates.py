@@ -210,7 +210,7 @@ class MemoryEstimateTests(unittest.TestCase):
         self.assertEqual(result.evaluated_startup["n_gpu_layers"], 4)
         self.assertEqual(native.call_count, 1)
         argv = native.call_args.args[0]
-        self.assertEqual(argv[argv.index("--n-gpu-layers") + 1], "auto")
+        self.assertNotIn("--n-gpu-layers", argv)
         self.assertFalse(self.manager.list_deployments())
 
     def test_complete_projector_is_added_once_and_unknown_component_never_becomes_a_total(self):
@@ -471,7 +471,8 @@ class MemoryEstimateTests(unittest.TestCase):
         automatic = self.manager.memory_estimator.estimate(ModelEstimateRequest(bundle_id=bundle_id,
             startup={"ctx_size": "auto"}))
         self.assertEqual(baseline.selected_startup, {})
-        self.assertEqual(baseline.evaluated_startup["ctx_size"], 32768)
+        self.assertEqual(baseline.evaluated_startup["ctx_size"], 262144)
+        self.assertFalse(baseline.builtin_mtp)
         self.assertEqual(automatic.selected_startup, {"ctx_size": "auto"})
         self.assertEqual(automatic.effective_context, 262144)
 
@@ -578,6 +579,41 @@ class MemoryEstimateTests(unittest.TestCase):
         self.assertEqual(gpu["known_weights_bytes"], weights - 512)
         self.assertEqual(gpu["known_attention_cache_bytes"], cache)
 
+    def test_dense_embedded_mtp_is_identified_and_priced_only_when_selected(self):
+        fields = {**dense_fields(), "llama.nextn_predict_layers": 1}
+        tensors = {"token_embd.weight": np.zeros((4, 32), dtype=np.float32),
+                   "blk.0.attn_norm.weight": np.zeros(32, dtype=np.float32),
+                   "blk.1.nextn.eh_proj.weight": np.zeros((8, 32), dtype=np.float32)}
+        bundle_id = self.manager.import_local(LocalImportRequest(source_path=str(self.model(fields=fields, tensors=tensors)))).bundle_id
+        base = {"ctx_size": 1024, "n_gpu_layers": 0}
+        off = self.manager.memory_estimator.estimate(ModelEstimateRequest(bundle_id=bundle_id, startup=base))
+        on = self.manager.memory_estimator.estimate(ModelEstimateRequest(bundle_id=bundle_id,
+            startup={**base, "spec_type": "draft-mtp"}))
+        self.assertTrue(off.builtin_mtp)
+        self.assertTrue(on.builtin_mtp)
+        self.assertEqual(off.mtp_draft_files, [])
+        self.assertEqual(off.weights_bytes, 512 + 128)
+        self.assertEqual(on.weights_bytes, off.weights_bytes + 1024)
+        self.assertEqual(off.speculation_bytes, 0)
+        self.assertGreater(on.speculation_bytes, 0)
+
+    def test_remote_mtp_requires_a_nextn_tensor_not_a_filename(self):
+        listing = SimpleNamespace(repo_id="org/model", resolved_revision="a" * 40, auxiliary_ggufs=[
+            SimpleNamespace(name="mtp-draft.gguf", files=["mtp-draft.gguf"], complete=True),
+            SimpleNamespace(name="MTP/head.gguf", files=["MTP/head.gguf"], complete=True),
+            SimpleNamespace(name="imatrix.gguf", files=["imatrix.gguf"], complete=True),
+        ])
+
+        def fake_remote(_repo, _revision, files, _refresh):
+            tensors = ()
+            if files == ["MTP/head.gguf"]:
+                tensors = (SimpleNamespace(name="blk.0.nextn.eh_proj.weight", n_bytes=10),)
+            return GgufFields({"general.architecture": "llama"}, tensors=tensors), 10
+
+        with patch.object(self.manager.memory_estimator, "_remote_directories", side_effect=fake_remote):
+            verified, _ = self.manager.memory_estimator._verified_mtp_files(listing, False)
+        self.assertEqual(verified, ["MTP/head.gguf"])
+
     def test_foreign_mtp_model_adds_its_weights_instead_of_claiming_sharing(self):
         tensors = {"token_embd.weight": np.zeros((4, 32), dtype=np.float32),
                    "blk.0.attn_norm.weight": np.zeros(32, dtype=np.float32),
@@ -587,9 +623,9 @@ class MemoryEstimateTests(unittest.TestCase):
         result = self.manager.memory_estimator.estimate(ModelEstimateRequest(bundle_id=bundle_id,
             startup={"ctx_size": 1024, "n_gpu_layers": "all", "parallel": 1,
                      "spec_type": "draft-mtp", "spec_draft_model": str(draft), "spec_draft_ngl": 0}))
-        weights = 512 + 128 + 1024
-        self.assertEqual(result.weights_bytes, 2 * weights)
-        self.assertEqual(result.speculation_bytes, weights + 1024 * 1024 * 4)
+        draft_weights = 512 + 128 + 1024
+        self.assertEqual(result.weights_bytes, (512 + 128) + draft_weights)
+        self.assertEqual(result.speculation_bytes, draft_weights + 1024 * 1024 * 4)
         self.assertNotIn("counted once", " ".join(result.assumptions))
         self.assertEqual(sum(row["known_weights_bytes"] for row in result.devices), result.weights_bytes)
 

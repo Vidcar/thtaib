@@ -72,8 +72,8 @@ class BundleConfigurationOptionsTests(unittest.TestCase):
         self.assertEqual(body["metadata"]["context_length"], 262144)
         self.assertEqual(body["metadata"]["block_count"], 65)
         self.assertEqual(body["context_size"]["flag"], "--ctx-size")
-        self.assertEqual(body["context_size"]["applied"], 32768)
-        self.assertEqual(body["context_size"]["default_value"], 32768)
+        self.assertIsNone(body["context_size"]["applied"])
+        self.assertIsNone(body["context_size"]["default_value"])
         self.assertEqual(body["context_size"]["step"], 1024)
         self.assertEqual(body["context_size"]["minimum"], 1024)
         self.assertIsNone(body["context_size"]["observed"])
@@ -247,7 +247,7 @@ class BundleConfigurationOptionsTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "model_reasoning_budget_unsupported")
 
     def test_context_floor_and_initial_value_follow_small_and_unknown_models(self) -> None:
-        for maximum, expected, floor in ((None, 32768, 1024), (8192, 8192, 1024), (768, 768, 768)):
+        for maximum, expected, floor in ((None, None, 1024), (8192, None, 1024), (768, None, 768)):
             report = bundle_configuration_options("bundle", GgufRuntimeMetadata(context_length=maximum))
             self.assertEqual(report.context_size.default_value, expected)
             self.assertEqual(report.context_size.minimum, floor)

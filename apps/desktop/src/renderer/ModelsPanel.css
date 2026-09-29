@@ -133,6 +133,15 @@
 .models-surface .capability-status {display: flex; align-items: center; gap: var(--space-tight); font-size: var(--text-small); color: var(--muted);}
 .models-surface .capability-status[data-state="passed"] {color: var(--ok);}
 .models-surface .capability-status:is([data-state="failed"], [data-state="stale"]) {color: var(--warn);}
+.models-surface .capability-icons {display: flex; flex-wrap: wrap; gap: var(--space-compact); align-items: center; margin: var(--space-compact) 0;}
+.models-surface .capability-icon {display: inline-flex; padding: var(--pad-tight); border: 0; border-radius: var(--radius-control); background: transparent; color: inherit;}
+.models-surface .capability-icon-mark {display: inline-flex; color: var(--muted);}
+.models-surface .capability-icon-mark[data-state="untested"] {color: var(--warn);}
+.models-surface .capability-icon-mark[data-state="passed"] {color: var(--ok);}
+.models-surface .capability-icon-mark:is([data-state="failed"], [data-state="inconclusive"]) {color: var(--danger);}
+.models-surface .capability-icon-mark[data-state="absent"] {color: var(--muted); opacity: 0.45;}
+.models-surface .capability-icon-detail {display: grid; gap: var(--space-tight); margin: 0;}
+.models-surface .capability-icon-detail p {margin: 0;}
 .models-surface .model-capability-note {grid-column: 1 / -1; font-size: var(--text-small); color: var(--muted); overflow-wrap: anywhere;}
 
 /* Recipes */

@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { MessageCircle, Cpu, BookOpen, Workflow, FlaskConical, Library, SlidersHorizontal, Plus, ArrowUp, Square, ShieldCheck, Files, Ellipsis, X, Pencil, Archive, PanelLeft, PanelRight, Activity, Bell, Folder, Trash2, Search, RotateCcw, Maximize2, Minimize2, Info, Check, Terminal, Minus, Download, Copy, RefreshCw, Settings2, Sparkles, GitBranch, Brain, ExternalLink, Bot, Globe, ArrowLeft, ArrowRight, Image, FileText } from "lucide-react";
+import { MessageCircle, Cpu, BookOpen, Workflow, FlaskConical, Library, SlidersHorizontal, Plus, ArrowUp, Square, ShieldCheck, Files, Ellipsis, X, Pencil, Archive, PanelLeft, PanelRight, Activity, Bell, Folder, Trash2, Search, RotateCcw, Maximize2, Minimize2, Info, Check, Terminal, Minus, Download, Copy, RefreshCw, Settings2, Sparkles, GitBranch, Brain, ExternalLink, Bot, Globe, ArrowLeft, ArrowRight, Image, FileText, Wrench, Braces, Video, AudioLines } from "lucide-react";
 
 const icons = {
   chat: MessageCircle, models: Cpu, knowledge: BookOpen, "agent-run": Workflow,
@@ -10,6 +10,7 @@ const icons = {
   expand: Maximize2, shrink: Minimize2, info: Info, check: Check, terminal: Terminal,
   minus: Minus, download: Download, copy: Copy, refresh: RefreshCw, tune: Settings2,
   sparkles: Sparkles, agents: Bot, browser: Globe, back: ArrowLeft, forward: ArrowRight, image: Image, file: FileText, branch: GitBranch, external: ExternalLink,
+  wrench: Wrench, braces: Braces, video: Video, audio: AudioLines,
 } as const;
 
 export type IconName = keyof typeof icons;

@@ -6322,12 +6322,19 @@ export interface components {
         };
         /** ModelMemoryEstimate */
         ModelMemoryEstimate: {
+            /** Advertised Modalities */
+            advertised_modalities?: string[];
             /** Architecture */
             architecture?: string | null;
             /** Assumptions */
             assumptions?: string[];
             /** Attention Cache Bytes */
             attention_cache_bytes?: number | null;
+            /**
+             * Builtin Mtp
+             * @default false
+             */
+            builtin_mtp: boolean;
             /** Calculation Ms */
             calculation_ms?: number | null;
             /**
@@ -6369,6 +6376,8 @@ export interface components {
             kv_unified?: boolean | null;
             /** Model Disk Bytes */
             model_disk_bytes?: number | null;
+            /** Mtp Draft Files */
+            mtp_draft_files?: string[];
             /** Observed Runtime */
             observed_runtime?: {
                 [key: string]: unknown;

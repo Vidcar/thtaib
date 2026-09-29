@@ -26,6 +26,7 @@ from workbench_backend.inference.capabilities import (
     CapabilityProbeRequest,
     capability_support,
     setup_fingerprint,
+    setup_identity,
 )
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.probes import (
@@ -286,7 +287,23 @@ class CapabilityProbeTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in current.capability_evidence], ["probe-failed", "probe-unknown"])
 
         current.applied_startup["ctx_size"] = 8192
-        self.assertEqual(capability_support(current, "tools"), "untested", "old evidence must not carry to changed setup")
+        self.assertEqual(capability_support(current, "tools"), "untested", "evidence without a recorded setup does not transfer")
+
+    def test_loading_adjustments_keep_weight_and_projector_proof(self) -> None:
+        self.store.put_deployment(self.deployment)
+        evidence = CapabilityEvidence(
+            id="probe-passed", deployment_id=self.deployment.id, capability="image", status="passed",
+            fingerprint=setup_fingerprint(self.deployment), setup=setup_identity(self.deployment), tested_at=utc_now(),
+        )
+        self.store.put_capability_evidence(evidence.model_dump(mode="json"))
+        current = self.store.get_deployment(self.deployment.id)
+        current.applied_startup["ctx_size"] = 8192
+        current.applied_startup["cache_type_k"] = "q8_0"
+        current.applied_startup["n_gpu_layers"] = 4
+        current.applied_startup["spec_type"] = "draft-mtp"
+        self.assertEqual(capability_support(current, "image"), "passed")
+        current.server_props.chat_template = "template-v2"
+        self.assertEqual(capability_support(current, "image"), "untested")
 
     def test_fake_tool_probe_round_trips_actual_tool_message_call_id_and_exact_args(self) -> None:
         model = ToolRoundTripModel()

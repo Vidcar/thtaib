@@ -73,7 +73,7 @@ class ModelConfigurationTests(unittest.TestCase):
         self.assertEqual(profile.bags.per_request.requested, {})
         self.assertEqual(profile.bags.per_request.applied["max_tokens"], -1)
         self.assertNotIn("reasoning", profile.bags.per_request.applied)
-        self.assertEqual(profile.bags.startup.applied["ctx_size"], 32768)
+        self.assertNotIn("ctx_size", profile.bags.startup.applied)
 
     def test_context_baseline_reset_and_native_auto_are_distinct(self):
         profile = self.manager.list_model_configurations(self.bundle_id)[0]
@@ -87,10 +87,10 @@ class ModelConfigurationTests(unittest.TestCase):
         self.assertNotIn("ctx_size", deployment.applied_startup)
         options = self.manager.get_bundle_configuration_options(self.bundle_id, configuration_id=profile.id)
         self.assertIsNone(options.context_size.applied)
-        self.assertEqual(options.context_size.default_value, 32768)
+        self.assertIsNone(options.context_size.default_value)
         reset = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
             configuration_id=profile.id, display_name=profile.display_name, startup={}))
-        self.assertEqual(reset.bags.startup.applied["ctx_size"], 32768)
+        self.assertNotIn("ctx_size", reset.bags.startup.applied)
 
     def test_new_default_uses_one_matching_card_recipe_without_limiting_output(self):
         import numpy as np

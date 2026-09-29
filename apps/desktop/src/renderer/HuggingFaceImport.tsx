@@ -8,6 +8,7 @@ import { Notice } from "./Notice";
 import { presentVariant, variantFamilies } from "./modelVariantPresentation";
 import { ModelHardwareEstimate } from "./ModelHardwareEstimate";
 import { SettingRow, SettingSection } from "./CompactControls";
+import { CapabilityIconRow, type CapabilityIconItem } from "./CapabilityIcons";
 import type { ImportJob, ResponseRecipe } from "./types";
 import type { SchemaHubRepository } from "../generated/shared-contracts/openapi";
 import "./HuggingFaceImport.css";
@@ -22,6 +23,7 @@ const recipeFields = new Set([
   "presence_penalty", "frequency_penalty", "repeat_penalty",
   "max_tokens", "reasoning_budget_tokens",
 ]);
+const cachePrecisions = ["f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "bf16", "f32", "iq4_nl"];
 
 function usableRecipe(value: unknown): ResponseRecipe | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -54,17 +56,34 @@ function recipeSummary(recipe: ResponseRecipe): string {
   return [recipe.reasoning === "preserve" ? "Thinking unchanged" : `Thinking ${recipe.reasoning}`, ...values].join(" · ");
 }
 
+function mtpGroups(files: string[]): Array<{ value: string; label: string; files: string[] }> {
+  const groups = new Map<string, string[]>();
+  for (const name of files) {
+    const key = name.replace(/-\d{5}-of-\d{5}\.gguf$/i, ".gguf");
+    groups.set(key, [...(groups.get(key) ?? []), name]);
+  }
+  return [...groups.entries()].map(([key, names]) => {
+    const sorted = [...names].sort();
+    const first = sorted.find(name => /-00001-of-\d{5}\.gguf$/i.test(name)) ?? sorted[0];
+    return { value: first, label: names.length > 1 ? key : first, files: sorted };
+  });
+}
+
+type ContextMode = "" | "fixed" | "auto" | "full";
+type HeaderPreview = { builtin: boolean; drafts: string[]; modalities: string[]; contextMaximum: number | null };
+
 export function HuggingFaceImport({ onStarted, active = true }: { onStarted: (job: ImportJob) => Promise<void>; active?: boolean }) {
   const [query, setQuery] = useState("");
   const [step, setStep] = useState<0 | 1 | 2>(0);
-  const [context, setContext] = useState("32768");
-  const contextEdited = useRef(false);
-  const [gpuLayers, setGpuLayers] = useState("auto");
-  const [flashAttention, setFlashAttention] = useState("auto");
+  const [contextMode, setContextMode] = useState<ContextMode>("");
+  const [context, setContext] = useState("");
+  const [gpuLayers, setGpuLayers] = useState("");
+  const [flashAttention, setFlashAttention] = useState("");
   const [keyPrecision, setKeyPrecision] = useState("");
   const [valuePrecision, setValuePrecision] = useState("");
   const [kvOffload, setKvOffload] = useState<boolean | null>(null);
-  const [metadataContextMaximum, setMetadataContextMaximum] = useState<number | null>(null);
+  const [mtpChoice, setMtpChoice] = useState("");
+  const [preview, setPreview] = useState<HeaderPreview>({ builtin: false, drafts: [], modalities: [], contextMaximum: null });
   const [results, setResults] = useState<Array<{ repo_id: string; downloads: number | null }>>([]);
   const [selectedRepo, setSelectedRepo] = useState("");
   const [hub, setHub] = useState<InspectedRepository | null>(null);
@@ -82,6 +101,12 @@ export function HuggingFaceImport({ onStarted, active = true }: { onStarted: (jo
   const downloadPending = useRef(false);
   useEffect(() => () => { generation.current += 1; }, []);
 
+  function resetLoadingChoices() {
+    setContextMode(""); setContext(""); setGpuLayers(""); setFlashAttention("");
+    setKeyPrecision(""); setValuePrecision(""); setKvOffload(null); setMtpChoice("");
+    setPreview({ builtin: false, drafts: [], modalities: [], contextMaximum: null });
+  }
+
   async function inspectRepository(repo: string) {
     if (downloadPending.current) return;
     const source = repo.trim();
@@ -93,7 +118,7 @@ export function HuggingFaceImport({ onStarted, active = true }: { onStarted: (jo
     setSelectedRepo(repo); setHub(null); setVariant(""); setProjector(""); setBitFilter("all");
     setRecipeIds([]); setInitialRecipeId("");
     setError(""); setMessage(""); setBusy("inspect");
-    contextEdited.current = false; setContext("32768"); setGpuLayers("auto"); setFlashAttention("auto"); setKeyPrecision(""); setValuePrecision(""); setKvOffload(null); setMetadataContextMaximum(null);
+    resetLoadingChoices();
     try {
       const next = inspectedRepository(await api.inspectHf(repo));
       if (current !== generation.current) return;
@@ -130,9 +155,13 @@ export function HuggingFaceImport({ onStarted, active = true }: { onStarted: (jo
   const selectedVariant = hub?.variants.find(item => item.name === variant);
   const selectedPresentation = selectedVariant ? presentVariant(selectedVariant) : null;
   const selectedProjector = hub?.projectors.find(item => item.name === projector);
-  const files = [...new Set([...(selectedVariant?.files ?? []), ...(selectedProjector?.files ?? []), ...(hub?.guidance_files ?? [])])];
-  const size = selectedVariant?.size_bytes == null || (selectedProjector && selectedProjector.size_bytes == null)
-    ? null : selectedVariant.size_bytes + (selectedProjector?.size_bytes ?? 0);
+  const groups = mtpGroups(preview.drafts);
+  const selectedMtp = groups.find(group => group.value === mtpChoice);
+  const mtpDownload = selectedMtp && preview.drafts.includes(selectedMtp.value) ? selectedMtp.files : [];
+  const files = [...new Set([...(selectedVariant?.files ?? []), ...(selectedProjector?.files ?? []), ...(hub?.guidance_files ?? []), ...mtpDownload])];
+  const mtpVariant = selectedMtp ? hub?.auxiliary_ggufs?.find(item => item.files.includes(selectedMtp.value)) : undefined;
+  const size = selectedVariant?.size_bytes == null || (selectedProjector && selectedProjector.size_bytes == null) || (mtpVariant && mtpVariant.size_bytes == null)
+    ? null : selectedVariant.size_bytes + (selectedProjector?.size_bytes ?? 0) + (mtpVariant?.size_bytes ?? 0);
   const bits = [...new Set(hub?.variants.map(item => presentVariant(item).bits) ?? [])].sort((a, b) => a == null ? 1 : b == null ? -1 : a - b);
   const families = variantFamilies(hub?.variants ?? [], bitFilter, sizeOrder);
   const recipes = hub?.response_recipes ?? [];
@@ -143,14 +172,39 @@ export function HuggingFaceImport({ onStarted, active = true }: { onStarted: (jo
   if (keyPrecision) startup.cache_type_k = keyPrecision;
   if (valuePrecision) startup.cache_type_v = valuePrecision;
   if (kvOffload !== null) startup.kv_offload = kvOffload;
-  startup.n_gpu_layers = gpuLayers === "0" ? 0 : gpuLayers;
-  startup.flash_attn = flashAttention;
-  if (context === "auto") startup.ctx_size = "auto";
-  else if (context && Number.isSafeInteger(Number(context)) && Number(context) >= 0) startup.ctx_size = Number(context);
-  const validContext = context === "auto" || (Number.isSafeInteger(Number(context)) && Number(context) >= 0);
-  const canReview = Boolean(selectedVariant?.complete && projector && validContext);
-  const contextShown = context === "auto" ? null : context === "0" ? metadataContextMaximum : validContext ? Number(context) : null;
-  function setInitialContext(value: string) { contextEdited.current = true; setContext(value); }
+  if (gpuLayers === "0") startup.n_gpu_layers = 0;
+  else if (gpuLayers) startup.n_gpu_layers = gpuLayers;
+  if (flashAttention) startup.flash_attn = flashAttention;
+  if (contextMode === "auto") startup.ctx_size = "auto";
+  else if (contextMode === "full") startup.ctx_size = 0;
+  else if (contextMode === "fixed" && context && Number.isSafeInteger(Number(context)) && Number(context) >= 0) startup.ctx_size = Number(context);
+  if (preview.builtin && mtpChoice === "builtin") startup.spec_type = "draft-mtp";
+  else if (selectedMtp && preview.drafts.includes(selectedMtp.value)) {
+    startup.spec_type = "draft-mtp";
+    startup.spec_draft_model = selectedMtp.value;
+  }
+  const canReview = Boolean(selectedVariant?.complete && projector);
+  const contextShown = contextMode === "fixed" && context && Number.isFinite(Number(context)) ? Number(context) : contextMode === "full" ? preview.contextMaximum : null;
+  const modalities = new Set(preview.modalities);
+  const imageKnown = Boolean(selectedProjector) || modalities.has("image");
+  const reviewCapabilities: CapabilityIconItem[] = [
+    { id: "text", label: "Text", icon: "chat", state: "untested", detail: "Language model file. Checked after the first load." },
+    { id: "tools", label: "Tools", icon: "wrench", state: "absent", detail: "Checked after the model loads." },
+    { id: "thinking", label: "Thinking", icon: "reasoning", state: "absent", detail: "Checked after the model loads." },
+    { id: "structured", label: "Structured output", icon: "braces", state: "absent", detail: "Checked after the model loads." },
+    { id: "image", label: "Image", icon: "image", state: imageKnown ? "untested" : "absent", detail: imageKnown ? (selectedProjector ? "A vision file is selected." : "The file header identifies image input.") : "No image input selected." },
+    { id: "video", label: "Video", icon: "video", state: modalities.has("video") ? "untested" : "absent", detail: modalities.has("video") ? "The file header identifies video." : "No video input reported." },
+    { id: "audio", label: "Audio", icon: "audio", state: modalities.has("audio") ? "untested" : "absent", detail: modalities.has("audio") ? "The file header identifies audio." : "No audio input reported." },
+  ];
+  const contextLabel = contextMode === "auto" ? "Automatic fit" : contextMode === "full" ? "Full" : contextMode === "fixed" && context ? Number(context).toLocaleString() : "Engine default";
+  const mtpLabel = !preview.builtin && !groups.length ? "" : mtpChoice === "builtin" ? "Built-in draft head" : selectedMtp ? selectedMtp.label : "Off";
+
+  function chooseContext(value: string) {
+    const mode = value as ContextMode;
+    setContextMode(mode);
+    if (mode === "fixed") { if (!context && preview.contextMaximum) setContext(String(preview.contextMaximum)); }
+    else setContext("");
+  }
 
   function toggleRecipe(id: string, checked: boolean) {
     setRecipeIds(current => checked ? [...current, id] : current.filter(item => item !== id));
@@ -194,7 +248,7 @@ export function HuggingFaceImport({ onStarted, active = true }: { onStarted: (jo
       {hub.source ? <details className="technical-details"><summary>Publisher settings</summary><p className="hint">{hub.source.repo_id}{hub.source.resolved_revision ? ` @ ${hub.source.resolved_revision.slice(0, 8)}` : ""} · {hub.source.verified ? "source commit verified" : "source unverified; publisher settings will not be applied"}</p></details> : null}
       {step === 1 ? <>
       {hub.variants.length ? <div className="variant-picker">
-        <div className="variant-picker-heading"><div><h4>Quantization <Help label="Quantization">Labels come from filenames; capabilities are checked after loading. Listed size is disk usage. Memory predictions below are approximate.</Help></h4></div><label>Sort<select value={sizeOrder} onChange={event => setSizeOrder(event.target.value as "asc" | "desc")}><option value="asc">Smallest first</option><option value="desc">Largest first</option></select></label></div>
+        <div className="variant-picker-heading"><div><h4>Quantization <Help label="Quantization">Labels come from filenames. Memory and capability checks are on Review.</Help></h4></div><label>Sort<select value={sizeOrder} onChange={event => setSizeOrder(event.target.value as "asc" | "desc")}><option value="asc">Smallest first</option><option value="desc">Largest first</option></select></label></div>
         <div className="variant-filters" role="group" aria-label="Filter by bit family"><button type="button" aria-pressed={bitFilter === "all"} onClick={() => setBitFilter("all")}>All <span>{hub.variants.length}</span></button>{bits.map(bit => <button key={bit ?? "unknown"} type="button" aria-pressed={bitFilter === (bit ?? "unknown")} onClick={() => setBitFilter(bit ?? "unknown")}>{bit == null ? "Unknown" : `${bit}-bit`}</button>)}</div>
         <div className="variant-table-scroll"><table className="variant-table"><thead><tr><th scope="col"><span className="visually-hidden">Select</span></th><th scope="col">Variant</th><th scope="col">Disk size</th><th scope="col">Files</th><th scope="col">Availability</th></tr></thead>{families.map(group => <tbody key={group.family}><tr className="variant-family"><th scope="rowgroup" colSpan={5}>{group.family}</th></tr>{group.items.map(({ variant: item, quant, flavour }) => <tr key={item.name} className={variant === item.name ? "is-selected" : undefined}><td><input type="radio" name="model-variant" value={item.name} aria-label={`${quant} ${flavour}, ${item.name}, ${item.size_bytes == null ? "size unknown" : formatBytes(item.size_bytes)}, ${item.complete ? "complete" : "missing files"}`} checked={variant === item.name} disabled={Boolean(busy) || !item.complete} onChange={() => setVariant(item.name)} /></td><td><label title={item.name} onClick={() => { if (!busy && item.complete) setVariant(item.name); }}><strong>{quant} · {flavour}</strong><small>{item.name}</small></label></td><td>{item.size_bytes == null ? "Unknown" : formatBytes(item.size_bytes)}</td><td>{item.files.length} {item.files.length === 1 ? "file" : "files"}</td><td><span className={item.complete ? "variant-ready" : "variant-missing"}>{item.complete ? "Complete" : "Missing shards"}</span></td></tr>)}</tbody>)}</table></div>
         {hub.projectors.length ? <fieldset className="projector-choices"><legend>Image input</legend><p className="hint">Choose a vision file explicitly or use text only. Listed files may still be incompatible.</p><label><input type="radio" name="image-input" value="text-only" checked={projector === "text-only"} disabled={Boolean(busy)} onChange={() => setProjector("text-only")} />Text only</label>{hub.projectors.map(item => <label key={item.name} title={item.name}><input type="radio" name="image-input" value={item.name} checked={projector === item.name} disabled={Boolean(busy) || !item.complete} onChange={() => setProjector(item.name)} /><span>{item.name}</span><small>{item.size_bytes == null ? "Size unknown" : formatBytes(item.size_bytes)}{item.complete ? "" : " · missing files"}</small></label>)}</fieldset> : null}
@@ -203,28 +257,29 @@ export function HuggingFaceImport({ onStarted, active = true }: { onStarted: (jo
           <strong>{candidate.repo_id}</strong><button type="button" disabled={Boolean(busy)} onClick={() => void inspectRepository(candidate.repo_id)}>Inspect GGUF</button>
         </li>)}</ul> : <p className="hint">No GGUF conversion declared this exact publisher model. Search by model name to inspect other repositories.</p>}</>}
       {hub.warnings.length ? <details className="technical-details"><summary>Repository notes ({hub.warnings.length})</summary>{hub.warnings.map(warning => <p key={warning}>{warning}</p>)}</details> : null}
-      {hub.auxiliary_ggufs?.length ? <details className="technical-details auxiliary-files"><summary>Auxiliary GGUF files <span>{hub.auxiliary_ggufs.length}</span></summary><p className="hint">MTP and imatrix files are separate from primary model weights. Listing an MTP file does not establish draft-head compatibility.</p><ul>{hub.auxiliary_ggufs.map(item => <li key={item.name}>{item.name} · {item.size_bytes == null ? "size unknown" : formatBytes(item.size_bytes)}{item.complete ? "" : " · missing shards"}</li>)}</ul></details> : null}
+      {hub.auxiliary_ggufs?.length ? <details className="technical-details auxiliary-files"><summary>Auxiliary GGUF files <span>{hub.auxiliary_ggufs.length}</span></summary><p className="hint">MTP and imatrix files are separate from primary model weights. A separate draft head is offered on Review only after its header contains a NextN tensor.</p><ul>{hub.auxiliary_ggufs.map(item => <li key={item.name}>{item.name} · {item.size_bytes == null ? "size unknown" : formatBytes(item.size_bytes)}{item.complete ? "" : " · missing shards"}</li>)}</ul></details> : null}
       {recipes.length ? <SettingSection title="Generation"><SettingRow layout="models" label="Model card preset" htmlFor="import-initial-recipe" provenance={initialRecipe ? `${initialRecipe.source_repo_id} · ${initialRecipe.source_revision.slice(0, 8)}` : "Compatible publisher and native values are resolved from the installed template."} help={initialRecipe ? recipeSummary(initialRecipe) : "After download, use a compatible publisher preset matching native Thinking, or native/template values when no unambiguous preset exists."}><select id="import-initial-recipe" value={initialRecipeId} disabled={Boolean(busy)} onChange={event => setInitialRecipeId(event.target.value)}><option value="">Publisher/native baseline</option>{recipes.map(recipe => <option key={recipe.id} value={recipe.id}>{recipe.name}</option>)}</select></SettingRow><details className="technical-details response-recipe-choices"><summary>Create additional setups</summary>{recipes.map(recipe => <label key={recipe.id}><input type="checkbox" checked={recipeIds.includes(recipe.id)} disabled={Boolean(busy)} onChange={event => toggleRecipe(recipe.id, event.target.checked)} /><span><strong>{recipe.name}</strong><small>{recipeSummary(recipe)}</small>{recipe.notes?.length ? <small>{recipe.notes.join(" · ")}</small> : null}</span></label>)}</details></SettingSection> : null}
-      {selectedVariant ? <SettingSection title="Loading">
-        <SettingRow layout="models" label="Context" help={<>Total shared context in tokens. Simultaneous requests share the pool.<code>--ctx-size</code></>} onReset={contextEdited.current ? () => { contextEdited.current = false; setContext(String(Math.min(32768, metadataContextMaximum ?? 32768))); } : undefined} resetLabel="Reset" resetTitle={`${Math.min(32768, metadataContextMaximum ?? 32768).toLocaleString()} tokens`}>
-          <ContextSlider label="Import context" value={contextShown} maximum={metadataContextMaximum} unknownLabel={context === "auto" ? "Auto" : "Not reported"} disabled={Boolean(busy)} onChange={value => setInitialContext(String(value))} />
-        </SettingRow>
-        <SettingRow layout="models" label="GPU layers" help={<>Weight placement. Other offloads remain independent.<code>--n-gpu-layers</code></>}><select aria-label="Import GPU layers" value={gpuLayers} disabled={Boolean(busy)} onChange={event => setGpuLayers(event.target.value)}><option value="auto">Auto</option><option value="all">All</option><option value="0">CPU</option></select></SettingRow>
-        <SettingRow layout="models" label="K cache precision" help={<code>--cache-type-k</code>}><select aria-label="Import key cache precision" value={keyPrecision || "f16"} onChange={event => setKeyPrecision(event.target.value)} disabled={Boolean(busy)}>{["f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "bf16", "f32", "iq4_nl"].map(value => <option key={value}>{value}</option>)}</select></SettingRow>
-        <SettingRow layout="models" label="V cache precision" help={<code>--cache-type-v</code>}><select aria-label="Import value cache precision" value={valuePrecision || "f16"} onChange={event => setValuePrecision(event.target.value)} disabled={Boolean(busy)}>{["f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "bf16", "f32", "iq4_nl"].map(value => <option key={value}>{value}</option>)}</select></SettingRow>
-        <SettingRow layout="models" label="Flash attention" help={<code>--flash-attn</code>}><select aria-label="Import Flash attention" value={flashAttention} disabled={Boolean(busy)} onChange={event => setFlashAttention(event.target.value)}><option value="auto">Auto</option><option value="on">On</option><option value="off">Off</option></select></SettingRow>
-        <SettingRow layout="models" label="MTP" help={<>Off initially. Availability is verified from actual tensors after download.<code>--spec-type none</code></>}><select aria-label="Import MTP" value="none" disabled><option value="none">Off</option></select></SettingRow>
-        <details className="technical-details"><summary>Advanced loading</summary><div className="setting-rows">
-          <SettingRow layout="models" label="Context mode" help="Auto allows native fitting. Full uses the metadata maximum."><select aria-label="Import advanced context mode" value={context === "auto" ? "auto" : context === "0" ? "full" : "fixed"} disabled={Boolean(busy)} onChange={event => setInitialContext(event.target.value === "auto" ? "auto" : event.target.value === "full" ? "0" : String(Math.min(32768, metadataContextMaximum ?? 32768)))}><option value="fixed">Fixed</option><option value="auto">Auto</option><option value="full" disabled={!metadataContextMaximum}>Full</option></select></SettingRow>
-          <SettingRow layout="models" label="Cache location" help={<code>--no-kv-offload</code>}><select aria-label="Import cache location" value={kvOffload === false ? "cpu" : "gpu"} onChange={event => setKvOffload(event.target.value === "gpu")} disabled={Boolean(busy)}><option value="gpu">GPU</option><option value="cpu">CPU / RAM</option></select></SettingRow>
-        </div></details>
-        {validContext && projector ? <ModelHardwareEstimate active={active && step === 1} selection={{ repo_id: hub.repo_id, revision: hub.resolved_revision, primary_files: selectedVariant.files, projector_files: selectedProjector?.files ?? [], startup }} onEstimate={estimate => { const maximum = estimate.context_maximum ?? null; setMetadataContextMaximum(maximum); if (!contextEdited.current) setContext(String(Math.min(32768, maximum ?? 32768))); }} /> : null}
-      </SettingSection> : null}
       <div className="actions"><button type="button" className="primary-button" disabled={Boolean(busy) || !canReview} onClick={() => setStep(2)}>Review download</button></div>
       </> : null}
-      {step === 2 && selectedVariant ? <><div className="model-download-footer"><span className="hint">{size == null ? "Size unknown" : formatBytes(size)} · {selectedVariant.files.length} model file{selectedVariant.files.length === 1 ? "" : "s"}{selectedProjector ? " + vision file" : ""}</span><Help label="Download and vision files">Allow room for temporary and installed copies, roughly twice the selected size. Vision compatibility is checked after loading the model; a file being listed does not prove it is compatible.</Help><button type="button" className="primary-button" disabled={Boolean(busy) || !canReview} onClick={() => void download()}><Icon name="download" size={15} />{busy === "download" ? "Starting…" : "Download model"}</button></div>
-        <p className="hint">Capacity: {context || "Auto"} · key/value cache: {keyPrecision || "native"} / {valuePrecision || "native"} · cache location: {kvOffload === null ? "native" : kvOffload ? "GPU" : "CPU / RAM"}</p>
-        <div className="selected-download-files"><strong>Download selection: {selectedPresentation?.quant} · {selectedPresentation?.flavour}</strong><span className="hint">Pinned revision <code>{hub.resolved_revision}</code></span><ul>{files.map(file => <li key={file}>{file}</li>)}{hub.source?.verified ? (hub.source.guidance_files ?? []).map(file => <li key={`source-${file}`}>{hub.source?.repo_id} / {file}</li>) : null}</ul>{selectedRecipes.length ? <p className="hint">Create {selectedRecipes.length} additional setup{selectedRecipes.length === 1 ? "" : "s"}: {selectedRecipes.map(item => item.name).join(", ")}. First setup recipe: {initialRecipe?.name ?? "model defaults"}.</p> : null}</div></> : null}
+      {step === 2 && selectedVariant ? <>
+        <CapabilityIconRow items={reviewCapabilities} />
+        <SettingSection title="Loading">
+          <SettingRow layout="models" label="Context" help={<>Total shared context in tokens. Leave this alone to keep the engine default.<code>--ctx-size</code></>} onReset={contextMode ? () => { setContextMode(""); setContext(""); } : undefined} resetLabel="Reset">
+            <ContextSlider label="Import context" value={contextShown} maximum={preview.contextMaximum} unknownLabel={contextMode === "auto" ? "Automatic fit" : "Engine default"} disabled={Boolean(busy)} onChange={value => { setContextMode("fixed"); setContext(String(value)); }} />
+          </SettingRow>
+          <SettingRow layout="models" label="Context mode" help="Automatic fit and Full are explicit choices. Engine default sends no context flag."><select aria-label="Import context mode" value={contextMode} disabled={Boolean(busy)} onChange={event => chooseContext(event.target.value)}><option value="">Engine default</option><option value="fixed">Fixed</option><option value="auto">Automatic fit</option><option value="full" disabled={!preview.contextMaximum}>Full</option></select></SettingRow>
+          <SettingRow layout="models" label="GPU layers" help={<>Weight placement. Other offloads remain independent.<code>--n-gpu-layers</code></>}><select aria-label="Import GPU layers" value={gpuLayers} disabled={Boolean(busy)} onChange={event => setGpuLayers(event.target.value)}><option value="">Engine default</option><option value="auto">Auto</option><option value="all">All</option><option value="0">CPU</option></select></SettingRow>
+          <SettingRow layout="models" label="K cache precision" help={<code>--cache-type-k</code>}><select aria-label="Import key cache precision" value={keyPrecision} onChange={event => setKeyPrecision(event.target.value)} disabled={Boolean(busy)}><option value="">Engine default</option>{cachePrecisions.map(value => <option key={value}>{value}</option>)}</select></SettingRow>
+          <SettingRow layout="models" label="V cache precision" help={<code>--cache-type-v</code>}><select aria-label="Import value cache precision" value={valuePrecision} onChange={event => setValuePrecision(event.target.value)} disabled={Boolean(busy)}><option value="">Engine default</option>{cachePrecisions.map(value => <option key={value}>{value}</option>)}</select></SettingRow>
+          <SettingRow layout="models" label="Flash attention" help={<code>--flash-attn</code>}><select aria-label="Import Flash attention" value={flashAttention} disabled={Boolean(busy)} onChange={event => setFlashAttention(event.target.value)}><option value="">Engine default</option><option value="auto">Auto</option><option value="on">On</option><option value="off">Off</option></select></SettingRow>
+          {preview.builtin || groups.length ? <SettingRow layout="models" label="MTP" help={<>Off sends no speculation flag. A built-in head uses tensors already inside the model file. A separate file is downloaded with the model.<code>--spec-type</code></>}><select aria-label="Import MTP" value={selectedMtp || mtpChoice === "builtin" ? mtpChoice : ""} disabled={Boolean(busy)} onChange={event => setMtpChoice(event.target.value)}><option value="">Off</option>{preview.builtin ? <option value="builtin">Built-in draft head</option> : null}{groups.map(group => <option key={group.value} value={group.value}>{group.label}</option>)}</select></SettingRow> : null}
+          <SettingRow layout="models" label="Cache location" help={<code>--no-kv-offload</code>}><select aria-label="Import cache location" value={kvOffload === null ? "" : kvOffload ? "gpu" : "cpu"} onChange={event => setKvOffload(event.target.value === "" ? null : event.target.value === "gpu")} disabled={Boolean(busy)}><option value="">Engine default</option><option value="gpu">GPU</option><option value="cpu">CPU / RAM</option></select></SettingRow>
+        </SettingSection>
+        <ModelHardwareEstimate active={active && step === 2} selection={{ repo_id: hub.repo_id, revision: hub.resolved_revision, primary_files: selectedVariant.files, projector_files: selectedProjector?.files ?? [], startup }} onEstimate={estimate => setPreview({ builtin: estimate.builtin_mtp === true, drafts: estimate.mtp_draft_files ?? [], modalities: estimate.advertised_modalities ?? [], contextMaximum: estimate.context_maximum ?? null })} />
+        <div className="model-download-footer"><span className="hint">{size == null ? "Size unknown" : formatBytes(size)} · {selectedVariant.files.length} model file{selectedVariant.files.length === 1 ? "" : "s"}{selectedProjector ? " + vision file" : ""}{mtpDownload.length ? " + draft head" : ""}</span><Help label="Download and vision files">Allow room for temporary and installed copies, roughly twice the selected size. Vision compatibility is checked after loading the model; a file being listed does not prove it is compatible.</Help><button type="button" className="primary-button" disabled={Boolean(busy) || !canReview} onClick={() => void download()}><Icon name="download" size={15} />{busy === "download" ? "Starting…" : "Download model"}</button></div>
+        <p className="hint">Context: {contextLabel} · K cache: {keyPrecision || "Engine default"} · V cache: {valuePrecision || "Engine default"} · Cache location: {kvOffload === null ? "Engine default" : kvOffload ? "GPU" : "CPU / RAM"}{mtpLabel ? ` · MTP: ${mtpLabel}` : ""}</p>
+        <div className="selected-download-files"><strong>Download selection: {selectedPresentation?.quant} · {selectedPresentation?.flavour}</strong><span className="hint">Pinned revision <code>{hub.resolved_revision}</code></span><ul>{files.map(file => <li key={file}>{file}</li>)}{hub.source?.verified ? (hub.source.guidance_files ?? []).map(file => <li key={`source-${file}`}>{hub.source?.repo_id} / {file}</li>) : null}</ul>{selectedRecipes.length ? <p className="hint">Create {selectedRecipes.length} additional setup{selectedRecipes.length === 1 ? "" : "s"}: {selectedRecipes.map(item => item.name).join(", ")}. First setup recipe: {initialRecipe?.name ?? "model defaults"}.</p> : null}</div>
+      </> : null}
     </section> : null}
     {message ? <p role="status">{message}</p> : null}
   </section>;

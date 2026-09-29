@@ -427,7 +427,7 @@ export function DeploymentsPanel({
   const contextResolved = typeof contextResolvedRaw === "number" ? contextResolvedRaw : null;
   const portResolved = startupResolved("port");
   const contextAuto = settings.ctx_size === "auto" || settings.ctx_size === "" && !changedStartup.current.has("ctx_size") && startupResolved("ctx_size") === "auto";
-  const contextShown = contextAuto ? null : settings.ctx_size === "0" || settings.ctx_size === "" && contextResolved === 0 ? maximumContext : settings.ctx_size !== "" && Number.isFinite(Number(settings.ctx_size)) && Number(settings.ctx_size) > 0 ? Number(settings.ctx_size) : contextResolved && contextResolved > 0 ? contextResolved : Math.min(32768, maximumContext ?? 32768);
+  const contextShown = contextAuto ? null : settings.ctx_size === "0" || settings.ctx_size === "" && contextResolved === 0 ? maximumContext : settings.ctx_size !== "" && Number.isFinite(Number(settings.ctx_size)) && Number(settings.ctx_size) > 0 ? Number(settings.ctx_size) : contextResolved && contextResolved > 0 ? contextResolved : null;
   const gpuLoaded = selectedRunning?.applied_startup.n_gpu_layers;
   const readout = (values: Record<string, unknown>) => <dl className="settings-readout">{Object.entries(values).map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{String(value)}</dd></div>)}</dl>;
 

@@ -76,14 +76,12 @@ class SettingsBagTests(unittest.TestCase):
             self.assertEqual(note.key, "max_iterations")
             self.assertEqual(note.requested, 3)
 
-    def test_default_gpu_profile_does_not_override_model_context(self) -> None:
+    def test_empty_startup_omits_engine_defaults_and_keeps_the_managed_address(self) -> None:
         bags = resolve_bags(startup={})
-        self.assertNotIn("ctx_size", bags.startup.applied)
-        self.assertEqual(bags.startup.applied["n_gpu_layers"], "auto")
-        self.assertEqual(bags.startup.applied["flash_attn"], "auto")
-        self.assertEqual(bags.startup.applied["fit"], "on")
-        self.assertEqual(bags.startup.applied["parallel"], -1)
-        self.assertTrue(bags.startup.applied["kv_unified"])
+        self.assertEqual(bags.startup.applied["host"], "127.0.0.1")
+        self.assertEqual(bags.startup.applied["port"], 8080)
+        for key in ("ctx_size", "n_gpu_layers", "flash_attn", "fit", "parallel", "kv_unified"):
+            self.assertNotIn(key, bags.startup.applied)
         self.assertNotIn("ctx_size", DEFAULT_GPU_PROFILE)
         self.assertEqual(DEFAULT_GPU_PROFILE["n_gpu_layers"], "auto")
         self.assertIn(DEFAULT_GPU_PROFILE["flash_attn"], {"on", "off", "auto"})
@@ -214,7 +212,8 @@ class SettingsBagTests(unittest.TestCase):
             self.assertEqual(args, [STARTUP_KEYS[key], "sample"])
         invalid = resolve_bags(startup={"flash_attn": "maybe"})
         self.assertIn("flash_attn", invalid.startup.unsupported)
-        self.assertEqual(invalid.startup.applied["flash_attn"], "auto")
+        self.assertNotIn("flash_attn", invalid.startup.applied)
+        self.assertNotIn("--flash-attn", startup_cli_args(invalid.startup.applied))
 
     def test_b11045_startup_flags_are_normalized_and_serialized(self) -> None:
         bags = resolve_bags(
@@ -304,7 +303,7 @@ class SettingsBagTests(unittest.TestCase):
             self.assertIn(key, bags.startup.unsupported)
             self.assertNotIn(key, bags.startup.applied)
         self.assertIn("fit", bags.startup.unsupported)
-        self.assertEqual(bags.startup.applied["fit"], "on")
+        self.assertNotIn("fit", bags.startup.applied)
         for key in ("reasoning", "reasoning_format", "reasoning_preserve"):
             self.assertIn(key, bags.per_request.unsupported)
             self.assertNotIn(key, bags.per_request.applied)
@@ -313,7 +312,7 @@ class SettingsBagTests(unittest.TestCase):
         self.assertNotIn("--ctx-size", args)
         self.assertNotIn("--threads-batch", args)
         self.assertNotIn("--cache-type-k", args)
-        self.assertEqual(args[args.index("--fit") + 1], "on")
+        self.assertNotIn("--fit", args)
         self.assertNotIn("--reasoning", args)
         self.assertNotIn("--reasoning-preserve", args)
 

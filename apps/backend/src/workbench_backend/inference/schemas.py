@@ -295,6 +295,9 @@ class ModelMemoryEstimate(BaseModel):
     projector_bytes: int | None = None
     speculation_bytes: int | None = None
     dynamic_overhead_bytes: int | None = None
+    builtin_mtp: bool = False
+    mtp_draft_files: list[str] = Field(default_factory=list)
+    advertised_modalities: list[str] = Field(default_factory=list)
 
 
 class HubVariant(BaseModel):
