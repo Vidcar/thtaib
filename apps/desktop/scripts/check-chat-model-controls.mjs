@@ -13,7 +13,7 @@ const vite = await createViteServer({ root, appType: "custom", server: { middlew
 const { ChatModelControls } = await vite.ssrLoadModule("/src/renderer/ChatModelControls.tsx");
 const { api } = await vite.ssrLoadModule("/src/renderer/api.ts");
 const { workspaceApi } = await vite.ssrLoadModule("/src/renderer/workspaceApi.ts");
-const original = { deploymentConfiguration: api.deploymentConfiguration, modelConfiguration: api.modelConfiguration, startManaged: api.startManaged, resolveSetup: workspaceApi.resolveSetup, chatReadiness: workspaceApi.chatReadiness };
+const original = { deploymentConfiguration: api.deploymentConfiguration, modelConfiguration: api.modelConfiguration, applyChatStartupOverrides: api.applyChatStartupOverrides, resolveSetup: workspaceApi.resolveSetup, chatReadiness: workspaceApi.chatReadiness };
 const bag = (requested = {}) => ({ requested, applied: requested, overridden: [], unsupported: [], retired: [] });
 const profile = (id, bundle, name) => ({ id, bundle_id: bundle, display_name: name, bags: { startup: bag({ ctx_size: 32768 }), per_request: bag({ reasoning: "on", reasoning_effort: "high", max_tokens: 5000 }), agent: bag() } });
 const bundles = [
@@ -58,7 +58,7 @@ try {
   const optionSelections = [];
   api.modelConfiguration = async (_bundle, _deployment, _refresh, selection) => { optionCalls++; optionSelections.push(selection); return options; };
   api.deploymentConfiguration = async () => options;
-  api.startManaged = async (bundle, config, startup) => {
+  api.applyChatStartupOverrides = async (bundle, config, startup) => {
     loaded.push({ bundle, config, startup }); if (failure) throw new Error(failure);
     return deployment("dep_" + config, bundle, config, { ctx_size: 32768, ...startup });
   };
@@ -171,8 +171,8 @@ try {
   assert.equal(aria(renderer, "Chat context", "input").props["data-token-value"], 12288, "Thinking updates retain the pending context input");
   failure = "GPU memory exhausted while reloading";
   const beforeFailedReload = applied.length;
-  await act(async () => button(renderer, "Reload").props.onClick()); await flush();
-  assert.equal(applied.length, beforeFailedReload, "a failed reload does not replace the prior chat binding");
+  await act(async () => button(renderer, "Apply this chat's settings").props.onClick()); await flush();
+  assert.equal(applied.length, beforeFailedReload, "a failed apply does not replace the prior chat binding");
   assert.equal(props.configuration.deployment_id, "dep_a");
   assert.equal(aria(renderer, "Chat context", "input").props["data-token-value"], 12288, "the failed candidate stays available for correction or retry");
   assert.match(text(renderer.root), /GPU memory exhausted while reloading/);
@@ -238,7 +238,7 @@ try {
   console.log("Chat model picker, exact residency, safe staging and per-model tuning checks passed.");
 } finally {
   if (renderer) await act(async () => renderer.unmount());
-  Object.assign(api, { deploymentConfiguration: original.deploymentConfiguration, modelConfiguration: original.modelConfiguration, startManaged: original.startManaged });
+  Object.assign(api, { deploymentConfiguration: original.deploymentConfiguration, modelConfiguration: original.modelConfiguration, applyChatStartupOverrides: original.applyChatStartupOverrides });
   Object.assign(workspaceApi, { resolveSetup: original.resolveSetup, chatReadiness: original.chatReadiness });
   globalThis.window = originalWindow;
   await vite.close();

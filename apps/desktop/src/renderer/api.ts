@@ -44,14 +44,6 @@ import type {
   DesktopAccess,
 } from "./types";
 
-export const DEFAULT_GPU_STARTUP = {
-  n_gpu_layers: "auto",
-  fit: "on",
-  flash_attn: "auto",
-  parallel: 4,
-  kv_unified: true,
-} as const;
-
 export const DEFAULT_EMBEDDING_STARTUP = {
   embedding: "on",
   pooling: "last",
@@ -159,6 +151,13 @@ function writePresentation(payload: Partial<PresentationSettings>): Promise<Pres
 
 const chatListFlights = new Map<string, Promise<ChatConversation[]>>();
 
+function postManagedDeployment(bundle_id: string, profile_id: string, startup: object, auto_start: boolean): Promise<Deployment> {
+  return request<Deployment>("/v1/deployments/managed", {
+    method: "POST",
+    body: JSON.stringify({ bundle_id, profile_id, startup, auto_start }),
+  });
+}
+
 export const api = {
   health: () => request<{ status: string; product: string; surface: string }>("/health"),
   presentationSettings: readPresentation,
@@ -228,13 +227,8 @@ export const api = {
   deletionPreview: (kind: "bundle" | "profile", id: string, permanent = false) => request<DeletePreview>(`/v1/${kind === "bundle" ? "bundles" : "profiles"}/${id}/delete-preview${kind === "bundle" && permanent ? "?permanent=true" : ""}`),
   deleteModelRecord: (kind: "bundle" | "profile", id: string, permanent = false) => request<DeletePreview>(`/v1/${kind === "bundle" ? "bundles" : "profiles"}/${id}${kind === "bundle" && permanent ? "?permanent=true" : ""}`, { method: "DELETE" }),
   deploymentProfileChanges: (id: string) => request<DeploymentProfileChanges>(`/v1/deployments/${id}/profile-changes`),
-  updateProfile: (id: string, payload: { display_name: string; bundle_id: string | null; startup: object; per_request: object; agent: object; expected_revision?: number }) =>
-    request<RunProfile>(`/v1/profiles/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
-  renameProfile: (id: string, display_name: string) => request<RunProfile>(`/v1/profiles/${id}/rename`, { method: "POST", body: JSON.stringify({ display_name }) }),
-  duplicateProfile: (id: string) => request<RunProfile>(`/v1/profiles/${id}/duplicate`, { method: "POST", body: "{}" }),
   start: (id: string) => request<Deployment>(`/v1/deployments/${id}/start`, { method: "POST" }),
   reload: (id: string) => request<Deployment>(`/v1/deployments/${id}/reload`, { method: "POST" }),
-  reconfigure: (id: string, payload: { startup: Record<string, unknown>; replace_startup?: boolean; model_configuration_id?: string | null; expected_configuration_revision?: number; expected_updated_at?: string; conversation_id?: string | null }) => request<Deployment>(`/v1/deployments/${id}/reconfigure`, { method: "POST", body: JSON.stringify(payload) }),
   modelConfigurations: (bundleId: string) => request<RunProfile[]>(`/v1/bundles/${bundleId}/configurations`),
   saveModelConfiguration: (bundleId: string, payload: { display_name: string; startup: object; per_request: object; agent?: object; recipe_origin?: ResponseRecipeOrigin | null; configuration_id?: string; expected_revision?: number; make_default?: boolean }) => request<RunProfile>(`/v1/bundles/${bundleId}/configurations`, { method: "POST", body: JSON.stringify(payload) }),
   setDefaultConfiguration: (bundleId: string, configuration_id: string) => request<ModelBundle>(`/v1/bundles/${bundleId}/default-configuration`, { method: "PUT", body: JSON.stringify({ configuration_id }) }),
@@ -245,18 +239,8 @@ export const api = {
   setManagedModelsRuntime: (max_loaded_models: number) => request<ManagedModelsRuntime>("/v1/runtime/models", { method: "PUT", body: JSON.stringify({ max_loaded_models }) }),
   pinRuntime: () => request<RuntimeManifest>("/v1/runtime/pin", { method: "POST", body: "{}" }),
   deployments: () => request<Deployment[]>("/v1/deployments"),
-  startManaged: (bundle_id: string, profile_id?: string, startup?: object) =>
-    request<Deployment>("/v1/deployments/managed", {
-      method: "POST",
-      body: JSON.stringify({
-        bundle_id,
-        profile_id,
-        startup: startup ?? { ...DEFAULT_GPU_STARTUP },
-        auto_start: true,
-      }),
-    }),
-  prepareManaged: (bundle_id: string, profile_id: string | undefined, startup: object) =>
-    request<Deployment>("/v1/deployments/managed", { method: "POST", body: JSON.stringify({ bundle_id, profile_id, startup, auto_start: false }) }),
+  loadSavedModelSetup: (bundle_id: string, profile_id: string) => postManagedDeployment(bundle_id, profile_id, {}, true),
+  applyChatStartupOverrides: (bundle_id: string, profile_id: string, startup: object) => postManagedDeployment(bundle_id, profile_id, startup, true),
   attachConnected: (endpoint: string, display_name?: string, startup?: object) =>
     request<Deployment>("/v1/deployments/connected", {
       method: "POST",

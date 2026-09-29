@@ -201,7 +201,7 @@ async function checkSavedLoadingRetainsRunningModel(Panel) {
       const row = renderer.root.findAll(node => node.type?.name === "SettingRow" && node.props.label === label)[0];
       assert.equal(row.findAllByType("input").find(node => node.props.type === "number").props.min, 0, "descriptor minimum zero wins for ordinary numeric counts");
     }
-    assert.equal(readiness(), "Ready"); assert.ok(button("Reload"));
+    assert.equal(readiness(), "Ready"); assert.ok(button("Load")); assert.ok(button("Reload"));
     await act(async () => { changeContext(renderer, 46080); await tick(); });
     assert.equal(contextInput(renderer), range, "Context editing retains the mounted range");
     assert.equal(readiness(), "Ready"); assert.ok(button("Load saved"));
@@ -212,7 +212,8 @@ async function checkSavedLoadingRetainsRunningModel(Panel) {
     assert.equal(renderer.root.findAllByType("select").find(node => node.props.id === "model-threads"), cpuThreads, "descriptor refresh preserves the mounted Auto selector");
     assert.equal(range.props["data-token-value"], 46080);
     assert.equal(readiness(), "Ready", "saving future loading settings keeps the current model's healthy state");
-    assert.ok(button("Reload"), "saved loading changes retain an explicit Reload action");
+    assert.ok(button("Load"), "saved loading changes retain an explicit Load action");
+    assert.ok(button("Reload"), "a running record keeps a separate Reload");
     assert.match(contextRow().props.hint.props.children.join(""), /Loaded per request: 32k tokens/, "loaded Context remains distinct from saved Context until reload");
     assert.equal(originalRunning.pid, 32768);
     assert.equal(calls.filter(call => call.address.endsWith("/v1/deployments/managed")).length, 0, "Save never starts or replaces a child process");
@@ -237,8 +238,8 @@ async function checkSavedLoadingRetainsRunningModel(Panel) {
     await act(async () => temperature().props.onChange({ target: { value: "0.8" } }));
     assert.match(toolbar(), /Save temporarily unavailable/, "editing keeps actionable errors visible");
     await act(async () => button("Revert edits").props.onClick());
-    await act(async () => { button("Reload").props.onClick(); await tick(); });
-    assert.equal(calls.filter(call => call.address.endsWith("/v1/deployments/managed")).length, 1, "only explicit Reload starts the saved setup");
+    await act(async () => { button("Load").props.onClick(); await tick(); });
+    assert.equal(calls.filter(call => call.address.endsWith("/v1/deployments/managed")).length, 1, "only explicit Load starts the saved setup");
     assert.equal(calls.filter(call => call.address.includes("/configuration-options")).at(-1).body.deployment_id, "loaded-46080", "exact desired residency wins over a newer historical configuration instance");
     assert.equal(readiness(), "Ready"); assert.equal(contextRow().props.hint, undefined, "loaded and saved Context agree after explicit reload");
   } finally { if (renderer) await act(async () => renderer.unmount()); globalThis.fetch = originalFetch; }

@@ -395,9 +395,18 @@ export function DeploymentsPanel({
     if (!selectedProfile) throw new Error("Save this setup before loading it.");
     const owner = selectionOwner.current;
     try {
-      const result = await api.startManaged(owner.id, selectedProfile.id, {});
+      const result = await api.loadSavedModelSetup(owner.id, selectedProfile.id);
       if (result.status === "failed" || result.error) throw new Error(result.error ?? "Model could not load.");
       if (selectionOwner.current === owner) { setMessageTone("ok"); setMessage(result.health?.healthy ? "Saved setup loaded." : "Loading saved setup…"); }
+    } finally { await refresh(); }
+  }
+  async function reloadRunningModel() {
+    if (!selectedActive) throw new Error("No running model to reload.");
+    const owner = selectionOwner.current;
+    try {
+      const result = await api.reload(selectedActive.id);
+      if (result.status === "failed" || result.error) throw new Error(result.error ?? "Model could not reload.");
+      if (selectionOwner.current === owner) { setMessageTone("ok"); setMessage(result.health?.healthy ? "Model reloaded." : "Reloading…"); }
     } finally { await refresh(); }
   }
   const field = (key: string, label: string, help: string, options: Array<{ value: string; label: string }>, custom = false, min = 0, max?: number, inactive = false) => {
@@ -520,7 +529,7 @@ export function DeploymentsPanel({
         <MenuPopover label="Setup actions" className="model-setup-menu" placement="below" align="end" trigger={<Icon name="more" size={16} />} disabled={Boolean(busy)}>
           {close => <div className="model-setup-actions"><button type="button" onClick={() => { close(); openPanel("files"); }}>Files &amp; model information</button><button type="button" onClick={() => { close(); openPanel("runtime"); }}>Loaded model details</button><button type="button" disabled={Boolean(busy)} onClick={() => { close(); openPanel("checks"); void action("preview", () => preview()); }}>Validate draft</button><label htmlFor="model-configuration-name">Rename setup<input id="model-configuration-name" value={configurationName} disabled={Boolean(busy)} onChange={event => { dirty.current = true; setConfigurationName(event.target.value); }} /></label><button type="button" disabled={Boolean(busy)} onClick={() => { setCreatingVariant(true); setVariantName(`${configurationName} copy`); close(); }}><Icon name="copy" size={14} />Save a copy</button>{selectedProfile && selected.default_configuration_id !== selectedProfile.id ? <button type="button" disabled={Boolean(busy)} onClick={() => { close(); void action("default", async () => { await api.setDefaultConfiguration(selectedBundleId, selectedProfile.id); await onBundlesChanged?.(); }); }}>Make model default</button> : null}<button type="button" disabled={Boolean(busy)} onClick={() => { drafts.current.delete(activeDraftKey.current); dirty.current = false; presetApplied.current = false; selectProfile(profileId); close(); }}>Revert edits</button><button type="button" disabled={Boolean(busy)} onClick={() => { close(); openPanel("setup"); }}>Manage setups</button>{selectedActive ? <button type="button" disabled={Boolean(busy)} onClick={() => { close(); void action("unload", async () => { await api.stop(selectedActive.id); await refresh(); }); }}>{busy === "unload" ? "Unloading…" : "Unload"}</button> : null}</div>}
         </MenuPopover>
-        <div className="model-lifecycle-actions"><button type="button" disabled={Boolean(busy) || !profileId || !runtimeReady || !selected.disk_matches || Boolean(selectedActive && !selectedRunning)} title={dirty.current ? "Load the saved setup. Save edits first to use pending values." : "Load the saved setup using its loading settings."} onClick={() => void action("load", loadSavedSetup)}>{busy === "load" ? "Loading…" : dirty.current ? "Load saved" : selectedActive ? "Reload" : "Load"}</button></div>
+        <div className="model-lifecycle-actions"><button type="button" disabled={Boolean(busy) || !profileId || !runtimeReady || !selected.disk_matches || Boolean(selectedActive && !selectedRunning)} title={dirty.current ? "Load the saved setup. Save edits first to use pending values." : "Load the saved setup using its loading settings."} onClick={() => void action("load", loadSavedSetup)}>{busy === "load" ? "Loading…" : dirty.current ? "Load saved" : "Load"}</button>{selectedActive ? <button type="button" disabled={Boolean(busy)} title="Stop this running model, restore it if a settings change failed, and start the same record." onClick={() => void action("reload", reloadRunningModel)}>{busy === "reload" ? "Reloading…" : "Reload"}</button> : null}</div>
         <button type="button" className="text-button model-setup-readiness" aria-label="Loaded model details" onClick={() => openPanel("runtime")}><StatusBadge {...(selectedCurrent.length ? stateOf(selectedCurrent[0]) : { label: "Not loaded", tone: "neutral" as const })} /></button>
       <div className="model-toolbar-status" role="status" data-tone={messageTone}>{stagedStartupError || setupPreview.error || toolbarMessage || (!loaded ? "Checking local engine…" : !runtimeReady ? "Set up the local engine in Settings" : "\u00a0")}</div>
       </header>
