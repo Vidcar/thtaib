@@ -8,8 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from workbench_backend.errors import ManagerError
-from workbench_backend.inference.ids import utc_now
-from workbench_backend.inference.schemas import GgufRuntimeMetadata, ModelBundle, RunProfile, RuntimeManifest, SettingsBags
+from workbench_backend.inference.ids import new_id, utc_now
+from workbench_backend.inference.schemas import (
+    Deployment, DeploymentStatus, DuplicateProfileRequest, GgufRuntimeMetadata, ManagementScope,
+    ModelBundle, RenameProfileRequest, RunProfile, RuntimeManifest, SettingsBags,
+)
 from workbench_backend.inference.settings import (
     REQUEST_STARTUP_ALIASES, REQUEST_TEMPLATE_ALIASES, normalize_startup_requested,
     resolve_bags, split_response_startup,
@@ -171,3 +174,138 @@ def ensure_model_configurations(store: RecordStore) -> None:
                 raise ManagerError("Model configuration ID belongs to another bundle.",
                                    code="configuration_identity_conflict", status_code=409)
             store.put_bundle(bundle.model_copy(update={"default_configuration_id": default.id}))
+
+
+def require_profile_bundle(store: RecordStore, bundle_id: str | None) -> None:
+    if bundle_id is not None and store.get_bundle(bundle_id) is None:
+        raise ManagerError("Unknown bundle", code="bundle_missing", status_code=404)
+
+
+def validate_profile_bundle(profile: RunProfile, bundle_id: str) -> None:
+    if profile.bundle_id is not None and profile.bundle_id != bundle_id:
+        raise ManagerError(
+            "Profile is bound to a different bundle.",
+            code="profile_bundle_mismatch",
+            status_code=400,
+            details={
+                "profile_id": profile.id,
+                "profile_bundle_id": profile.bundle_id,
+                "bundle_id": bundle_id,
+            },
+        )
+
+
+def resolved_profile(store: RecordStore, profile: RunProfile) -> RunProfile:
+    """Resolve the shared current baseline without rewriting saved overrides."""
+    bundle = store.get_bundle(profile.bundle_id) if profile.bundle_id else None
+    initial_startup, response_defaults = model_default_values(store, bundle,
+        startup=profile.bags.startup.requested) if bundle else ({}, None)
+    return profile.model_copy(
+        update={
+            "bundle_name": bundle.display_name if bundle else None,
+            "bags": resolve_bags(
+                startup=profile.bags.startup.requested,
+                startup_defaults=initial_startup,
+                per_request=profile.bags.per_request.requested,
+                agent=profile.bags.agent.requested,
+                per_request_defaults=response_defaults,
+            )
+        }
+    )
+
+
+def saved_profile(store: RecordStore, profile_id: str) -> RunProfile:
+    profile = store.get_profile(profile_id)
+    if profile is None:
+        raise ManagerError("Unknown profile", code="profile_missing", status_code=404)
+    return resolved_profile(store, profile)
+
+
+def list_saved_profiles(store: RecordStore) -> list[RunProfile]:
+    ensure_model_configurations(store)
+    defaults = {bundle.default_configuration_id for bundle in store.list_bundles()}
+    profiles = [resolved_profile(store, profile) for profile in store.list_profiles()]
+    profiles.sort(key=lambda profile: (profile.id in defaults, profile.updated_at, profile.id), reverse=True)
+    return profiles
+
+
+def list_saved_configurations(store: RecordStore, bundle_id: str) -> list[RunProfile]:
+    require_profile_bundle(store, bundle_id)
+    return [profile for profile in list_saved_profiles(store) if profile.bundle_id == bundle_id]
+
+
+def set_bundle_default_configuration(store: RecordStore, bundle_id: str, configuration_id: str) -> ModelBundle:
+    with store.configuration_lock():
+        bundle = store.get_bundle(bundle_id)
+        if bundle is None:
+            raise ManagerError("Unknown model", code="bundle_missing", status_code=404)
+        profile = saved_profile(store, configuration_id)
+        if profile.bundle_id != bundle_id:
+            raise ManagerError("Configuration belongs to another model.", code="profile_bundle_mismatch", status_code=400)
+        return store.put_bundle(bundle.model_copy(update={"default_configuration_id": profile.id}))
+
+
+def rename_saved_profile(store: RecordStore, profile_id: str, request: RenameProfileRequest | str) -> RunProfile:
+    display_name = request if isinstance(request, str) else request.display_name
+    existing = saved_profile(store, profile_id)
+    return store.put_profile(
+        existing.model_copy(update={"display_name": display_name, "updated_at": utc_now(), "revision": existing.revision + 1})
+    )
+
+
+def duplicate_saved_profile(
+    store: RecordStore,
+    profile_id: str,
+    request: DuplicateProfileRequest | None = None,
+) -> RunProfile:
+    existing = saved_profile(store, profile_id)
+    now = utc_now()
+    display_name = request.display_name if request and request.display_name else f"{existing.display_name} copy"
+    duplicate = existing.model_copy(
+        update={
+            "id": new_id("profile"),
+            "display_name": display_name,
+            "created_at": now,
+            "updated_at": now,
+            "revision": 1,
+            "recipe_origin": None,
+        },
+        deep=True,
+    )
+    return store.put_profile(duplicate)
+
+
+def find_compatible_deployment(
+    store: RecordStore,
+    runtime: RuntimeManifest | None,
+    bundle_id: str,
+    bags: SettingsBags,
+) -> Deployment | None:
+    """Find an exact native plan without using setup or response identity."""
+    bundle = store.get_bundle(bundle_id)
+    if bundle is None:
+        return None
+    selected_identity = loaded_model_identity(runtime, bundle, bags)
+    matches = []
+    for deployment in store.list_deployments():
+        if deployment.scope != ManagementScope.managed or deployment.bundle_id != bundle_id or has_response_startup_defaults(deployment.settings):
+            continue
+        if deployment.loaded_model_identity is not None:
+            compatible = deployment.loaded_model_identity == selected_identity
+        else:
+            # Only cold historical records may be bound to the current
+            # runtime. A live old record has no proven runtime identity.
+            compatible = deployment.status == DeploymentStatus.stopped and loaded_model_identity(runtime, bundle, deployment.settings) == selected_identity
+        if compatible:
+            matches.append(deployment)
+    return max(matches, key=lambda d: (d.status == DeploymentStatus.running and bool(d.health and d.health.healthy and d.process_identity),
+        d.status != DeploymentStatus.failed, d.updated_at), default=None)
+
+
+def deployment_for_configuration(
+    store: RecordStore,
+    runtime: RuntimeManifest | None,
+    configuration_id: str,
+) -> Deployment | None:
+    profile = saved_profile(store, configuration_id)
+    return find_compatible_deployment(store, runtime, profile.bundle_id or "", profile.bags)
