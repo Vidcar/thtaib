@@ -969,7 +969,7 @@ class ImportJobRunner:
         """Freeze import choices before recipe cloning, including restart/retry."""
         if not (job.initial_startup or job.initial_per_request or job.initial_recipe_id):
             return
-        from workbench_backend.inference.configurations import ensure_model_configurations
+        from workbench_backend.inference.configurations import ensure_model_configurations, model_default_values
         from workbench_backend.inference.schemas import ResponseRecipeOrigin, RunProfile
         from workbench_backend.inference.settings import resolve_bags
         with self.store.configuration_lock():
@@ -992,11 +992,13 @@ class ImportJobRunner:
                     card_sha256=recipe.card_sha256, section=recipe.section)
             response.update(job.initial_per_request)
             now = utc_now()
+            initial_startup, response_defaults = model_default_values(self.store, bundle, startup=job.initial_startup)
             profile = RunProfile(id=identity, bundle_id=bundle.id, display_name="Import settings",
                 settings_schema_version=2,
                 bags=resolve_bags(startup=dict(job.initial_startup),
+                    startup_defaults=initial_startup,
                     per_request={key: value for key, value in response.items() if value is not None},
-                    per_request_defaults=bundle.huggingface_configuration.generation_defaults if bundle.huggingface_configuration else None),
+                    per_request_defaults=response_defaults),
                 recipe_origin=origin,
                 created_at=now, updated_at=now)
             self.store.put_profile(profile)

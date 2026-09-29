@@ -95,8 +95,9 @@ class HuggingFaceConfigurationTests(TestCase):
         self.assertIn("eos_token_id", unsupported)
         self.assertIn("mystery", unsupported)
         self.assertEqual(_generation_defaults({"do_sample": False, "top_k": 64})[0], {"temperature": 0.0})
-        bounded, _ = _generation_defaults({"max_new_tokens": 128, "stop_strings": ["<|done|>"]})
-        self.assertEqual(bounded["max_tokens"], 128)
+        bounded, notes = _generation_defaults({"max_new_tokens": 128, "stop_strings": ["<|done|>"]})
+        self.assertNotIn("max_tokens", bounded)
+        self.assertIn("max_new_tokens", notes)
         self.assertEqual(bounded["stop"], ["<|done|>"])
 
     def test_publisher_file_hash_mismatch_blocks_install(self):
@@ -139,6 +140,7 @@ class HuggingFaceConfigurationTests(TestCase):
             self.assertEqual(config.generation_defaults["logit_bias"], [[17, False]])
             deployment = Deployment(id="deployment", display_name="demo", scope=ManagementScope.managed,
                 status=DeploymentStatus.stopped, bundle_id=bundle.id, publisher_request_defaults=config.generation_defaults,
+                settings=resolve_bags(per_request_defaults=config.generation_defaults),
                 created_at="2026-09-24T00:00:00Z", updated_at="2026-09-24T00:00:00Z")
             inherited = _resolve_per_request(None, deployment, None)
             self.assertEqual(inherited.applied["top_k"], 64)

@@ -96,7 +96,7 @@ class ModelCardRecipeTests(TestCase):
     def test_neutral_recommendation_rejects_ambiguous_or_unsupported_sampler_advice(self):
         self.assertEqual(_parse(GEMMA_CARD.replace("top_k=64", "top_k=64, top_k=32")), [])
         self.assertEqual(_parse(GEMMA_CARD.replace("top_k=64", "top_k=64, top_a=0.5")), [])
-        self.assertEqual(_parse(GEMMA_CARD.replace("top_p=0.95", "top_p=0")), [])
+        self.assertEqual(_parse(GEMMA_CARD.replace("top_p=0.95", "top_p=0"))[0]["per_request"]["top_p"], 0)
         self.assertEqual(_parse(GEMMA_CARD.replace("top_k=64", "top_k=bad")), [])
         self.assertEqual(_parse(JICA_CARD.replace("- **Top-K**: `20`", "- **Top-K**: `20`\n- **Top-K**: `40`")), [])
         self.assertEqual(_parse(JICA_CARD.replace("**Top-K**", "**Mirostat**")), [])
@@ -141,7 +141,7 @@ class ModelCardRecipeTests(TestCase):
     def test_invalid_and_ambiguous_values_are_not_offered(self):
         bad = """## Recommended sampling settings
 - Thinking mode: temperature=nan, top_p=0.9
-- Instruct mode: temperature=0.7, top_p=0.8, presence_penalty=9
+- Instruct mode: temperature=0.7, top_p=0.8, presence_penalty=nan
 - Thinking mode for general tasks: temperature=1.0, top_p=0.95, top_p=0.8
 - Thinking mode for precise coding: temperature=0.6, top_p=0.95, unsupported_sampler=4
 """
@@ -178,8 +178,8 @@ To achieve optimal performance, we recommend the following settings:
         self.assertEqual(unsupported, {})
         invalid, notes = _generation_defaults({"top_k": True, "top_p": 0,
             "min_p": math.nan, "presence_penalty": 2.5, "frequency_penalty": math.inf})
-        self.assertEqual(invalid, {})
-        self.assertEqual(set(notes), {"top_k", "top_p", "min_p", "presence_penalty", "frequency_penalty"})
+        self.assertEqual(invalid, {"top_p": 0, "presence_penalty": 2.5})
+        self.assertEqual(set(notes), {"top_k", "min_p", "frequency_penalty"})
         self.assertIn("top_k", _generation_defaults({"top_k": 10 ** 1000})[1])
         greedy, _ = _generation_defaults({"do_sample": False, "top_k": 20,
             "presence_penalty": 1.5, "repetition_penalty": 1.1})

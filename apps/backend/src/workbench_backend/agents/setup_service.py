@@ -476,7 +476,9 @@ class SetupService:
                     else:
                         requested_startup[key] = value
                 candidate_bags = profile.bags.model_copy(deep=True)
-                candidate_bags.startup = resolve_bags(startup=requested_startup).startup
+                candidate_bags.startup = resolve_bags(startup=requested_startup, startup_defaults={
+                    key: value for key, value in profile.bags.startup.applied.items()
+                    if key not in profile.bags.startup.requested}).startup
                 selected = self.manager.compatible_deployment(profile.bundle_id, candidate_bags)
                 if selected is None and prepare_model:
                     from workbench_backend.inference.schemas import ManagedDeploymentRequest

@@ -1251,15 +1251,31 @@
           "default": null,
           "title": "Capacity Tokens"
         },
-        "counting_method": {
-          "default": "Character estimate (3 chars/token), outbound messages/tools/schema counted once, 2048 tokens/image, 8% capacity margin; not tokenizer usage",
-          "title": "Counting Method",
+        "configured_output_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Configured Output Tokens"
+        },
+        "counting_basis": {
+          "default": "estimated",
+          "enum": [
+            "native",
+            "estimated"
+          ],
+          "title": "Counting Basis",
           "type": "string"
         },
-        "estimated_input_tokens": {
-          "default": 0,
-          "title": "Estimated Input Tokens",
-          "type": "integer"
+        "counting_method": {
+          "default": "Deep Agents / LangChain approximate token counter; not tokenizer usage",
+          "title": "Counting Method",
+          "type": "string"
         },
         "fits": {
           "anyOf": [
@@ -1273,9 +1289,9 @@
           "default": null,
           "title": "Fits"
         },
-        "margin_tokens": {
+        "input_tokens": {
           "default": 0,
-          "title": "Margin Tokens",
+          "title": "Input Tokens",
           "type": "integer"
         },
         "notes": {
@@ -1284,11 +1300,6 @@
           },
           "title": "Notes",
           "type": "array"
-        },
-        "output_reservation_tokens": {
-          "default": 0,
-          "title": "Output Reservation Tokens",
-          "type": "integer"
         },
         "purpose": {
           "default": "work",
@@ -1302,7 +1313,7 @@
           "type": "string"
         },
         "schema_version": {
-          "default": 1,
+          "default": 2,
           "title": "Schema Version",
           "type": "integer"
         },
@@ -1311,18 +1322,6 @@
           "default": "deepagents-upstream",
           "title": "Summarization Path",
           "type": "string"
-        },
-        "usable_input_tokens": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Usable Input Tokens"
         }
       },
       "title": "ContextObservation",
@@ -2586,99 +2585,6 @@
       "title": "RelatedFile",
       "type": "object"
     },
-    "ResponseBudgetBinding": {
-      "properties": {
-        "bound_at": {
-          "title": "Bound At",
-          "type": "string"
-        },
-        "capacity_tokens": {
-          "title": "Capacity Tokens",
-          "type": "integer"
-        },
-        "margin_tokens": {
-          "title": "Margin Tokens",
-          "type": "integer"
-        },
-        "model_identity": {
-          "title": "Model Identity",
-          "type": "string"
-        },
-        "source": {
-          "title": "Source",
-          "type": "string"
-        },
-        "total_tokens": {
-          "title": "Total Tokens",
-          "type": "integer"
-        },
-        "version": {
-          "default": 1,
-          "title": "Version",
-          "type": "integer"
-        }
-      },
-      "required": [
-        "total_tokens",
-        "capacity_tokens",
-        "margin_tokens",
-        "source",
-        "model_identity",
-        "bound_at"
-      ],
-      "title": "ResponseBudgetBinding",
-      "type": "object"
-    },
-    "ResponseBudgetPolicy": {
-      "properties": {
-        "mode": {
-          "default": "workbench_auto",
-          "enum": [
-            "explicit",
-            "publisher",
-            "workbench_auto"
-          ],
-          "title": "Mode",
-          "type": "string"
-        },
-        "source": {
-          "default": "Workbench Auto",
-          "title": "Source",
-          "type": "string"
-        },
-        "thinking": {
-          "anyOf": [
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Thinking"
-        },
-        "total_tokens": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Total Tokens"
-        },
-        "version": {
-          "default": 1,
-          "title": "Version",
-          "type": "integer"
-        }
-      },
-      "title": "ResponseBudgetPolicy",
-      "type": "object"
-    },
     "ResponseRecipeOrigin": {
       "properties": {
         "card_sha256": {
@@ -2866,28 +2772,6 @@
           "additionalProperties": true,
           "title": "Applied",
           "type": "object"
-        },
-        "output_budget_binding": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ResponseBudgetBinding"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "output_budget_policy": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ResponseBudgetPolicy"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
         },
         "overridden": {
           "items": {

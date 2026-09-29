@@ -11,6 +11,7 @@ import type {
   SchemaBrowserSessionStatus,
   SchemaBrowserTab,
   SchemaBrowserViewport,
+  SchemaContextObservation,
   SchemaProcessIdentity,
 } from "../generated/shared-contracts/openapi";
 
@@ -333,18 +334,7 @@ export type UserContentBlock =
   | { type: "text"; text: string }
   | { type: "image_url"; image_url: { url: string; detail?: "auto" | "low" | "high" } };
 
-export interface ContextObservation {
-  schema_version: number;
-  capacity_tokens: number | null;
-  capacity_source: "server_props.n_ctx" | "unknown";
-  output_reservation_tokens: number;
-  estimated_input_tokens: number;
-  margin_tokens: number;
-  fits: boolean | null;
-  counting_method: string;
-  summarization_path: "deepagents-upstream";
-  notes: string[];
-}
+export type ContextObservation = SchemaContextObservation;
 
 export interface StructuredOutputResult {
   schema_version: number;
@@ -762,7 +752,8 @@ export interface InspectReport {
 
 export interface RuntimeControlDescriptor {
   key: string;
-  flag: string;
+  flag: string | null;
+  request_path?: string | null;
   label: string;
   description: string;
   source: string;

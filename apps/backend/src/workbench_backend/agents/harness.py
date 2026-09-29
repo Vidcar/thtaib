@@ -20,9 +20,10 @@ from typing import Any
 import httpx
 from deepagents import create_deep_agent
 from deepagents.backends import StateBackend
-from deepagents.middleware.summarization import SummarizationMiddleware, SUMMARIZATION_EVENT_KEY, compute_summarization_defaults
+from deepagents.middleware.summarization import SummarizationMiddleware, SUMMARIZATION_EVENT_KEY, create_summarization_middleware
 from langchain.agents.middleware import TodoListMiddleware, HumanInTheLoopMiddleware
 from langchain_core.embeddings import Embeddings
+from langchain_core.exceptions import ContextOverflowError
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
 from langchain_core.outputs import ChatResult
@@ -37,7 +38,7 @@ from workbench_backend.inference.schemas import SettingsBags
 from workbench_backend.agents.helpers import freeze_helpers, freeze_settings, prepare_frozen_model, require_accepted_model_identity
 from workbench_backend.agents.execution_policy import ExecutionControl, PLAN_TOOLS, PLAN_INSTRUCTIONS, require_setup_capabilities
 from workbench_backend.agents.evidence import build_completion
-from workbench_backend.agents.context import BudgetedSummarizationMiddleware, observe_context, require_context_fit, observe_payload, token_counter_for_model, validate_retained_messages
+from workbench_backend.agents.context import ContextObservation, SummaryDispatchModel, observe_context, observe_payload, token_counter_for_model, validate_retained_messages
 from workbench_backend.inference.telemetry import current_request_purpose, request_purpose
 from workbench_backend.agents.tool_outcomes import reconcile_effects, failure_for_run, result_outcome
 from workbench_backend.agents.harness_backend import build_run_backend, is_reserved_framework_path, harness_scratch_root, canonical_root, roots_overlap
@@ -828,8 +829,6 @@ class HarnessService:
             else:
                 setup.selected_profile_id = request.profile_id
                 setup.bags.per_request = accepted_settings.per_request
-            from workbench_backend.inference.response_budget import bind_output_budget
-            setup.bags.per_request = bind_output_budget(deployment, setup.bags.per_request)
             setup.system_prompt = "\n\n".join((setup.system_prompt, approval_mode_instructions(request.approval_mode, compact=input_policy is not None)))
             if request.work_mode == "plan":
                 setup.system_prompt += "\n\n" + PLAN_INSTRUCTIONS
@@ -1349,7 +1348,7 @@ class HarnessService:
                 self._finish(run, AgentRunStatus.cancelled, "cancelled")
                 return
             run.error = clarify_connection_error(exc)
-            run.failure = failure_for_run(run, code=getattr(exc, "code", None))
+            run.failure = failure_for_run(run, code=_failure_code(run, exc))
             self._finish(run, AgentRunStatus.failed, "failed")
         finally:
             with self._lock:
@@ -1400,7 +1399,7 @@ class HarnessService:
                 self._finish(run, AgentRunStatus.cancelled, "cancelled")
                 return
             run.error = clarify_connection_error(exc)
-            run.failure = failure_for_run(run, code=getattr(exc, "code", None))
+            run.failure = failure_for_run(run, code=_failure_code(run, exc))
             self._finish(run, AgentRunStatus.failed, "failed")
         finally:
             with self._lock:
@@ -1603,10 +1602,17 @@ class HarnessService:
             if not inspection_only:
                 clear_derived_knowledge(harness_scratch_root(self.manager.paths, run.id if run.parent_run_id else run.thread_id or run.id))
                 materialize_onto_backend(backend, knowledge_plan)
-        observation = run.context_observation
-        usable = observation.usable_input_tokens if observation is not None else None
+        observed_deployment = self.manager.get_deployment(run.deployment_id)
+        capacity = observed_deployment.server_props.n_ctx if observed_deployment.server_props else None
+        capacity = capacity if type(capacity) is int and capacity > 0 else None
+        observation = (run.context_observation or ContextObservation()).model_copy(update={
+            "capacity_tokens": capacity,
+            "capacity_source": "server_props.n_ctx" if capacity is not None else "unknown",
+        })
+        run.context_observation = observation
         # Override provider-name defaults; only observed runtime capacity is a fact.
-        model.profile = {**media_profile, **({"max_input_tokens": usable} if usable is not None else {})}
+        media_profile.pop("max_input_tokens", None)
+        model.profile = {**media_profile, **({"max_input_tokens": capacity} if capacity is not None else {})}
         if not inspection_only and callable(getattr(model, "set_generation_observer", None)):
             latest_request_ids: dict[str, str] = {}
 
@@ -1651,13 +1657,12 @@ class HarnessService:
             model.set_generation_observer(observe_generation)
         if observation is not None and callable(getattr(model, "set_context_guard", None)):
             def guard(payload: dict[str, Any]) -> None:
-                observed = observe_payload(observation, payload)
+                observed = observe_payload(observation, payload, native_counter=getattr(model, "count_input_tokens", None))
                 run.activity_phase = "summarizing" if current_request_purpose() == "summary" else "thinking"
                 if current_request_purpose() == "work":
                     run.context_observation = observed
                 else:
                     run.housekeeping_context[current_request_purpose()] = observed
-                require_context_fit(observed)
             model.set_context_guard(guard)
         agent_kwargs.update(official_agent_kwargs(knowledge_plan))
         permissions = filesystem_permissions_for_run(run)
@@ -1693,20 +1698,16 @@ class HarnessService:
             tools_presented=bool(run.presented_tools),
             tools_off=not run.presented_tools,
         )
-        native_summarization = compute_summarization_defaults(model) if usable else None
-        from langchain.agents.structured_output import ProviderStrategy
+        from langchain.agents.structured_output import OutputToolBinding, ProviderStrategy, ToolStrategy
+        from langchain_core.utils.function_calling import convert_to_openai_tool
         provider_format = response_format.to_model_kwargs().get("response_format") if isinstance(response_format, ProviderStrategy) else None
-
-        def retain_failed_context(count: int, budget: int | None) -> None:
-            if observation is None:
-                return
-            failed = observation.model_copy(deep=True)
-            failed.purpose = "work"
-            failed.estimated_input_tokens = count
-            failed.usable_input_tokens = budget
-            failed.fits = count <= budget if budget is not None else None
-            failed.notes.append("Native context recovery exhausted before a new work request could be sent.")
-            run.context_observation = failed
+        if provider_format is not None:
+            # ProviderStrategy's schema must use the same public binding as
+            # generation; already serialized request formats remain untouched.
+            provider_format = model.bind_tools([], response_format=provider_format, strict=True).kwargs["response_format"]
+        structured_tools = ([OutputToolBinding.from_schema_spec(spec).tool for spec in response_format.schema_specs]
+            if isinstance(response_format, ToolStrategy) else [])
+        count_tools_projection = (lambda selected: [convert_to_openai_tool(tool, strict=True) for tool in selected]) if provider_format else None
 
         def prepare_tool_images():
             with execution_control.model_dispatch(run, purpose="probe"):
@@ -1740,18 +1741,23 @@ class HarnessService:
                     allowed_tools=set(run.presented_tools), require_ready=disclosure.require_reference_ready)
                 if reference_tool is not None:
                     tools.append(reference_tool)
-        summarization = BudgetedSummarizationMiddleware(
-            model=model, backend=backend or (lambda runtime: StateBackend(runtime)),
-            allowed_tools=set(run.presented_tools) | ({"read_file"} if run.framework_read_paths else set()),
-            trigger=native_summarization["trigger"] if native_summarization else None,
-            keep=native_summarization["keep"] if native_summarization else ("messages", 6),
+        def observe_summary(messages: list[BaseMessage]) -> None:
+            run.activity_phase = "summarizing"
+            if observation is not None:
+                projection = getattr(model, "project_context_payload", None)
+                if callable(projection):
+                    run.housekeeping_context["summary"] = observe_payload(observation, projection(messages),
+                        native_counter=getattr(model, "count_input_tokens", None))
+
+        summary_model = SummaryDispatchModel(delegate=model, profile=model.profile,
+            dispatch=lambda: execution_control.model_dispatch(run, purpose="summary"), observer=observe_summary)
+        summarization = create_summarization_middleware(
+            model=summary_model, backend=backend or StateBackend(),
             token_counter=token_counter_for_model(model, response_format=provider_format,
-                message_projection=workbench_middleware.tool_image_messages_for_count),
-            request_preparer=(lambda value: workbench_middleware._with_outline(disclosure.prepare_request(value)))
-                if disclosure is not None else workbench_middleware._with_outline,
-            execution_control=execution_control, run=run,
-            on_context_failure=retain_failed_context,
-            trim_tokens_to_summarize=None,
+                message_projection=workbench_middleware.tool_image_messages_for_count,
+                request_message_projection=workbench_middleware.browser_messages_for_count,
+                extra_tools=structured_tools, tools_projection=count_tools_projection,
+                request_settings={"tool_choice": "required"} if structured_tools else None),
         )
         if structured_output is not None and run.structured_output is None:
             run.structured_output = structured_output
@@ -1778,8 +1784,9 @@ class HarnessService:
             tools=tools,
             system_prompt=run.system_prompt,
             middleware=[
-                *([LeanFilesystemMiddleware(disclosure=disclosure, backend=backend or StateBackend(),
-                    _permissions=permissions, custom_tool_descriptions=COMPACT_DESCRIPTIONS)] if disclosure is not None else []),
+                LeanFilesystemMiddleware(disclosure=disclosure, request_preparer=workbench_middleware.prepare_context_request,
+                    backend=backend or StateBackend(), _permissions=permissions,
+                    **({"custom_tool_descriptions": COMPACT_DESCRIPTIONS} if disclosure is not None else {})),
                 summarization,
                 *configured_memory_middleware(backend, knowledge_plan),
                 *configured_skills_middleware(backend, knowledge_plan),
@@ -2436,27 +2443,6 @@ class HarnessService:
         deployment = self.manager.ensure_deployment_ready(run.deployment_id)
         require_accepted_model_identity(deployment, run.effective_setup.bags if run.effective_setup is not None else None)
         per_request = run.effective_setup.bags.per_request if run.effective_setup is not None else None
-        if run.effective_setup is not None:
-            from workbench_backend.inference.response_budget import bind_output_budget
-            parent = None
-            role = None
-            if run.parent_run_id:
-                with self._lock:
-                    parent = self._runs.get(run.parent_run_id) or self.store.get_execution_run(run.parent_run_id)
-                    role = next((item for item in parent.helper_snapshots
-                        if item.agent_id == run.agent_setup_id and item.version_id == run.agent_setup_version_id), None) if parent else None
-            if role is not None:
-                from workbench_backend.agents.helper_execution import bind_helper_output_budget
-                bound = bind_helper_output_budget(self, parent, role, deployment, run.effective_setup.bags)
-            else:
-                bound = bind_output_budget(deployment, run.effective_setup.bags.per_request)
-            if bound != run.effective_setup.bags.per_request:
-                run.effective_setup.bags.per_request = bound
-                # Persist a late/first binding before any provider call, including
-                # resumed runs whose endpoint previously had no capacity facts.
-                with self._lock:
-                    self._persist(run)
-            per_request = bound
         client = httpx.Client(
             transport=RecordingTransport(http_sink),
             timeout=DEFAULT_ADAPTER_TIMEOUT,
@@ -3163,6 +3149,18 @@ class _CheckpointInspectionModel(BaseChatModel):
 class _CheckpointInspectionVectorStore:
     def similarity_search(self, *_args: Any, **_kwargs: Any) -> Any:
         raise RuntimeError("Checkpoint inspection graph must not execute retrieval.")
+
+
+def _failure_code(run: AgentRun, error: Exception) -> str | None:
+    code = getattr(error, "code", None)
+    if isinstance(error, ContextOverflowError) or code in {"context_length_exceeded", "context_window_exceeded"}:
+        if run.context_observation is not None:
+            failed = run.context_observation.model_copy(deep=True)
+            failed.fits = False
+            failed.notes.append("Deep Agents exhausted native context reduction or overflow recovery.")
+            run.context_observation = failed
+        return "context_capacity_exceeded"
+    return code
 
 
 def _invoke_config(run: AgentRun) -> dict[str, Any]:

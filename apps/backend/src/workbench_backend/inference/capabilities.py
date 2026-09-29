@@ -51,11 +51,7 @@ class CapabilityProbeReport(BaseModel):
 def setup_identity(deployment: Deployment, per_request: SettingsBag | dict | None = None) -> dict[str, Any]:
     props = deployment.server_props
     settings = deployment.settings.per_request.applied if per_request is None else per_request.applied if isinstance(per_request, SettingsBag) else per_request
-    if isinstance(per_request, SettingsBag) and per_request.output_budget_policy is not None and per_request.output_budget_policy.mode == "workbench_auto":
-        # Binding a capacity-derived allowance is an execution fact, not an
-        # authored capability change. Keep the accepted template/sampling probe
-        # identity, while explicit or publisher response caps remain included.
-        settings = {key: value for key, value in settings.items() if key != "max_tokens"}
+    settings = {"max_tokens": -1, **settings}
     return {
         "probe_version": 2,
         "deployment_id": deployment.id,

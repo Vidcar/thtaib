@@ -37,32 +37,6 @@ def _saved_child_message_identities(child):
     return seen
 
 
-def bind_helper_output_budget(owner, parent, snapshot, deployment, settings):
-    """Save a role's first numeric binding before any of its provider calls."""
-    from workbench_backend.inference.response_budget import bind_output_budget
-
-    with owner._lock:
-        role = next((item for item in parent.helper_snapshots
-            if item.agent_id == snapshot.agent_id and item.version_id == snapshot.version_id), snapshot)
-        frozen = SettingsBags.model_validate(role.settings_snapshot) if role.settings_snapshot is not None else settings.model_copy(deep=True)
-        response = frozen.per_request
-        # A restarted older child may already own the first verified allowance
-        # even if its parent's role has not recorded that late binding yet.
-        if response.output_budget_binding is None and settings.per_request.output_budget_binding is not None:
-            response = settings.per_request
-        bound = bind_output_budget(deployment, response)
-        if bound != frozen.per_request or role.settings_snapshot is None:
-            frozen.per_request = bound
-            role.settings_snapshot = frozen.model_dump(mode="json")
-            snapshot.settings_snapshot = role.settings_snapshot
-            if any(item is role for item in parent.helper_snapshots):
-                parent.updated_at = utc_now()
-                # The role is durable before child/provider calls. Repeated or
-                # parallel calls, restarted parents and Lab reuse this result.
-                owner._persist_and_notify(parent)
-        return bound
-
-
 def _child_run(owner, parent, snapshot, call_id, payload):
     child_id = _child_run_id(parent, snapshot, call_id)
     existing = owner.store.get_execution_run(child_id)
@@ -153,7 +127,6 @@ def _child_run(owner, parent, snapshot, call_id, payload):
     messages = payload.get("messages", [])
     task = str(getattr(messages[-1], "content", "Delegated task")) if messages else "Delegated task"
     model_content_blocks = [memory_selection_notice(refs.memory_version_refs)] if input_policy is None else []
-    setup.bags.per_request = bind_helper_output_budget(owner, parent, snapshot, deployment, setup.bags)
     observation = observe_context(deployment=deployment, per_request=setup.bags.per_request,
         system_prompt=setup.system_prompt, task=task, content_blocks=model_content_blocks, output_schema=None,
         tool_count=len(presented), continuing_thread=False)
@@ -292,12 +265,13 @@ def compiled_helpers(owner, parent, control, *, inspection_only=False):
                 activity.status = "cancelled"
                 raise
             except BaseException as exc:
+                from workbench_backend.agents.harness import _failure_code
                 cancelling = (isinstance(exc, HarnessError) and exc.code == "run_cancelling"
                     or parent.status in {AgentRunStatus.cancel_requested, AgentRunStatus.cancelled})
                 if child is not None:
                     child.status = AgentRunStatus.cancelled if cancelling else AgentRunStatus.failed
                     child.error = None if cancelling else str(exc)
-                    child.stop_reason = "cancelled" if cancelling else getattr(exc, "code", None) or "failed"
+                    child.stop_reason = "cancelled" if cancelling else _failure_code(child, exc) or "failed"
                     child.finished_at = utc_now()
                     child.pending_interrupt = None
                 activity.status = "cancelled" if cancelling else "failed"

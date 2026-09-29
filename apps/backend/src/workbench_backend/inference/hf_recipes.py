@@ -14,18 +14,18 @@ from typing import Any
 
 MAX_CARD_BYTES = 2 * 1024 * 1024
 
-# (minimum, maximum, inclusive minimum, integral value). Bounds are narrower
-# than arbitrary user-request pass-through because these are imported values.
+# (minimum, maximum, inclusive minimum, integral value). Suggested UI spans
+# must not reject otherwise valid publisher recommendations.
 _SAMPLING_FIELDS: dict[str, tuple[float, float, bool, bool]] = {
-    "temperature": (0, 100, True, False),
-    "top_p": (0, 1, False, False),
-    "top_k": (0, 1_000_000, True, True),
+    "temperature": (0, math.inf, True, False),
+    "top_p": (0, 1, True, False),
+    "top_k": (0, 2**31 - 1, True, True),
     "min_p": (0, 1, True, False),
-    "typical_p": (0, 1, False, False),
-    "repetition_penalty": (0, 100, False, False),
-    "repeat_penalty": (0, 100, False, False),
-    "presence_penalty": (-2, 2, True, False),
-    "frequency_penalty": (-2, 2, True, False),
+    "typical_p": (0, 1, True, False),
+    "repetition_penalty": (0, math.inf, True, False),
+    "repeat_penalty": (0, math.inf, True, False),
+    "presence_penalty": (-math.inf, math.inf, True, False),
+    "frequency_penalty": (-math.inf, math.inf, True, False),
 }
 
 
@@ -39,7 +39,11 @@ def normalize_sampling_value(key: str, value: Any) -> int | float | None:
     if spec is None or isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     minimum, maximum, inclusive_minimum, integral = spec
-    if (isinstance(value, float) and not math.isfinite(value)) or value < minimum or (value == minimum and not inclusive_minimum) or value > maximum:
+    try:
+        finite = math.isfinite(value)
+    except OverflowError:
+        finite = False
+    if not finite or value < minimum or (value == minimum and not inclusive_minimum) or value > maximum:
         return None
     if integral:
         return int(value) if isinstance(value, int) or value.is_integer() else None

@@ -23,11 +23,12 @@ export function settingValue(value: unknown, key?: string): string {
   if (value == null) return "Not reported";
   key = key?.split(".").at(-1);
   if (key === "ctx_size" && typeof value === "number") return value === 0 ? "Full model capacity" : `${value.toLocaleString()} tokens`;
+  if (value === -1 && ["parallel", "threads", "threads_batch", "spec_draft_threads", "spec_draft_threads_batch"].includes(key ?? "")) return "Auto";
   if (key === "n_gpu_layers") return value === -1 || value === "-1" || value === "auto" ? "Automatic" : value === "all" ? "All layers" : value === 0 || value === "0" ? "CPU only" : `${value} layers`;
   if (key === "kv_offload" && typeof value === "boolean") return value ? "GPU" : "CPU / RAM";
   if (key === "reasoning_preserve" && typeof value === "boolean") return value ? "Keep" : "Drop";
   if (key === "spec_type" && value === "none") return "Off";
-  if (key === "reasoning_budget" && value === -1) return "No limit";
+  if ((key === "reasoning_budget" || key === "reasoning_budget_tokens") && value === -1) return "No separate limit";
   if (key === "max_tokens" && value === -1) return "Unlimited";
   if (Array.isArray(value)) return value.length ? `${value.length} selected` : "None";
   if (typeof value === "boolean") return value ? "On" : "Off";
@@ -55,7 +56,7 @@ export function defaultSettingDisplay(fact?: EffectiveSetting, target: "configur
   const source = rawSource ? settingSource(rawSource) : target === "model" ? "Model default" : "Configuration default";
   const value = fact?.supported === false ? "Unavailable" : settingValue(rawValue, key);
   const label = target === "model" ? "Use model default" : rawSource?.startsWith("Project:") ? "Use project default" : rawSource?.startsWith("Agent:") ? "Use agent default" : rawSource === "Application default" || rawSource === "Application defaults" ? "Use application default" : "Use configuration default";
-  return { value, source, label, title: `${value} · ${rawSource ?? source}` };
+  return { value, source, label, title: `${value} · ${source}` };
 }
 
 export function effectiveSettingDisplay(fact?: EffectiveSetting, loading = false, key?: string): { value: string; source: string } {

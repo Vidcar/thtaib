@@ -22,22 +22,27 @@ export function SettingRow({ label, labelId, htmlFor, help, helpTitle, provenanc
   onReset?: () => void; resetLabel?: string; resetTitle?: string; hint?: ReactNode; status?: ReactNode; layout?: SettingLayout; inline?: boolean; stacked?: boolean; className?: string; children: ReactNode;
 }) {
   const models = layout === "models";
-  const details = models && hint ? <>{help}{help ? <br /> : null}{hint}</> : help;
+  const details = models ? <>
+    {help}
+    {provenance ? <div className="setting-help-source">{provenance}</div> : null}
+    {hint ? <div>{hint}</div> : null}
+    {status ? <div>{status}</div> : null}
+    <div className="setting-help-reset"><button type="button" className="text-button" disabled={!onReset} title={onReset ? resetTitle : undefined} onClick={onReset}>{resetLabel === "Use configuration default" ? "Reset" : resetLabel}</button></div>
+  </> : help;
   const classes = ["setting-row", models ? "setting-row-models" : "", inline ? "setting-row-inline" : "", stacked ? "setting-row-stacked" : "", className ?? ""].filter(Boolean).join(" ");
   return <div className={classes}>
     <div className="setting-row-label">
       <div className="setting-row-title">
         {htmlFor ? <label id={labelId} htmlFor={htmlFor}>{label}</label> : <span id={labelId} className="setting-row-name">{label}</span>}
-        {details ? <HoverHelp title={aboutTitle(label, helpTitle)}>{details}</HoverHelp> : null}
+        {details ? <HoverHelp title={aboutTitle(label, helpTitle)} interactive={models}>{details}</HoverHelp> : null}
         {!models && onReset ? <button type="button" className="text-button setting-reset" title={resetTitle} aria-label={resetTitle ? `${resetLabel}: ${resetTitle}` : undefined} onClick={onReset}>{resetLabel}</button> : null}
       </div>
       {!models && provenance ? <small className="control-provenance">{provenance}</small> : null}
     </div>
     <div className="setting-row-control">
-      {models ? <><div className="setting-row-control-content">{children}</div><button type="button" className="text-button setting-reset" disabled={!onReset} title={resetTitle} aria-label={resetTitle ? `Reset ${typeof label === "string" ? label.toLowerCase() : "setting"}: ${resetTitle}` : `Reset ${typeof label === "string" ? label.toLowerCase() : "setting"}`} onClick={onReset}>Reset</button></> : children}
+      {models ? <div className="setting-row-control-content">{children}</div> : children}
       {!models && hint ? <small className="setting-row-hint">{hint}</small> : null}
     </div>
-    {models ? <div className="setting-row-readout"><small className="control-provenance">{provenance ?? "\u00a0"}</small><small className="setting-row-status">{status ?? "\u00a0"}</small></div> : null}
   </div>;
 }
 

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -13,15 +15,14 @@ import httpx
 from langchain.agents.middleware.types import ModelRequest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from deepagents.middleware.summarization import SummarizationMiddleware, compute_summarization_defaults
+from deepagents.middleware.summarization import SummarizationMiddleware, compute_summarization_defaults, create_summarization_middleware
 
 from workbench_backend.agents.context import (
-    BudgetedSummarizationMiddleware,
     ContextObservation,
+    SummaryDispatchModel,
     count_context_tokens,
     observe_context,
     observe_payload,
-    require_context_fit,
     validate_retained_messages,
 )
 from workbench_backend.agents.harness import HarnessService
@@ -32,6 +33,7 @@ from workbench_backend.inference.adapter import chat_model_for_deployment
 from workbench_backend.inference.capabilities import setup_fingerprint
 from workbench_backend.inference.request_projection import project_context_payload
 from workbench_backend.inference.ids import utc_now
+from workbench_backend.inference.telemetry import current_request_purpose
 from workbench_backend.inference.schemas import ServerProperties
 from workbench_backend.inference.schemas import SettingsBag
 from workbench_backend.state.checkpointer import conversation_state, run_checkpoint_task
@@ -104,14 +106,15 @@ class ContextBudgetHarnessTests(unittest.TestCase):
         payload = json.loads(request.content.decode("utf-8"))
         self.chat_payloads.append(payload)
         if payload.get("stream"):
-            self.chat_responses.append("fixture reply")
+            reply = "fixture summary" if current_request_purpose() == "summary" else "fixture reply"
+            self.chat_responses.append(reply)
             events = [
                 {
                     "id": "context-budget-stream",
                     "object": "chat.completion.chunk",
                     "created": 1,
                     "model": "fixture-model",
-                    "choices": [{"index": 0, "delta": {"role": "assistant", "content": "fixture reply"}, "finish_reason": None}],
+                    "choices": [{"index": 0, "delta": {"role": "assistant", "content": reply}, "finish_reason": None}],
                 },
                 {
                     "id": "context-budget-stream",
@@ -228,6 +231,12 @@ class ContextBudgetHarnessTests(unittest.TestCase):
             f"checkpoint values={list(checkpoint_before)} run thread={completed.get('thread_id')} checkpoints={completed.get('checkpoint_ids')}",
         )
         self._set_context(n_ctx=512, vision=True)
+        original = self._mock_openai
+        def reject_native_overflow(request):
+            if request.url.path.endswith("/chat/completions") and current_request_purpose() == "work":
+                return httpx.Response(400, json={"error": {"message": "the prompt exceeds the context size", "type": "invalid_request_error", "code": "context_length_exceeded"}}, request=request)
+            return original(request)
+        self._mock_openai = reject_native_overflow
 
         accepted = self._start(thread_id=thread_id, task="Continue briefly.", presented_tools=[])
         self.assertEqual(accepted.status_code, 200, accepted.text)
@@ -236,7 +245,8 @@ class ContextBudgetHarnessTests(unittest.TestCase):
         self.assertFalse(failed["context_observation"]["fits"])
         self.assertEqual(failed["context_observation"]["purpose"], "work")
         self.assertEqual(failed["failure"]["recovery_action"], "change_limit")
-        self.assertEqual(len(self.chat_payloads), 1, "native compaction must not dispatch an irreducible oversized request")
+        self.assertTrue(all("fixture summary" == reply for reply in self.chat_responses[1:]),
+            "the SDK may summarize but must not complete rejected irreducible work")
         checkpoint_after = conversation_state(self.manager.paths.checkpoints_db, thread_id)
         self.assertEqual(checkpoint_after.get("messages", [])[:len(messages_before)], messages_before,
                          "native failure must preserve retained messages even when the new turn is checkpointed")
@@ -244,7 +254,7 @@ class ContextBudgetHarnessTests(unittest.TestCase):
     def test_smaller_context_continues_retained_history_through_native_compaction(self) -> None:
         thread_id = "thread-reducible-smaller-context"
         self._set_context(n_ctx=32768, vision=True)
-        first = self._start(thread_id=thread_id, task="Preserve the important details. " + "older detail " * 400,
+        first = self._start(thread_id=thread_id, task="Preserve the important details. " + "older detail " * 1800,
             presented_tools=[])
         self.assertEqual(first.status_code, 200, first.text)
         completed = self._complete(first.json())
@@ -258,7 +268,7 @@ class ContextBudgetHarnessTests(unittest.TestCase):
         reduced = self._complete(second.json())
         self.assertEqual(reduced["status"], "completed", reduced.get("error"))
         self.assertEqual(reduced["context_observation"]["capacity_tokens"], 8192)
-        self.assertTrue(reduced["context_observation"]["fits"])
+        self.assertIsNone(reduced["context_observation"]["fits"])
         self.assertTrue(any(event["kind"] == "context_compacted" for event in reduced["events"]))
         after = conversation_state(self.manager.paths.checkpoints_db, thread_id)
         self.assertEqual([message.id for message in after["messages"]][:len(retained_ids)], retained_ids,
@@ -283,186 +293,184 @@ class ContextBudgetHarnessTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "context_tool_pair_invalid")
         self.assertEqual(pair[:-1], original[:-1], "rejected history must remain intact")
 
-    def test_actual_tool_schema_is_counted_and_output_reservation_is_subtracted_once(self) -> None:
+    def test_actual_tool_schema_is_counted_and_sdk_reserves_explicit_output_once(self) -> None:
         deployment = self.manager.get_deployment(self.deployment_id)
         tools = tools_for_names(["echo"])
-        schema = {
-            "type": "json_schema",
-            "json_schema": {"name": "answer", "strict": True, "schema": {"type": "object", "properties": {"answer": {"type": "string"}}}},
-        }
-        capacity = 4096
-        output_reservation = 300
-        per_request = SettingsBag(applied={"max_tokens": output_reservation})
+        capacity, output = 4096, 300
         observation = observe_context(
             deployment=deployment.model_copy(update={"server_props": deployment.server_props.model_copy(update={"n_ctx": capacity})}),
-            per_request=per_request,
-            system_prompt="Answer the request.",
-            task="Say hello.",
-            content_blocks=None,
-            tool_count=len(tools),
-            output_schema=schema,
-            continuing_thread=False,
-            tools=tools,
-        )
-        expected = count_context_tokens(
-            [
-                SystemMessage(content="Answer the request."),
-                HumanMessage(content="Say hello."),
-            ],
-            tools=tools,
-        )
-        # The same structured schema is included separately from the tool definitions.
-        from workbench_backend.agents.context import estimate_payload
+            per_request=SettingsBag(applied={"max_tokens": output}), system_prompt="Answer the request.",
+            task="Say hello.", content_blocks=None, tool_count=len(tools), output_schema=None,
+            continuing_thread=False, tools=tools)
+        messages = [SystemMessage(content="Answer the request."), HumanMessage(content="Say hello.")]
+        self.assertGreater(count_context_tokens(messages, tools=tools), count_context_tokens(messages))
+        self.assertEqual(observation.capacity_tokens, capacity)
+        self.assertEqual(observation.configured_output_tokens, output)
+        self.assertEqual(observation.counting_basis, "estimated")
+        self.assertIsNone(observation.fits)
+        payload = project_context_payload(messages, tools=tools)
+        observed = observe_payload(observation, payload, native_counter=lambda actual: 123 if actual == payload else None)
+        self.assertEqual(observed.input_tokens, 123)
+        self.assertEqual(observed.counting_basis, "native")
+        self.assertTrue(observed.fits)
+        self.assertNotIn("usable_input_tokens", observed.model_dump())
+        model = ScriptedChatModel([], profile={"max_input_tokens": capacity})
+        native = create_summarization_middleware(model, backend=lambda _: None, token_counter=count_context_tokens)
+        request = ModelRequest(model=model, messages=messages[1:], system_message=messages[0], tools=tools,
+            model_settings={"max_completion_tokens": output})
+        self.assertEqual(native._input_budget(request), int(capacity * .95) - output)
 
-        structured_mcp_schema = {"type": "function", "function": {"parameters": {
-            "type": "object", "properties": {"target": {"type": {"anyOf": ["string", "null"]}}},
-        }}}
-        self.assertGreater(estimate_payload({"tools": [structured_mcp_schema]}), 0)
 
-        expected_with_schema = estimate_payload(project_context_payload(
-            [SystemMessage(content="Answer the request."), HumanMessage(content="Say hello.")],
-            tools=tools, response_format=schema,
-        ))
-        self.assertGreater(expected_with_schema, estimate_payload({
-            "messages": [HumanMessage(content="Say hello.")],
-            "system": "Answer the request.",
-            "tools": [],
-            "response_format": schema,
-        }))
-        self.assertGreater(expected, count_context_tokens(
-            [SystemMessage(content="Answer the request."), HumanMessage(content="Say hello.")],
-            tools=[],
-        ), "the actual enabled-tool schema must contribute to the estimate")
-        self.assertEqual(observation.estimated_input_tokens, expected_with_schema)
-        self.assertEqual(observation.output_reservation_tokens, output_reservation)
-        self.assertEqual(observation.margin_tokens, int(capacity * 0.08))
-        self.assertEqual(
-            observation.usable_input_tokens,
-            capacity - output_reservation - observation.margin_tokens,
-        )
-
-        live_payload = {
-            "messages": [SystemMessage(content="Answer the request."), HumanMessage(content="Say hello.")],
-            "tools": tools,
-            "response_format": schema,
-            "max_completion_tokens": output_reservation,
-        }
-        observed = observe_payload(observation, live_payload)
-        expected_live = estimate_payload({key: value for key, value in live_payload.items() if key in {"messages", "tools", "response_format"}})
-        self.assertEqual(observed.estimated_input_tokens, expected_live)
-        self.assertEqual(observed.estimated_input_tokens, expected_with_schema)
-        self.assertEqual(observed.fits, observed.estimated_input_tokens <= observation.usable_input_tokens)
-
-        model = ScriptedChatModel([])
-        model.profile = {"max_input_tokens": observation.usable_input_tokens}
-        middleware = BudgetedSummarizationMiddleware(
-            model=model,
-            backend=lambda runtime: None,
-            token_counter=count_context_tokens,
-        )
-        self.assertEqual(middleware.name, "SummarizationMiddleware")
-        request = ModelRequest(
-            model=model,
-            messages=[HumanMessage(content="Say hello.")],
-            system_message=SystemMessage(content="Answer the request."),
-            tools=tools,
-            model_settings={"max_completion_tokens": output_reservation},
-        )
-        self.assertEqual(
-            middleware._input_budget(request),
-            observation.usable_input_tokens,
-            "upstream compaction must use the already-reserved profile budget without subtracting output again",
-        )
-
-    def test_oversized_summary_request_is_guarded_without_trimming_or_dispatch(self) -> None:
+    def test_approximate_observation_cannot_reject_or_trim_a_model_request(self) -> None:
         deployment = self.manager.get_deployment(self.deployment_id)
         client = httpx.Client(transport=httpx.MockTransport(self._mock_openai), timeout=5.0)
         self.addCleanup(client.close)
         model = chat_model_for_deployment(deployment, http_client=client, capture_sink=[])
-        baseline = ContextObservation(
-            capacity_tokens=256,
-            capacity_source="server_props.n_ctx",
-            output_reservation_tokens=32,
-            usable_input_tokens=80,
-            margin_tokens=144,
-        )
-        model.set_context_guard(lambda payload: require_context_fit(observe_payload(baseline, payload)))
-        history = [
-            SystemMessage(content="Summarize the complete retained conversation without dropping facts."),
-            HumanMessage(content="unchanged retained context " * 60),
-        ]
-        history_before = [message.model_copy(deep=True) for message in history]
-        with self.assertRaises(HarnessError) as caught:
-            model.invoke(history)
-        self.assertEqual(caught.exception.code, "context_capacity_exceeded")
-        self.assertEqual(history, history_before, "guard must reject rather than truncate the summary request")
-        self.assertEqual(self.chat_payloads, [], "context guard must run before HTTP dispatch")
+        baseline = ContextObservation(capacity_tokens=256, capacity_source="server_props.n_ctx",
+            configured_output_tokens=-1)
+        observations = []
+        model.set_context_guard(lambda payload: observations.append(observe_payload(baseline, payload)))
+        history = [SystemMessage(content="Summarize all retained facts."),
+            HumanMessage(content="unchanged retained context " * 60)]
+        before = [message.model_copy(deep=True) for message in history]
+        model.invoke(history)
+        self.assertEqual(history, before)
+        self.assertEqual(len(self.chat_payloads), 1)
+        self.assertGreater(observations[0].input_tokens, 256)
+        self.assertIsNone(observations[0].fits)
+        self.assertEqual(observations[0].counting_basis, "estimated")
 
-    def test_tools_off_compaction_uses_one_upstream_middleware_and_records_event(self) -> None:
+
+    def test_tools_off_compaction_uses_one_stock_sdk_middleware_and_records_event(self) -> None:
         self._set_context(n_ctx=16384, vision=True)
         thread_id = "thread-compaction-tools-off"
-        budgets: list[int | None] = []
-        base_calls = {"n": 0}
-        original_budget = BudgetedSummarizationMiddleware._input_budget
-        original_base = SummarizationMiddleware._input_budget
-
-        def budgeted_budget(middleware, request):
-            value = original_budget(middleware, request)
+        budgets = []
+        original = SummarizationMiddleware._input_budget
+        def observe_budget(middleware, request):
+            value = original(middleware, request)
             budgets.append(value)
             return value
-
-        def base_budget(middleware, request):
-            base_calls["n"] += 1
-            return original_base(middleware, request)
-
-        with patch(
-            "workbench_backend.agents.harness.BudgetedSummarizationMiddleware",
-            wraps=BudgetedSummarizationMiddleware,
-        ) as middleware_factory, patch.object(
-            BudgetedSummarizationMiddleware, "_input_budget", budgeted_budget,
-        ), patch.object(
-            SummarizationMiddleware, "_input_budget", base_budget,
-        ):
-            started = self._start(
-                thread_id=thread_id,
-                task="Preserve this earlier material. " + ("historic detail " * 1100),
-                presented_tools=[],
-            )
-            self.assertEqual(started.status_code, 200, started.text)
-            completed = self._complete(started.json())
-            self.assertEqual(completed["status"], "completed", completed.get("error"))
-            previous_middleware_count = middleware_factory.call_count
-
-            started = self._start(
-                thread_id=thread_id,
-                task="Now preserve the important details from this later material. " + ("recent detail " * 1400),
-                presented_tools=[],
-            )
-            self.assertEqual(started.status_code, 200, started.text)
-            completed = self._complete(started.json())
-
+        with patch("workbench_backend.agents.harness.create_summarization_middleware",
+            wraps=create_summarization_middleware) as factory, patch.object(SummarizationMiddleware,
+            "_input_budget", observe_budget):
+            first = self._start(thread_id=thread_id,
+                task="Preserve this earlier material. " + "historic detail " * 1100, presented_tools=[])
+            self.assertEqual(first.status_code, 200, first.text)
+            self.assertEqual(self._complete(first.json())["status"], "completed")
+            previous = factory.call_count
+            second = self._start(thread_id=thread_id,
+                task="Preserve the important later details. " + "recent detail " * 2800, presented_tools=[])
+            self.assertEqual(second.status_code, 200, second.text)
+            completed = self._complete(second.json())
         self.assertEqual(completed["status"], "completed", completed.get("error"))
-        self.assertEqual(completed["presented_tools"], [])
-        self.assertEqual(middleware_factory.call_count, previous_middleware_count + 1)
-        configured = middleware_factory.call_args.kwargs
-        native_defaults = compute_summarization_defaults(configured["model"])
-        self.assertEqual(native_defaults["trigger"], ("fraction", 0.85))
-        self.assertEqual(native_defaults["keep"], ("fraction", 0.10))
-        self.assertEqual(configured["trigger"], native_defaults["trigger"])
-        self.assertEqual(configured["keep"], native_defaults["keep"])
-        self.assertGreaterEqual(len(self.chat_payloads), 3, "both turns and compaction should use the mock endpoint")
+        self.assertEqual(factory.call_count, previous + 1)
+        configured = factory.call_args.kwargs
+        self.assertEqual(configured["model"].profile["max_input_tokens"], 16384)
+        self.assertNotIn("trigger", configured)
+        self.assertNotIn("keep", configured)
+        self.assertEqual(compute_summarization_defaults(configured["model"])["trigger"], ("fraction", .85))
+        self.assertGreaterEqual(len(self.chat_payloads), 3)
         self.assertTrue(all(not payload.get("tools") for payload in self.chat_payloads))
         compacted = [event for event in completed["events"] if event["kind"] == "context_compacted"]
         self.assertEqual(len(compacted), 1)
         self.assertGreater(compacted[0]["detail"]["cutoff_index"], 0)
         self.assertEqual(compacted[0]["detail"]["owner"], "deepagents-upstream")
-        self.assertEqual(completed["context_observation"]["summarization_path"], "deepagents-upstream")
-        usable = completed["context_observation"]["usable_input_tokens"]
-        self.assertIsInstance(usable, int)
-        self.assertEqual(base_calls["n"], 0, "the default summarizer must not stay stacked on the replacement")
-        self.assertTrue(budgets, "the configured summarizer should measure the input budget")
-        self.assertTrue(all(item == usable for item in budgets))
-        self.assertNotEqual(budgets[0], max(0, int(usable * 0.95)))
+        self.assertTrue(budgets)
+        self.assertTrue(all(value == int(16384 * .95) for value in budgets))
+        self.assertEqual(completed["context_observation"]["capacity_tokens"], 16384)
+        self.assertEqual(completed["housekeeping_context"]["summary"]["purpose"], "summary")
+
+    def test_cancel_joins_stock_summary_request_without_work_or_purpose_leak(self) -> None:
+        self._set_context(n_ctx=16384, vision=True)
+        thread_id = "thread-cancel-stock-summary"
+        first = self._start(thread_id=thread_id,
+            task="Preserve this earlier material. " + "historic detail " * 1100, presented_tools=[])
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(self._complete(first.json())["status"], "completed")
+        retained = conversation_state(self.manager.paths.checkpoints_db, thread_id)["messages"]
+        entered, cancelled, settled = threading.Event(), threading.Event(), threading.Event()
+        blocked: dict = {}
+        purposes, restored, summary_metadata = [], [], []
+
+        async def blocking_transport(request: httpx.Request) -> httpx.Response:
+            if not request.url.path.endswith("/chat/completions"):
+                return self._mock_openai(request)
+            purpose = current_request_purpose()
+            purposes.append(purpose)
+            if purpose != "summary":
+                return self._mock_openai(request)
+            release = asyncio.Event()
+            blocked.update(loop=asyncio.get_running_loop(), release=release)
+            entered.set()
+            try:
+                await release.wait()
+                return self._mock_openai(request)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            finally:
+                settled.set()
+
+        def blocking_model(run: AgentRun, sink: list[dict]):
+            deployment = self.manager.ensure_deployment_ready(run.deployment_id)
+            client = httpx.Client(transport=httpx.MockTransport(self._mock_openai), timeout=15.0)
+            async_client = httpx.AsyncClient(transport=httpx.MockTransport(blocking_transport), timeout=15.0)
+            self.mock_async_clients.append(async_client)
+            with self.harness._lock:
+                self.harness._model_clients[run.id] = client
+            return chat_model_for_deployment(deployment,
+                per_request=run.effective_setup.bags.per_request if run.effective_setup else None,
+                capture_sink=sink, timeout=15.0, http_client=client, http_async_client=async_client)
+
+        original = SummaryDispatchModel.ainvoke
+        async def observe_summary(model, input, config=None, **kwargs):
+            summary_metadata.append(dict((config or {}).get("metadata", {})))
+            try:
+                return await original(model, input, config=config, **kwargs)
+            finally:
+                restored.append(current_request_purpose())
+
+        self.harness._model_factory = blocking_model
+        started = None
+        with patch("workbench_backend.agents.harness.create_summarization_middleware",
+            wraps=create_summarization_middleware) as factory, patch.object(
+                SummaryDispatchModel, "ainvoke", observe_summary):
+            try:
+                second = self._start(thread_id=thread_id,
+                    task="Preserve the important later details. " + "recent detail " * 2800,
+                    presented_tools=[])
+                self.assertEqual(second.status_code, 200, second.text)
+                started = second.json()
+                self.assertTrue(entered.wait(5), "Stock compaction did not dispatch its summary")
+                with self.harness._lock:
+                    worker = self.harness._threads[started["id"]]
+                    control = self.harness._execution_controls[started["id"]]
+                self.assertEqual(control._active_models, 1, "Summary must own dispatch authority")
+                self.harness.cancel(started["id"])
+                final = self._complete(started)
+                worker.join(timeout=5)
+                self.assertEqual(final["status"], "cancelled", final.get("error"))
+                self.assertFalse(worker.is_alive(), "Cancellation must join the owning worker")
+                self.assertTrue(cancelled.is_set(), "The summary transport must receive cancellation")
+                self.assertTrue(settled.is_set(), "The summary request must settle before terminal publication")
+                self.assertEqual(control._active_models, 0, "Cancelled summary must release dispatch authority")
+                self.assertEqual(purposes, ["summary"], "Cancellation must not retry or dispatch work")
+                self.assertEqual(restored, ["work"], "Summary purpose must unwind in the cancelled graph task")
+                self.assertEqual(summary_metadata[0]["lc_source"], "summarization")
+                self.assertEqual(factory.call_count, 1)
+                self.assertNotIn("trigger", factory.call_args.kwargs)
+                self.assertNotIn("keep", factory.call_args.kwargs)
+                self.assertEqual(final["tool_invocations"], [])
+                self.assertFalse(any(event["kind"] == "context_compacted" for event in final["events"]))
+                after = conversation_state(self.manager.paths.checkpoints_db, thread_id)["messages"]
+                self.assertEqual(after[:len(retained)], retained, "Interrupted summary must preserve canonical history")
+            finally:
+                if started is not None:
+                    self.harness.cancel(started["id"])
+                if blocked:
+                    blocked["loop"].call_soon_threadsafe(blocked["release"].set)
+                    self.assertTrue(settled.wait(5), "Cleanup must release the blocked fake request")
+
 
     def test_long_reasoning_continues_then_compacts_readable_native_history(self) -> None:
         self._set_context(n_ctx=98304, vision=True)
@@ -472,7 +480,7 @@ class ContextBudgetHarnessTests(unittest.TestCase):
         self.manager.store.put_deployment(deployment.model_copy(update={
             "server_props": props, "applied_startup": {"reasoning_preserve": True}}))
         normal_endpoint = self._mock_openai
-        reason = "bounded-history-thought " * 5249
+        reason = "bounded-history-thought " * 6500
         first = True
 
         def endpoint(request):
@@ -491,9 +499,9 @@ class ContextBudgetHarnessTests(unittest.TestCase):
         second_run = self._complete(self._start(thread_id=thread_id, task="Continue briefly.", presented_tools=["echo"], per_request_overrides={"max_tokens": 512}).json())
         self.assertEqual(second_run["status"], "completed", second_run.get("error"))
         self.assertFalse(any(event["kind"] == "context_compacted" for event in second_run["events"]))
-        self.assertLess(second_run["context_observation"]["estimated_input_tokens"], 50000)
+        self.assertLess(second_run["context_observation"]["input_tokens"], 50000)
         self.assertEqual(sum(json.dumps(payload).count(reason) for payload in self.chat_payloads), 1)
-        third_run = self._complete(self._start(thread_id=thread_id, task="new material " * 14000,
+        third_run = self._complete(self._start(thread_id=thread_id, task="new material " * 15000,
                                               presented_tools=["echo"], per_request_overrides={"max_tokens": 512}).json())
         self.assertEqual(third_run["status"], "completed", third_run.get("error"))
         compacted = [event for event in third_run["events"] if event["kind"] == "context_compacted"]
@@ -509,7 +517,7 @@ class ContextBudgetHarnessTests(unittest.TestCase):
         self.assertIsNone(backend.read(path, offset=0, limit=5).error)
         self.assertEqual(third_run["context_observation"]["purpose"], "work")
         self.assertEqual(third_run["housekeeping_context"]["summary"]["purpose"], "summary")
-        self.assertTrue(third_run["context_observation"]["fits"])
+        self.assertIsNone(third_run["context_observation"]["fits"])
 
     @staticmethod
     def _stream_fixture(request, delta, finish="stop"):
@@ -566,26 +574,20 @@ class ContextBudgetHarnessTests(unittest.TestCase):
         self.assertFalse((project / "never.txt").exists())
         self.assertFalse((project / "ready.txt").exists())
 
-    def test_unknown_capacity_preserves_non_fraction_compaction_policy(self) -> None:
+    def test_unknown_capacity_preserves_stock_sdk_fallback(self) -> None:
         self._set_context(n_ctx=None, vision=True)
-        with patch(
-            "workbench_backend.agents.harness.BudgetedSummarizationMiddleware",
-            wraps=BudgetedSummarizationMiddleware,
-        ) as middleware_factory:
-            started = self._start(
-                thread_id="thread-unknown-context",
-                task="Reply briefly.",
-                presented_tools=[],
-            )
+        with patch("workbench_backend.agents.harness.create_summarization_middleware",
+            wraps=create_summarization_middleware) as factory:
+            started = self._start(thread_id="thread-unknown-context", task="Reply briefly.", presented_tools=[])
             self.assertEqual(started.status_code, 200, started.text)
             completed = self._complete(started.json())
-
         self.assertEqual(completed["status"], "completed", completed.get("error"))
-        configured = middleware_factory.call_args.kwargs
-        self.assertEqual(configured["model"].profile,
-            {"image_inputs": False, "image_tool_message": False})
-        self.assertIsNone(configured["trigger"])
-        self.assertEqual(configured["keep"], ("messages", 6))
+        configured = factory.call_args.kwargs
+        self.assertNotIn("max_input_tokens", configured["model"].profile)
+        defaults = compute_summarization_defaults(configured["model"])
+        self.assertEqual(defaults["trigger"], ("tokens", 170000))
+        self.assertEqual(defaults["keep"], ("messages", 6))
+
 
 
 if __name__ == "__main__":

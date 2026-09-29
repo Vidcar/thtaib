@@ -1,6 +1,7 @@
 """Real outbound serialization, native overflow, and request attribution regressions."""
 
 import asyncio
+from contextlib import nullcontext
 import base64
 import json
 from io import BytesIO
@@ -9,14 +10,24 @@ import unittest
 from unittest.mock import patch
 
 import httpx
-from deepagents.middleware.summarization import _is_context_overflow
+from deepagents.backends import StateBackend
+from deepagents.middleware.summarization import _is_context_overflow, create_summarization_middleware
+from langchain.agents import create_agent
+from langchain.agents.structured_output import OutputToolBinding, ProviderStrategy, ToolStrategy
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.outputs import ChatGenerationChunk
+from langchain_core.tools import tool
+from langchain_core.utils.function_calling import convert_to_openai_tool
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+from pydantic import BaseModel
 
 from workbench_backend.agents.context import (
-    BudgetedSummarizationMiddleware, ContextObservation, estimate_payload,
-    require_context_fit, token_counter_for_model, validate_retained_messages,
+    SummaryDispatchModel, ContextObservation, estimate_payload, observe_payload,
+    token_counter_for_model, validate_retained_messages,
 )
+from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
+from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.adapter import WorkbenchChatOpenAI, _raise_for_invalid_completed_tool_calls
 from workbench_backend.inference.configuration_options import bundle_configuration_options, validate_model_reasoning
@@ -40,7 +51,115 @@ def model(*, replay=False, transport=None):
     return value
 
 
+class PageReport(BaseModel):
+    """Report the page inspected in this request."""
+
+    page: str
+
+
 class RequestProjectionTests(unittest.TestCase):
+    def _exercise_sdk_structured_count_matches_generation(self, *, provider):
+        self.maxDiff = None
+        counts, generations = [], []
+        strategy = ProviderStrategy(PageReport, strict=True) if provider else ToolStrategy(PageReport)
+
+        def endpoint(request):
+            body = json.loads(request.content)
+            if request.url.path.endswith("/chat/completions/input_tokens"):
+                counts.append(body)
+                return httpx.Response(200, json={"input_tokens": 301})
+            self.assertTrue(request.url.path.endswith("/chat/completions"))
+            generations.append(body)
+            answer = {"page": f"page-{len(generations)}"}
+            message = {"role": "assistant", "content": json.dumps(answer)}
+            if not provider:
+                message = {"role": "assistant", "content": "", "tool_calls": [{
+                    "id": f"report-{len(generations)}", "type": "function", "function": {
+                        "name": strategy.schema_specs[0].name, "arguments": json.dumps(answer),
+                    },
+                }]}
+            return httpx.Response(200, json={"id": f"response-{len(generations)}",
+                "object": "chat.completion", "created": 1, "model": "fixture",
+                "choices": [{"index": 0, "message": message,
+                    "finish_reason": "stop" if provider else "tool_calls"}]})
+
+        @tool
+        def lookup(query: str) -> str:
+            """Look up a selected fixture without changing it."""
+            self.fail("Structured response must not execute the ordinary lookup tool")
+
+        run = AgentRun(id="counted-sdk", deployment_id="fixture", task="Inspect the page",
+            enabled_tools=["lookup"], presented_tools=["lookup"],
+            browser_observation="Stale page before the graph was compiled",
+            project_outline={"snapshot_text": "", "included": False},
+            created_at="now", updated_at="now")
+        workbench = WorkbenchHarnessMiddleware(run)
+        value = model(replay=True, transport=httpx.MockTransport(endpoint))
+        value.profile = {"max_input_tokens": 32768}
+        value.max_tokens = -1
+        value.extra_body = {"chat_template_kwargs": {"enable_thinking": True, "preserve_reasoning": True}}
+        value.set_input_token_counting(value.http_client, "http://127.0.0.1:9/v1", native=True)
+        counter = token_counter_for_model(value,
+            response_format=value.bind_tools([], response_format=strategy.to_model_kwargs()["response_format"], strict=True).kwargs["response_format"] if provider else None,
+            message_projection=workbench.tool_image_messages_for_count,
+            request_message_projection=workbench.browser_messages_for_count,
+            extra_tools=[] if provider else [OutputToolBinding.from_schema_spec(spec).tool
+                for spec in strategy.schema_specs],
+            tools_projection=(lambda selected: [convert_to_openai_tool(item, strict=True)
+                for item in selected]) if provider else None,
+            request_settings=None if provider else {"tool_choice": "required"})
+        summarization = create_summarization_middleware(value, StateBackend(), token_counter=counter)
+        agent = create_agent(value, tools=[lookup], system_prompt="Inspect the current page.",
+            response_format=strategy, middleware=[summarization, workbench],
+            checkpointer=InMemorySaver(serde=JsonPlusSerializer(allowed_msgpack_modules=[PageReport])))
+        config = {"configurable": {"thread_id": "counted-sdk"}}
+        try:
+            for index, page in enumerate(("Fresh page with current coordinates", "Another refreshed page"), start=1):
+                # Compile once, then change the observation before each new dispatch.
+                run.browser_observation = page
+                user = HumanMessage(content=f"Inspect page {index}", id=f"user-{index}")
+                before = user.model_dump()
+                result = agent.invoke({"messages": [user]}, config=config)
+                self.assertEqual(result["structured_response"], PageReport(page=f"page-{index}"))
+                self.assertEqual(len(generations), index)
+                self.assertEqual(len(counts), index)
+                self.assertEqual(counts[-1], generations[-1],
+                    "Native SDK count must include the same tools, schema, browser state and template settings as generation")
+                self.assertIn(page, generations[-1]["messages"][-1]["content"])
+                self.assertNotIn("Stale page", json.dumps(counts[-1]))
+                self.assertEqual(counts[-1]["max_tokens"], -1)
+                self.assertEqual(user.model_dump(), before)
+                checkpoint = agent.get_state(config).values["messages"]
+                retained_users = [message for message in checkpoint if isinstance(message, HumanMessage)]
+                self.assertEqual([message.id for message in retained_users],
+                    [f"user-{number}" for number in range(1, index + 1)])
+                self.assertFalse(any("browser state was refreshed" in str(message.content)
+                    for message in checkpoint), "Ephemeral browser observations must never enter checkpoints")
+            if provider:
+                self.assertTrue(counts[-1]["tools"][0]["function"]["strict"])
+                self.assertIs(counts[-1]["tools"][0]["function"]["parameters"]["additionalProperties"], False)
+                self.assertTrue(counts[-1]["response_format"]["json_schema"]["strict"])
+            else:
+                self.assertEqual([item["function"]["name"] for item in counts[-1]["tools"]],
+                    ["lookup", "PageReport"])
+                self.assertEqual(counts[-1]["tool_choice"], "required")
+                for number in (1, 2):
+                    calls = [message for message in checkpoint if isinstance(message, AIMessage)
+                        and any(call["id"] == f"report-{number}" for call in message.tool_calls)]
+                    results = [message for message in checkpoint if isinstance(message, ToolMessage)
+                        and message.tool_call_id == f"report-{number}"]
+                    self.assertEqual(len(calls), 1)
+                    self.assertEqual(len(results), 1)
+                    self.assertLess(checkpoint.index(calls[0]), checkpoint.index(results[0]))
+        finally:
+            value.close()
+
+    def test_sdk_tool_strategy_native_count_matches_generation_and_fresh_browser_state(self):
+        self._exercise_sdk_structured_count_matches_generation(provider=False)
+
+    def test_sdk_provider_strategy_native_count_matches_strict_tools_and_schema(self):
+        self._exercise_sdk_structured_count_matches_generation(provider=True)
+
     def test_partial_stream_failure_preserves_exact_batch_outcomes_without_bodies(self):
         chunk = ChatGenerationChunk(message=AIMessageChunk(content="", tool_call_chunks=[
             {"index": 0, "id": "complete-sibling", "name": "write_file", "args": '{"file_path":"ready.txt","content":"PRIVATE BODY"}'},
@@ -117,28 +236,42 @@ class RequestProjectionTests(unittest.TestCase):
         with self.assertRaises(HarnessError):
             validate_retained_messages(deployment(), [ToolMessage(content="orphan", tool_call_id="missing")], allow_recovery=True)
 
-    def test_fit_error_is_native_overflow_and_keeps_budget_evidence(self):
-        observation = ContextObservation(capacity_tokens=100, estimated_input_tokens=110, usable_input_tokens=80, fits=False)
-        with self.assertRaises(HarnessError) as captured:
-            require_context_fit(observation)
-        self.assertTrue(_is_context_overflow(captured.exception))
-        self.assertEqual(captured.exception.details["estimated_input_tokens"], 110)
+    def test_estimated_input_is_observation_and_cannot_establish_a_fit(self):
+        base = ContextObservation(capacity_tokens=100)
+        payload = {"messages": [{"role": "user", "content": "large text " * 200}]}
+        estimated = observe_payload(base, payload)
+        self.assertGreater(estimated.input_tokens, 100)
+        self.assertIsNone(estimated.fits)
+        self.assertEqual(estimated.counting_basis, "estimated")
+        native = observe_payload(base, payload, native_counter=lambda _: 110)
+        self.assertEqual(native.input_tokens, 110)
+        self.assertFalse(native.fits)
+        self.assertEqual(native.counting_basis, "native")
 
-    def test_summary_scope_is_restored_on_success_and_failure(self):
+
+    def test_summary_scope_preserves_native_metadata_and_restores_after_success_and_failure(self):
         value = model()
+        decorated = SummaryDispatchModel(delegate=value, profile=value.profile, dispatch=nullcontext)
+        config = {"metadata": {"lc_source": "summarization", "native_internal_marker": "untouched"}}
+        def summary(input, config=None, **kwargs):
+            self.assertEqual(current_request_purpose(), "summary")
+            self.assertEqual(config, {"metadata": {"lc_source": "summarization", "native_internal_marker": "untouched"}})
+            return AIMessage(content="Summary")
+        async def failure(input, config=None, **kwargs):
+            self.assertEqual(current_request_purpose(), "summary")
+            self.assertEqual(config, {"metadata": {"lc_source": "summarization", "native_internal_marker": "untouched"}})
+            raise RuntimeError("summary unavailable")
         try:
-            middleware = BudgetedSummarizationMiddleware(model=value, backend=lambda _: None, trigger=("tokens", 200), keep=("messages", 1))
-            with patch.object(middleware._lc_helper, "_create_summary", side_effect=lambda _: current_request_purpose()):
-                self.assertEqual(middleware._create_summary([HumanMessage(content="old")]), "summary")
-            async def fail(_):
-                self.assertEqual(current_request_purpose(), "summary")
-                raise RuntimeError("summary unavailable")
-            with patch.object(middleware._lc_helper, "_acreate_summary", side_effect=fail):
+            with patch.object(WorkbenchChatOpenAI, "invoke", side_effect=summary):
+                self.assertEqual(decorated.invoke([HumanMessage(content="old")], config=config).content, "Summary")
+            self.assertEqual(current_request_purpose(), "work")
+            with patch.object(WorkbenchChatOpenAI, "ainvoke", side_effect=failure):
                 with self.assertRaisesRegex(RuntimeError, "unavailable"):
-                    asyncio.run(middleware._acreate_summary([HumanMessage(content="old")]))
+                    asyncio.run(decorated.ainvoke([HumanMessage(content="old")], config=config))
             self.assertEqual(current_request_purpose(), "work")
         finally:
             value.close()
+
 
 
 class ResponseBudgetTests(unittest.TestCase):

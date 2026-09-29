@@ -51,7 +51,7 @@ export function ChatMeasurements({ run, ownerKey, starting = false, stopping = f
   const input = count(generation?.input_tokens);
   const output = count(generation?.output_tokens);
   const reported = count(generation?.context_used_tokens) ?? (input != null && output != null ? input + output : null);
-  const used = reported ?? count(context?.estimated_input_tokens);
+  const used = reported ?? count(context?.input_tokens);
   const capacity = count(generation?.context_limit) || count(context?.capacity_tokens);
   const speed = typeof generation?.tokens_per_second === "number" && Number.isFinite(generation.tokens_per_second) && generation.tokens_per_second >= 0 ? generation.tokens_per_second : null;
   const lifecycle = measurement?.status ?? run?.status;
@@ -64,7 +64,8 @@ export function ChatMeasurements({ run, ownerKey, starting = false, stopping = f
   const live = modelActive && generation?.phase === "generating";
   const preparing = modelActive && generation?.phase === "prompt_processing";
   const stopped = generation?.phase === "interrupted";
-  const estimated = reported == null && used != null;
+  const estimated = reported == null && used != null && context?.counting_basis !== "native";
+  const countedInput = reported == null && used != null && context?.counting_basis === "native";
   const percent = used != null && capacity ? used / capacity * 100 : null;
   const stage = stoppingNow ? "Stopping" : starting || lifecycle === "queued" ? "Starting" : finalizing ? "Saving"
     : active && waiting ? "Waiting" : active && phase === "summarizing" ? "Summarizing" : active && phase === "checking_images" ? "Checking image support"
@@ -73,14 +74,14 @@ export function ChatMeasurements({ run, ownerKey, starting = false, stopping = f
   const nativeTiming = generation?.basis === "llama_cpp_timings";
   const announcement = stage === "Saving" ? "Saving project state" : stage ?? (stopped ? "Stopped" : "");
 
-  return <span className="chat-measurements" data-estimated-input={context?.estimated_input_tokens ?? ""} data-tokens-per-second={speed ?? ""}>
+  return <span className="chat-measurements" data-input-tokens={context?.input_tokens ?? ""} data-counting-basis={context?.counting_basis ?? ""} data-tokens-per-second={speed ?? ""}>
     {announcement ? <span className="sr-only" role="status">{announcement}</span> : null}
     <HoverHelp title="Context and speed" placement="above" interactive={history.length > 0 || Boolean(onInspect)} triggerClassName="chat-usage-trigger" bubbleClassName="chat-usage-bubble"
       triggerContent={<><Icon name="activity" size={16} /><span>{stage ? `${stage}${live && speed != null ? ` · ${speed.toFixed(1)} tok/s` : ""}` : speed != null ? `${speed.toFixed(1)} tok/s` : "Context"}</span>{live ? <span className="usage-live-dot" aria-hidden="true" /> : null}</>}>
       <div className="usage-heading"><strong>Context</strong><span className={live ? "usage-state is-live" : "usage-state"}>{status}</span></div>
       <div className="usage-context-value"><span>{used != null ? `${used.toLocaleString()}${capacity ? ` / ${capacity.toLocaleString()}` : " tokens"}` : "Not reported"}</span>{percent != null ? <span>{percent < 1 && percent > 0 ? "<1" : Math.round(percent)}%</span> : null}</div>
       {percent != null ? <div className="usage-meter" aria-hidden="true"><span style={{ width: `${Math.min(100, percent)}%` }} /></div> : null}
-      <p className="usage-caption">{estimated ? "Estimated input · awaiting model counts" : reported != null ? `Model-reported tokens · ${live || preparing ? "current" : "last"} request` : "Send a message to measure usage"}</p>
+      <p className="usage-caption">{estimated ? "Estimated input · awaiting model counts" : countedInput ? "Input counted by the loaded model" : reported != null ? `Model-reported tokens · ${live || preparing ? "current" : "last"} request` : "Send a message to measure usage"}</p>
       {input != null || output != null ? <dl className="usage-token-counts">
         {input != null ? <div><dt>Input total</dt><dd>{input.toLocaleString()}</dd></div> : null}
         {count(generation?.cached_input_tokens) != null ? <div><dt>Cached input</dt><dd>{generation!.cached_input_tokens!.toLocaleString()}</dd></div> : null}

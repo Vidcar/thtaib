@@ -16,8 +16,8 @@ from workbench_backend.inference.bundles import BundleService
 from workbench_backend.inference.import_jobs import ImportJobRunner
 from workbench_backend.inference.configuration_options import bundle_configuration_options
 from workbench_backend.inference.configurations import (
-    ensure_model_configurations, requested_identity, loading_startup_settings,
-    loaded_model_identity, has_response_startup_defaults, upgrade_configuration,
+    ensure_model_configurations, requested_identity, loading_startup_settings, model_default_values,
+    loaded_model_identity, has_response_startup_defaults,
 )
 from workbench_backend.inference.deployments import DeploymentService
 from workbench_backend.inference.hf_fetch import HuggingFaceFetcher, PUBLISHER_DIR, REPOSITORY_TEMPLATE_DIR
@@ -274,6 +274,11 @@ class ModelManager:
         if bundle is None:
             raise ManagerError("Unknown bundle", code="bundle_missing", status_code=404)
         verified = self.bundles.verify_bundle(bundle, use_cache=True)
+        if refresh:
+            from workbench_backend.inference.inspect import invalidate_gguf_metadata
+            for item in verified.files:
+                if item.role.value in {"primary_weights", "shard"}:
+                    invalidate_gguf_metadata(Path(item.path))
         metadata, cached, inspected_at = cached_inspection(self.store, verified, "runtime", GgufRuntimeMetadata,
             lambda: self._read_bundle_runtime_metadata(verified), refresh=refresh)
         profile = self.get_profile(configuration_id) if configuration_id else None
@@ -285,7 +290,8 @@ class ModelManager:
                 requested.pop(key, None)
             else:
                 requested[key] = value
-        selected_bags = resolve_bags(startup=requested)
+        initial_startup = model_default_values(self.store, verified, startup=requested)[0]
+        selected_bags = resolve_bags(startup=requested, startup_defaults=initial_startup)
         selected_startup = selected_bags.startup.applied
         configuration = verified.huggingface_configuration
         template_source = "gguf_template"
@@ -328,6 +334,7 @@ class ModelManager:
             huggingface_configuration=verified.huggingface_configuration,
             selected_template_source=template_source,
         )
+        result.context_size.applied = selected_startup.get("ctx_size")
         if deployment is not None and descriptor_deployment is None:
             result.deployment_id = deployment.id
             result.context_size.observed = deployment.server_props.n_ctx if deployment.server_props else None
@@ -531,26 +538,22 @@ class ModelManager:
         profile = self.store.get_profile(profile_id)
         if profile is None:
             raise ManagerError("Unknown profile", code="profile_missing", status_code=404)
-        migrated = upgrade_configuration(profile)
-        if migrated != profile:
-            with self.store.configuration_lock():
-                current = self.store.get_profile(profile_id)
-                if current is not None:
-                    profile = self.store.put_profile(upgrade_configuration(current))
         return self._resolved_profile(profile)
 
     def _resolved_profile(self, profile: RunProfile) -> RunProfile:
-        """Re-resolve requested keys so pre-correction profiles show retired notes."""
+        """Resolve the shared current baseline without rewriting saved overrides."""
         bundle = self.store.get_bundle(profile.bundle_id) if profile.bundle_id else None
+        initial_startup, response_defaults = model_default_values(self.store, bundle,
+            startup=profile.bags.startup.requested) if bundle else ({}, None)
         return profile.model_copy(
             update={
                 "bundle_name": bundle.display_name if bundle else None,
                 "bags": resolve_bags(
                     startup=profile.bags.startup.requested,
+                    startup_defaults=initial_startup,
                     per_request=profile.bags.per_request.requested,
                     agent=profile.bags.agent.requested,
-                    per_request_defaults=(bundle.huggingface_configuration.generation_defaults
-                        if bundle and bundle.huggingface_configuration else None),
+                    per_request_defaults=response_defaults,
                 )
             }
         )
@@ -558,7 +561,10 @@ class ModelManager:
     def create_profile(self, request: ProfileWriteRequest) -> RunProfile:
         self._require_profile_bundle(request.bundle_id)
         loading, response = split_response_startup(request.startup, request.per_request)
-        bags = resolve_bags(startup=loading, per_request=response, agent=request.agent)
+        bundle = self.store.get_bundle(request.bundle_id) if request.bundle_id else None
+        initial_startup, defaults = model_default_values(self.store, bundle, startup=loading) if bundle else ({}, None)
+        bags = resolve_bags(startup=loading, startup_defaults=initial_startup,
+            per_request=response, agent=request.agent, per_request_defaults=defaults)
         self._validate_configuration_bags(request.bundle_id, bags)
         now = utc_now()
         profile = RunProfile(
@@ -582,7 +588,10 @@ class ModelManager:
         if request.expected_revision is not None and request.expected_revision != existing.revision:
             raise ManagerError("This configuration changed elsewhere. Refresh before saving.", code="configuration_revision_conflict", status_code=409)
         loading, response = split_response_startup(request.startup, request.per_request)
-        bags = resolve_bags(startup=loading, per_request=response, agent=request.agent)
+        bundle = self.store.get_bundle(request.bundle_id) if request.bundle_id else None
+        initial_startup, defaults = model_default_values(self.store, bundle, startup=loading) if bundle else ({}, None)
+        bags = resolve_bags(startup=loading, startup_defaults=initial_startup,
+            per_request=response, agent=request.agent, per_request_defaults=defaults)
         self._validate_configuration_bags(request.bundle_id, bags)
         updated = existing.model_copy(
             update={
@@ -605,13 +614,6 @@ class ModelManager:
         if not bundle_id:
             return
         options = self.get_bundle_configuration_options(bundle_id, startup=bags.startup.requested)
-        context = bags.startup.applied.get("ctx_size")
-        layers = bags.startup.applied.get("n_gpu_layers")
-        if type(context) is int and options.context_size.maximum is not None and context > options.context_size.maximum:
-            raise ManagerError("Conversation capacity exceeds this model's supported context.", code="configuration_context_invalid", status_code=422,
-                               details={"key": "ctx_size", "maximum": options.context_size.maximum})
-        if type(layers) is int and layers >= 0 and options.gpu_layers.maximum is not None and layers > options.gpu_layers.maximum:
-            raise ManagerError("GPU layer count exceeds this model's available layers.", code="configuration_gpu_layers_invalid", status_code=422)
         architecture = options.metadata.get("architecture") or ""
         if architecture == "deepseek4" and bags.startup.applied.get("cache_type_k", "f16") != bags.startup.applied.get("cache_type_v", "f16"):
             raise ManagerError("This model requires matching K and V cache precision.", code="configuration_cache_invalid", status_code=422)
@@ -753,7 +755,9 @@ class ModelManager:
                     startup.pop(key, None)
                 else:
                     startup[key] = value
-            wanted = resolve_bags(startup=startup, per_request=profile.bags.per_request.requested if profile else {},
+            initial_startup, response_defaults = model_default_values(self.store, bundle, startup=startup)
+            wanted = resolve_bags(startup=startup, startup_defaults=initial_startup,
+                per_request_defaults=response_defaults, per_request=profile.bags.per_request.requested if profile else {},
                 agent=profile.bags.agent.requested if profile else {})
             from workbench_backend.inference.deployments import _require_valid_managed_startup
             _require_valid_managed_startup(wanted.startup)
@@ -960,7 +964,9 @@ class ModelManager:
                     requested.pop(key, None)
                 else:
                     requested[key] = value
-            bags = resolve_bags(startup=requested, per_request=profile.bags.per_request.requested if profile else deployment.settings.per_request.requested,
+            initial_startup, response_defaults = model_default_values(self.store, bundle, startup=requested)
+            bags = resolve_bags(startup=requested, startup_defaults=initial_startup, per_request_defaults=response_defaults,
+                per_request=profile.bags.per_request.requested if profile else deployment.settings.per_request.requested,
                 agent=profile.bags.agent.requested if profile else deployment.settings.agent.requested)
             _require_valid_managed_startup(bags.startup)
             executable = self.runtime.require_executable()
@@ -1105,8 +1111,11 @@ class ModelManager:
                 pending_requested_startup.pop(key, None)
             else:
                 pending_requested_startup[key] = value
+        bundle = self.store.get_bundle(deployment.bundle_id or "")
+        initial_startup = model_default_values(self.store, bundle, startup=pending_requested_startup)[0] if bundle else {}
         current = resolve_bags(
             startup=pending_requested_startup,
+            startup_defaults=initial_startup,
             per_request=profile.bags.per_request.requested,
             agent=profile.bags.agent.requested,
             startup_overrides={

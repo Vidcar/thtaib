@@ -218,10 +218,9 @@ def _generation_defaults(config: Any) -> tuple[dict[str, Any], dict[str, str]]:
         defaults["repeat_penalty" if key == "repetition_penalty" else key] = value
     limit = config.get("max_new_tokens")
     if limit is not None:
-        if isinstance(limit, int) and not isinstance(limit, bool) and 0 < limit <= 1000000:
-            defaults["max_tokens"] = limit
-        else:
-            unsupported["max_new_tokens"] = "Invalid publisher output limit."
+        unsupported["max_new_tokens"] = (
+            "Publisher output limits are not automatic defaults. Generation is Unlimited unless you set a limit."
+        )
     stops = config.get("stop_strings")
     if stops is not None:
         if isinstance(stops, str) and stops or isinstance(stops, list) and stops and all(isinstance(value, str) and value for value in stops):

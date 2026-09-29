@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import nullcontext
 import base64
 import json
 import tempfile
@@ -19,7 +20,9 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from tests.scripted_model import ScriptedChatModel
-from workbench_backend.agents.context import BudgetedSummarizationMiddleware, token_counter_for_model
+from workbench_backend.agents.context import SummaryDispatchModel, token_counter_for_model, estimate_payload
+from deepagents.middleware.summarization import SummarizationMiddleware
+from workbench_backend.agents.tool_disclosure import LeanFilesystemMiddleware
 from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
 from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.inference.ids import utc_now
@@ -51,6 +54,13 @@ class VisualContextCompactionTests(unittest.TestCase):
         class InspectModel(ScriptedChatModel):
             seen: ClassVar[list[tuple[str, list]]] = []
 
+            def count_input_tokens(self, payload):
+                # Deterministic tokenizer fixture: retained images consume native tokens
+                # beyond their short immutable capture references.
+                images = sum(block.get("type") == "image_url" for message in payload.get("messages", [])
+                    for block in (message.get("content") if isinstance(message.get("content"), list) else []))
+                return estimate_payload(payload) + images * 4096
+
             def _generate(self, messages, stop=None, run_manager=None, **kwargs):
                 type(self).seen.append((current_request_purpose(), list(messages)))
                 return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
@@ -77,12 +87,13 @@ class VisualContextCompactionTests(unittest.TestCase):
                 enabled_tools=["browser_take_screenshot"], presented_tools=["browser_take_screenshot"],
                 project_path=directory, capture_routes_enabled=True, created_at=now, updated_at=now)
             workbench = WorkbenchHarnessMiddleware(run, capture_backend=CaptureBackend())
-            summarization = BudgetedSummarizationMiddleware(model=model, backend=backend,
-                allowed_tools={"browser_take_screenshot"}, trigger=("tokens", 100000), keep=("messages", 2),
+            summarization = SummarizationMiddleware(
+                model=SummaryDispatchModel(delegate=model, profile=model.profile, dispatch=nullcontext), backend=backend,
+                trigger=("tokens", 100000), keep=("messages", 2),
                 token_counter=token_counter_for_model(model, message_projection=workbench.tool_image_messages_for_count),
-                request_preparer=workbench._with_outline, trim_tokens_to_summarize=None)
+                trim_tokens_to_summarize=None)
             agent = create_deep_agent(model=model, tools=[browser_take_screenshot], backend=backend,
-                system_prompt="Inspect each capture.", middleware=[summarization, workbench], checkpointer=InMemorySaver())
+                system_prompt="Inspect each capture.", middleware=[LeanFilesystemMiddleware(backend=backend, request_preparer=workbench.prepare_context_request), summarization, workbench], checkpointer=InMemorySaver())
             config = {"configurable": {"thread_id": "visual-compaction"}}
             payload = {"messages": [HumanMessage(content="Capture two pages, then finish.")]}
 

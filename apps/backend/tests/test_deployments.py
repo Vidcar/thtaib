@@ -275,7 +275,7 @@ class DeploymentTests(unittest.TestCase):
 
     def test_reconfigure_complete_recipe_removes_omitted_startup_and_records_configuration(self) -> None:
         deployment = self.manager.create_managed(ManagedDeploymentRequest(bundle_id=self.bundle_id, startup={"port":18132,"ctx_size":1024,"threads":2}))
-        profile = self.manager.create_profile(ProfileWriteRequest(display_name="Automatic context", bundle_id=self.bundle_id,
+        profile = self.manager.create_profile(ProfileWriteRequest(display_name="Stock context", bundle_id=self.bundle_id,
             startup={"threads":4}, per_request={"temperature":0.2}))
         changed = self.manager.reconfigure_deployment(deployment.id, ReconfigureDeploymentRequest(startup={"threads":4},
             replace_startup=True, model_configuration_id=profile.id))
@@ -285,7 +285,26 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(changed.requested_startup["threads"], 4)
         self.assertEqual(changed.profile_id, profile.id)
         self.assertEqual(changed.settings.per_request.applied["temperature"], 0.2)
+        self.assertEqual(changed.applied_startup["ctx_size"], 32768)
+        argv = self.supervisor.launched[-1]
+        self.assertEqual(argv[argv.index("--ctx-size") + 1], "32768")
+
+        automatic = self.manager.reconfigure_deployment(changed.id,
+            ReconfigureDeploymentRequest(startup={"ctx_size": "auto"}))
+        self.assertEqual(automatic.status, DeploymentStatus.running)
+        self.assertEqual(automatic.requested_startup["ctx_size"], "auto")
+        self.assertNotIn("ctx_size", automatic.applied_startup)
         self.assertNotIn("--ctx-size", self.supervisor.launched[-1])
+
+        reset = self.manager.reconfigure_deployment(automatic.id,
+            ReconfigureDeploymentRequest(startup={"ctx_size": None}))
+        self.assertEqual(reset.status, DeploymentStatus.running)
+        self.assertNotIn("ctx_size", reset.requested_startup)
+        self.assertEqual(reset.applied_startup["ctx_size"], 32768)
+        argv = self.supervisor.launched[-1]
+        self.assertEqual(argv[argv.index("--ctx-size") + 1], "32768")
+        self.assertEqual(reset.profile_id, profile.id)
+        self.assertEqual(reset.settings.per_request.applied["temperature"], 0.2)
 
     def test_stale_reconfigure_revisions_leave_the_owned_process_unchanged(self) -> None:
         deployment = self.manager.create_managed(ManagedDeploymentRequest(

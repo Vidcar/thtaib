@@ -71,6 +71,85 @@ class ModelConfigurationTests(unittest.TestCase):
     def test_fresh_default_does_not_invent_thinking_or_response_limits(self):
         profile = self.manager.list_model_configurations(self.bundle_id)[0]
         self.assertEqual(profile.bags.per_request.requested, {})
+        self.assertEqual(profile.bags.per_request.applied["max_tokens"], -1)
+        self.assertNotIn("reasoning", profile.bags.per_request.applied)
+        self.assertEqual(profile.bags.startup.applied["ctx_size"], 32768)
+
+    def test_context_baseline_reset_and_native_auto_are_distinct(self):
+        profile = self.manager.list_model_configurations(self.bundle_id)[0]
+        automatic = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+            configuration_id=profile.id, display_name=profile.display_name, startup={"ctx_size": "auto"}))
+        self.assertIn("ctx_size", automatic.bags.startup.requested)
+        self.assertEqual(automatic.bags.startup.requested["ctx_size"], "auto")
+        self.assertNotIn("ctx_size", automatic.bags.startup.applied)
+        deployment = self.manager.create_managed(ManagedDeploymentRequest(bundle_id=self.bundle_id,
+            profile_id=profile.id, auto_start=False))
+        self.assertNotIn("ctx_size", deployment.applied_startup)
+        options = self.manager.get_bundle_configuration_options(self.bundle_id, configuration_id=profile.id)
+        self.assertIsNone(options.context_size.applied)
+        self.assertEqual(options.context_size.default_value, 32768)
+        reset = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+            configuration_id=profile.id, display_name=profile.display_name, startup={}))
+        self.assertEqual(reset.bags.startup.applied["ctx_size"], 32768)
+
+    def test_new_default_uses_one_matching_card_recipe_without_limiting_output(self):
+        import numpy as np
+        from gguf import GGUFWriter
+        from workbench_backend.inference.schemas import HuggingFaceConfiguration, ResponseRecipe
+        source = Path(self.tmp.name) / "card-thinking.gguf"
+        writer = GGUFWriter(str(source), "qwen35")
+        writer.add_context_length(262144)
+        writer.add_chat_template("""
+            {% set resolved_reasoning_effort = reasoning_effort|default('xhigh') %}
+            {% if resolved_reasoning_effort not in ('low', 'medium', 'xhigh') %}{{ raise_exception('Invalid') }}{% endif %}
+            {% if enable_thinking is undefined or enable_thinking is true %}think{% endif %}
+            {% if preserve_thinking is undefined or preserve_thinking is true %}history{% endif %}
+        """)
+        writer.add_tensor("token_embd.weight", np.zeros((2, 2), dtype=np.float32))
+        writer.write_header_to_file(); writer.write_kv_data_to_file(); writer.write_tensors_to_file(); writer.close()
+        bundle_id = self.manager.import_local(LocalImportRequest(source_path=str(source))).bundle_id
+        bundle = self.manager.store.get_bundle(bundle_id)
+        common = dict(section="Sampling", source_repo_id="publisher/model", source_revision="a" * 40, card_sha256="b" * 64)
+        samplers = dict(temperature=1.0, top_p=0.95, top_k=20, min_p=0, presence_penalty=0, repeat_penalty=1)
+        recipes = [ResponseRecipe(id="thinking", name="Thinking", reasoning="on", per_request={**samplers, "max_tokens": 65000}, **common),
+                   ResponseRecipe(id="non-thinking", name="Non-thinking", reasoning="off",
+                                  per_request={**samplers, "temperature": 0.7}, **common)]
+        self.manager.store.put_bundle(bundle.model_copy(update={"huggingface_configuration":
+            HuggingFaceConfiguration(generation_defaults={"temperature": 0.6, "max_tokens": 128}, response_recipes=recipes)}))
+        profiles = self.manager.list_model_configurations(bundle_id)
+        self.assertEqual(len(profiles), 1)
+        profile = profiles[0]
+        self.assertEqual(profile.bags.per_request.requested, {})
+        for key, value in samplers.items():
+            self.assertEqual(profile.bags.per_request.applied[key], value)
+        self.assertEqual(profile.bags.per_request.applied["frequency_penalty"], 0)
+        self.assertEqual(profile.bags.per_request.applied["max_tokens"], -1)
+        self.assertEqual(profile.bags.per_request.applied["reasoning_effort"], "xhigh")
+        self.assertEqual(profile.bags.per_request.applied["reasoning"], "on")
+        self.assertIs(profile.bags.per_request.applied["reasoning_preserve"], True)
+        changed = self.manager.save_model_configuration(bundle_id, ModelConfigurationWriteRequest(
+            configuration_id=profile.id, display_name=profile.display_name, per_request={"reasoning": "off"}))
+        self.assertEqual(changed.bags.per_request.applied["temperature"], 1)
+        self.assertEqual(changed.bags.per_request.applied["min_p"], 0)
+        deployment = self.manager.create_managed(ManagedDeploymentRequest(bundle_id=bundle_id, profile_id=profile.id, auto_start=False))
+        self.assertEqual(deployment.settings.per_request.applied["temperature"], 1)
+        self.assertEqual(deployment.settings.per_request.applied["max_tokens"], -1)
+
+    def test_suggested_context_and_gpu_bounds_do_not_block_native_choices(self):
+        saved = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+            display_name="Native limits", startup={"ctx_size": 1048576, "n_gpu_layers": 999}))
+        self.assertEqual(saved.bags.startup.applied["ctx_size"], 1048576)
+        self.assertEqual(saved.bags.startup.applied["n_gpu_layers"], 999)
+
+    def test_loading_identity_uses_native_parallel_auto_result(self):
+        from workbench_backend.inference.configurations import loading_startup_settings
+        from workbench_backend.inference.settings import resolve_bags
+        automatic = resolve_bags(startup={"parallel": -1, "kv_unified": False})
+        explicit = resolve_bags(startup={"parallel": 4, "kv_unified": True})
+        divided = resolve_bags(startup={"parallel": 4, "kv_unified": False})
+        self.assertIs(automatic.startup.applied["kv_unified"], False)
+        self.assertEqual(loading_startup_settings(automatic), loading_startup_settings(explicit))
+        self.assertNotEqual(loading_startup_settings(automatic), loading_startup_settings(divided))
 
     def test_prepare_and_save_during_active_work_do_not_change_the_resident_record(self):
         current = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
@@ -93,33 +172,21 @@ class ModelConfigurationTests(unittest.TestCase):
         self.assertEqual(self.manager.get_deployment(resident.id), frozen)
         start.assert_not_called()
 
-    def test_cutover_preserves_effective_saved_defaults_and_frozen_history(self):
-        from workbench_backend.inference.schemas import RunProfile, SettingsBag, SettingsBags
-        legacy_bags = SettingsBags(startup=SettingsBag(
-            requested={"ctx_size": 8192, "reasoning": "off", "reasoning_budget": 128, "reasoning_preserve": False},
-            applied={"host": "127.0.0.1", "port": 8080, "ctx_size": 8192, "n_gpu_layers": -1, "flash_attn": "on",
-                     "reasoning": "off", "reasoning_budget": 128, "reasoning_preserve": False}))
-        legacy = RunProfile(id="legacy", display_name="Existing", bundle_id=self.bundle_id,
-            bags=legacy_bags, created_at="before", updated_at="before")
-        self.manager.store.put_profile(legacy)
-        historical = self.deployment(ctx_size=8192).model_copy(update={
-            "profile_id": legacy.id, "profile_snapshot": legacy_bags, "settings": legacy_bags,
-            "requested_startup": legacy_bags.startup.requested, "applied_startup": legacy_bags.startup.applied})
-        self.manager.store.put_deployment(historical)
-        frozen = self.manager.get_deployment(historical.id)
-        migrated = self.manager.get_profile(legacy.id)
-        self.assertEqual(migrated.settings_schema_version, 2)
-        self.assertEqual(migrated.revision, legacy.revision)
-        self.assertEqual(migrated.bags.startup.applied["flash_attn"], "on")
-        self.assertEqual(migrated.bags.startup.applied["parallel"], 4)
-        self.assertIs(migrated.bags.startup.applied["kv_unified"], True)
-        self.assertEqual(migrated.bags.per_request.applied["reasoning"], "off")
-        self.assertEqual(migrated.bags.per_request.applied["reasoning_budget_tokens"], 128)
-        self.assertIs(migrated.bags.per_request.applied["reasoning_preserve"], False)
-        self.assertNotIn("reasoning", migrated.bags.startup.applied)
-        self.assertEqual(self.manager.get_deployment(historical.id), frozen)
-        self.assertIsNone(self.manager.configuration_deployment(legacy.id))
-        self.assertEqual(self.manager.get_profile(legacy.id), migrated)
+    def test_reading_saved_configuration_does_not_insert_loading_overrides(self):
+        saved = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+            display_name="CPU", startup={"ctx_size": 8192, "n_gpu_layers": 0}, per_request={"max_tokens": 0}))
+        before = self.manager.store.get_profile(saved.id)
+        resolved = self.manager.get_profile(saved.id)
+        self.manager.list_model_configurations(self.bundle_id)
+        self.assertEqual(self.manager.store.get_profile(saved.id), before)
+        self.assertEqual(resolved.id, saved.id)
+        self.assertEqual(resolved.revision, saved.revision)
+        self.assertEqual(resolved.bags.startup.requested, {"ctx_size": 8192, "n_gpu_layers": 0})
+        self.assertNotIn("kv_offload", resolved.bags.startup.applied)
+        self.assertNotIn("op_offload", resolved.bags.startup.applied)
+        self.assertNotIn("mmproj_use_gpu", resolved.bags.startup.applied)
+        self.assertNotIn("spec_draft_ngl", resolved.bags.startup.applied)
+        self.assertEqual(resolved.bags.per_request.applied["max_tokens"], 0)
 
     def test_loaded_identity_includes_primary_content_and_non_response_template_kwargs(self):
         from workbench_backend.inference.configurations import loaded_model_identity

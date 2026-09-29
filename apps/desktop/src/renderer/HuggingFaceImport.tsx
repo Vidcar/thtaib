@@ -2,13 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { formatBytes } from "./display";
 import { errorMessage } from "./errors";
-import { Help } from "./ModelControls";
+import { ContextSlider, Help } from "./ModelControls";
 import { Icon } from "./Icon";
 import { Notice } from "./Notice";
 import { presentVariant, variantFamilies } from "./modelVariantPresentation";
 import { ModelHardwareEstimate } from "./ModelHardwareEstimate";
-import { CompactSlider, SettingRow, SettingSection } from "./CompactControls";
-import { tokenLabel } from "./ModelControls";
+import { SettingRow, SettingSection } from "./CompactControls";
 import type { ImportJob, ResponseRecipe } from "./types";
 import type { SchemaHubRepository } from "../generated/shared-contracts/openapi";
 import "./HuggingFaceImport.css";
@@ -58,7 +57,10 @@ function recipeSummary(recipe: ResponseRecipe): string {
 export function HuggingFaceImport({ onStarted, active = true }: { onStarted: (job: ImportJob) => Promise<void>; active?: boolean }) {
   const [query, setQuery] = useState("");
   const [step, setStep] = useState<0 | 1 | 2>(0);
-  const [context, setContext] = useState("");
+  const [context, setContext] = useState("32768");
+  const contextEdited = useRef(false);
+  const [gpuLayers, setGpuLayers] = useState("auto");
+  const [flashAttention, setFlashAttention] = useState("auto");
   const [keyPrecision, setKeyPrecision] = useState("");
   const [valuePrecision, setValuePrecision] = useState("");
   const [kvOffload, setKvOffload] = useState<boolean | null>(null);
@@ -91,7 +93,7 @@ export function HuggingFaceImport({ onStarted, active = true }: { onStarted: (jo
     setSelectedRepo(repo); setHub(null); setVariant(""); setProjector(""); setBitFilter("all");
     setRecipeIds([]); setInitialRecipeId("");
     setError(""); setMessage(""); setBusy("inspect");
-    setContext(""); setKeyPrecision(""); setValuePrecision(""); setKvOffload(null); setMetadataContextMaximum(null);
+    contextEdited.current = false; setContext("32768"); setGpuLayers("auto"); setFlashAttention("auto"); setKeyPrecision(""); setValuePrecision(""); setKvOffload(null); setMetadataContextMaximum(null);
     try {
       const next = inspectedRepository(await api.inspectHf(repo));
       if (current !== generation.current) return;
@@ -141,13 +143,14 @@ export function HuggingFaceImport({ onStarted, active = true }: { onStarted: (jo
   if (keyPrecision) startup.cache_type_k = keyPrecision;
   if (valuePrecision) startup.cache_type_v = valuePrecision;
   if (kvOffload !== null) startup.kv_offload = kvOffload;
-  if (context && Number.isSafeInteger(Number(context)) && Number(context) >= 0) startup.ctx_size = Number(context);
-  const validContext = context === "" || (Number.isSafeInteger(Number(context)) && Number(context) >= 0 && (!metadataContextMaximum || Number(context) <= metadataContextMaximum));
+  startup.n_gpu_layers = gpuLayers === "0" ? 0 : gpuLayers;
+  startup.flash_attn = flashAttention;
+  if (context === "auto") startup.ctx_size = "auto";
+  else if (context && Number.isSafeInteger(Number(context)) && Number(context) >= 0) startup.ctx_size = Number(context);
+  const validContext = context === "auto" || (Number.isSafeInteger(Number(context)) && Number(context) >= 0);
   const canReview = Boolean(selectedVariant?.complete && projector && validContext);
-  const contextMaximum = Math.max(1024, metadataContextMaximum ?? 262144);
-  const contextChoices: number[] = [];
-  for (let size = 2048; size <= contextMaximum; size *= 2) contextChoices.push(size);
-  if (metadataContextMaximum && !contextChoices.includes(metadataContextMaximum)) contextChoices.push(metadataContextMaximum);
+  const contextShown = context === "auto" ? null : context === "0" ? metadataContextMaximum : validContext ? Number(context) : null;
+  function setInitialContext(value: string) { contextEdited.current = true; setContext(value); }
 
   function toggleRecipe(id: string, checked: boolean) {
     setRecipeIds(current => checked ? [...current, id] : current.filter(item => item !== id));
@@ -201,17 +204,21 @@ export function HuggingFaceImport({ onStarted, active = true }: { onStarted: (jo
         </li>)}</ul> : <p className="hint">No GGUF conversion declared this exact publisher model. Search by model name to inspect other repositories.</p>}</>}
       {hub.warnings.length ? <details className="technical-details"><summary>Repository notes ({hub.warnings.length})</summary>{hub.warnings.map(warning => <p key={warning}>{warning}</p>)}</details> : null}
       {hub.auxiliary_ggufs?.length ? <details className="technical-details auxiliary-files"><summary>Auxiliary GGUF files <span>{hub.auxiliary_ggufs.length}</span></summary><p className="hint">MTP and imatrix files are separate from primary model weights. Listing an MTP file does not establish draft-head compatibility.</p><ul>{hub.auxiliary_ggufs.map(item => <li key={item.name}>{item.name} · {item.size_bytes == null ? "size unknown" : formatBytes(item.size_bytes)}{item.complete ? "" : " · missing shards"}</li>)}</ul></details> : null}
-      {recipes.length ? <SettingSection title="Response" description="Optional guidance for the first saved setup. Customize it in Models after preparation."><SettingRow label="Recipe" htmlFor="import-initial-recipe" provenance={initialRecipe ? `${initialRecipe.source_repo_id} · ${initialRecipe.source_revision.slice(0, 8)}` : "Model defaults"} hint={initialRecipe ? recipeSummary(initialRecipe) : "Thinking remains at the model template's default."}><select id="import-initial-recipe" value={initialRecipeId} disabled={Boolean(busy)} onChange={event => setInitialRecipeId(event.target.value)}><option value="">Model defaults</option>{recipes.map(recipe => <option key={recipe.id} value={recipe.id}>{recipe.name}</option>)}</select></SettingRow><details className="technical-details response-recipe-choices"><summary>Create additional setups</summary><p className="hint">Choose other pinned recipes to create separate named setups. Compatibility is checked after download; weights stay installed if a setup needs attention.</p>{recipes.map(recipe => <label key={recipe.id}><input type="checkbox" checked={recipeIds.includes(recipe.id)} disabled={Boolean(busy)} onChange={event => toggleRecipe(recipe.id, event.target.checked)} /><span><strong>{recipe.name}</strong><small>{recipeSummary(recipe)}</small><small>From {recipe.source_repo_id} · {recipe.section} · revision {recipe.source_revision.slice(0, 8)}</small>{recipe.notes?.length ? <small>{recipe.notes.join(" · ")}</small> : null}</span></label>)}</details></SettingSection> : null}
-      {selectedVariant ? <SettingSection title="Memory &amp; performance" description="Start with native fitting and automatic placement. Prepare settings without loading the model.">
-        <SettingRow label="Conversation capacity" help="Auto omits a fixed context value and lets native fitting choose capacity. Simultaneous requests share the total context pool." provenance={context ? `${Number(context).toLocaleString()} tokens · Custom` : "Auto · native fitting"} onReset={context ? () => setContext("") : undefined} resetLabel="Reset">
-          <div className="model-context-control"><select aria-label="Import capacity mode" value={!context ? "auto" : context === "0" ? "full" : "custom"} disabled={Boolean(busy)} onChange={event => setContext(event.target.value === "auto" ? "" : event.target.value === "full" ? "0" : "32768")}><option value="auto">Auto</option><option value="full" disabled={!metadataContextMaximum}>Full · {metadataContextMaximum ? `${tokenLabel(metadataContextMaximum)} tokens` : "metadata required"}</option><option value="custom">Custom</option></select><div className="slider-field"><CompactSlider hideHeading label="Import context slider" value={context === "0" ? metadataContextMaximum : context && validContext ? Number(context) : null} values={contextChoices} formatValue={value => `${tokenLabel(value)} tokens`} inherited={!context} disabled={Boolean(busy)} onChange={value => setContext(String(value))} /><span className="number-field"><input type="number" aria-label="Import context tokens" min={1} max={metadataContextMaximum ?? undefined} step={1} value={context === "0" ? metadataContextMaximum ?? "" : context} placeholder="Auto" disabled={Boolean(busy)} onChange={event => setContext(event.target.value)} /><span className="field-unit">tokens</span></span></div></div>
+      {recipes.length ? <SettingSection title="Generation"><SettingRow layout="models" label="Model card preset" htmlFor="import-initial-recipe" provenance={initialRecipe ? `${initialRecipe.source_repo_id} · ${initialRecipe.source_revision.slice(0, 8)}` : "Compatible publisher and native values are resolved from the installed template."} help={initialRecipe ? recipeSummary(initialRecipe) : "After download, use a compatible publisher preset matching native Thinking, or native/template values when no unambiguous preset exists."}><select id="import-initial-recipe" value={initialRecipeId} disabled={Boolean(busy)} onChange={event => setInitialRecipeId(event.target.value)}><option value="">Publisher/native baseline</option>{recipes.map(recipe => <option key={recipe.id} value={recipe.id}>{recipe.name}</option>)}</select></SettingRow><details className="technical-details response-recipe-choices"><summary>Create additional setups</summary>{recipes.map(recipe => <label key={recipe.id}><input type="checkbox" checked={recipeIds.includes(recipe.id)} disabled={Boolean(busy)} onChange={event => toggleRecipe(recipe.id, event.target.checked)} /><span><strong>{recipe.name}</strong><small>{recipeSummary(recipe)}</small>{recipe.notes?.length ? <small>{recipe.notes.join(" · ")}</small> : null}</span></label>)}</details></SettingSection> : null}
+      {selectedVariant ? <SettingSection title="Loading">
+        <SettingRow layout="models" label="Context" help={<>Total shared context in tokens. Simultaneous requests share the pool.<code>--ctx-size</code></>} onReset={contextEdited.current ? () => { contextEdited.current = false; setContext(String(Math.min(32768, metadataContextMaximum ?? 32768))); } : undefined} resetLabel="Reset" resetTitle={`${Math.min(32768, metadataContextMaximum ?? 32768).toLocaleString()} tokens`}>
+          <ContextSlider label="Import context" value={contextShown} maximum={metadataContextMaximum} unknownLabel={context === "auto" ? "Auto" : "Not reported"} disabled={Boolean(busy)} onChange={value => setInitialContext(String(value))} />
         </SettingRow>
-        <details className="technical-details"><summary>Cache precision &amp; placement</summary><div className="setting-rows">
-          <SettingRow label="Key cache precision"><select aria-label="Import key cache precision" value={keyPrecision} onChange={event => setKeyPrecision(event.target.value)} disabled={Boolean(busy)}><option value="">Native default</option>{["f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "bf16", "f32", "iq4_nl"].map(value => <option key={value}>{value}</option>)}</select></SettingRow>
-          <SettingRow label="Value cache precision"><select aria-label="Import value cache precision" value={valuePrecision} onChange={event => setValuePrecision(event.target.value)} disabled={Boolean(busy)}><option value="">Native default</option>{["f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "bf16", "f32", "iq4_nl"].map(value => <option key={value}>{value}</option>)}</select></SettingRow>
-          <SettingRow label="Cache location"><select aria-label="Import cache location" value={kvOffload === null ? "" : kvOffload ? "gpu" : "cpu"} onChange={event => setKvOffload(event.target.value === "" ? null : event.target.value === "gpu")} disabled={Boolean(busy)}><option value="">Native default</option><option value="gpu">GPU</option><option value="cpu">CPU / RAM</option></select></SettingRow>
+        <SettingRow layout="models" label="GPU layers" help={<>Weight placement. Other offloads remain independent.<code>--n-gpu-layers</code></>}><select aria-label="Import GPU layers" value={gpuLayers} disabled={Boolean(busy)} onChange={event => setGpuLayers(event.target.value)}><option value="auto">Auto</option><option value="all">All</option><option value="0">CPU</option></select></SettingRow>
+        <SettingRow layout="models" label="K cache precision" help={<code>--cache-type-k</code>}><select aria-label="Import key cache precision" value={keyPrecision || "f16"} onChange={event => setKeyPrecision(event.target.value)} disabled={Boolean(busy)}>{["f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "bf16", "f32", "iq4_nl"].map(value => <option key={value}>{value}</option>)}</select></SettingRow>
+        <SettingRow layout="models" label="V cache precision" help={<code>--cache-type-v</code>}><select aria-label="Import value cache precision" value={valuePrecision || "f16"} onChange={event => setValuePrecision(event.target.value)} disabled={Boolean(busy)}>{["f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "bf16", "f32", "iq4_nl"].map(value => <option key={value}>{value}</option>)}</select></SettingRow>
+        <SettingRow layout="models" label="Flash attention" help={<code>--flash-attn</code>}><select aria-label="Import Flash attention" value={flashAttention} disabled={Boolean(busy)} onChange={event => setFlashAttention(event.target.value)}><option value="auto">Auto</option><option value="on">On</option><option value="off">Off</option></select></SettingRow>
+        <SettingRow layout="models" label="MTP" help={<>Off initially. Availability is verified from actual tensors after download.<code>--spec-type none</code></>}><select aria-label="Import MTP" value="none" disabled><option value="none">Off</option></select></SettingRow>
+        <details className="technical-details"><summary>Advanced loading</summary><div className="setting-rows">
+          <SettingRow layout="models" label="Context mode" help="Auto allows native fitting. Full uses the metadata maximum."><select aria-label="Import advanced context mode" value={context === "auto" ? "auto" : context === "0" ? "full" : "fixed"} disabled={Boolean(busy)} onChange={event => setInitialContext(event.target.value === "auto" ? "auto" : event.target.value === "full" ? "0" : String(Math.min(32768, metadataContextMaximum ?? 32768)))}><option value="fixed">Fixed</option><option value="auto">Auto</option><option value="full" disabled={!metadataContextMaximum}>Full</option></select></SettingRow>
+          <SettingRow layout="models" label="Cache location" help={<code>--no-kv-offload</code>}><select aria-label="Import cache location" value={kvOffload === false ? "cpu" : "gpu"} onChange={event => setKvOffload(event.target.value === "gpu")} disabled={Boolean(busy)}><option value="gpu">GPU</option><option value="cpu">CPU / RAM</option></select></SettingRow>
         </div></details>
-        {validContext && projector ? <ModelHardwareEstimate active={active && step === 1} selection={{ repo_id: hub.repo_id, revision: hub.resolved_revision, primary_files: selectedVariant.files, projector_files: selectedProjector?.files ?? [], startup }} onEstimate={estimate => setMetadataContextMaximum(estimate.context_maximum ?? null)} /> : null}
+        {validContext && projector ? <ModelHardwareEstimate active={active && step === 1} selection={{ repo_id: hub.repo_id, revision: hub.resolved_revision, primary_files: selectedVariant.files, projector_files: selectedProjector?.files ?? [], startup }} onEstimate={estimate => { const maximum = estimate.context_maximum ?? null; setMetadataContextMaximum(maximum); if (!contextEdited.current) setContext(String(Math.min(32768, maximum ?? 32768))); }} /> : null}
       </SettingSection> : null}
       <div className="actions"><button type="button" className="primary-button" disabled={Boolean(busy) || !canReview} onClick={() => setStep(2)}>Review download</button></div>
       </> : null}

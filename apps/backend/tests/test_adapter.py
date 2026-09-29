@@ -14,6 +14,7 @@ import httpx
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGenerationChunk
 from langchain_openai import ChatOpenAI
+from pydantic import SecretStr
 
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.adapter import (
@@ -42,6 +43,7 @@ class _RecordingHandler(BaseHTTPRequestHandler):
     response_payload: dict[str, Any] | None = None
     stream_chunks: list[dict[str, Any]] = []
     malformed_payload: dict[str, Any] | None = None
+    input_count_payload: dict[str, Any] = {"input_tokens": 61}
 
     def do_GET(self) -> None:  # noqa: N802
         self._json(200, {"data": [{"id": "fake-llama"}]})
@@ -51,6 +53,10 @@ class _RecordingHandler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length)
         body = json.loads(raw.decode("utf-8")) if raw else {}
         self.requests.append({"path": self.path, "body": body})
+        if self.path.endswith("/chat/completions/input_tokens"):
+            self.requests[-1]["headers"] = dict(self.headers)
+            self._json(200, self.input_count_payload)
+            return
         if self.malformed_payload is not None:
             self._json(200, self.malformed_payload)
             return
@@ -255,6 +261,7 @@ class AdapterTests(unittest.TestCase):
         _RecordingHandler.response_payload = None
         _RecordingHandler.stream_chunks = []
         _RecordingHandler.malformed_payload = None
+        _RecordingHandler.input_count_payload = {"input_tokens": 61}
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), _RecordingHandler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -554,6 +561,7 @@ class AdapterTests(unittest.TestCase):
         # Native b11045 consumes this top-level value, sets enable_thinking=false,
         # and removes the effort kwarg before Jinja sees its closed allowed set.
         props = ServerProperties(fetched="now", source_url="fixture", n_ctx=8192,
+            default_generation_settings={"params": {"timings_per_token": False}},
             chat_template="{% set effort = reasoning_effort|default('low') %}{% if effort not in ('low', 'xhigh') %}{{ raise_exception('Invalid') }}{% endif %}",
             chat_template_caps={"supports_reasoning_effort": True})
         model = chat_model_for_deployment(self._deployment(server_props=props),
@@ -563,7 +571,8 @@ class AdapterTests(unittest.TestCase):
             body = _RecordingHandler.requests[-1]["body"]
             self.assertEqual(body["reasoning_effort"], "none")
             self.assertNotIn("reasoning_effort", body.get("chat_template_kwargs", {}))
-            self.assertEqual(body["max_tokens"], (8192 - int(8192 * .08)) // 4)
+            self.assertEqual(body["max_tokens"], -1)
+            self.assertEqual(model.profile["max_input_tokens"], 8192)
         finally:
             model.close()
 
@@ -873,7 +882,7 @@ class AdapterTests(unittest.TestCase):
         finally:
             model.close()
 
-        self.assertEqual(model.profile["max_input_tokens"], 820)
+        self.assertEqual(model.profile["max_input_tokens"], 1000)
         self.assertEqual(seen[0]["model"], "context-model")
         self.assertEqual(seen[0]["messages"][0]["content"], "ping")
 
@@ -914,6 +923,181 @@ class AdapterTests(unittest.TestCase):
         self.assertIn("embedded-media-redacted", preview)
         self.assertNotIn("data:image", preview)
         self.assertNotIn("AAAA", preview)
+
+    def test_native_unlimited_output_and_full_capacity_ignore_thinking_and_publisher_caps(self) -> None:
+        props = ServerProperties(fetched=utc_now(), source_url="fixture", model_alias="native-context", n_ctx=32768)
+        for thinking, output in (("on", None), ("off", None), ("auto", -1), ("on", 123)):
+            with self.subTest(thinking=thinking, output=output):
+                deployment = self._deployment(server_props=props).model_copy(update={
+                    "scope": ManagementScope.managed, "publisher_request_defaults": {"max_tokens": 65000}})
+                request = {"reasoning": thinking}
+                if output is not None:
+                    request["max_tokens"] = output
+                model = chat_model_for_deployment(deployment, per_request=resolve_bags(per_request=request).per_request)
+                try:
+                    self.assertEqual(model.profile["max_input_tokens"], 32768)
+                    model.invoke([HumanMessage(content="ping")])
+                    body = _RecordingHandler.requests[-1]["body"]
+                    self.assertEqual(body["max_tokens"], 123 if output == 123 else -1)
+                    self.assertNotIn("max_completion_tokens", body)
+                finally:
+                    model.close()
+
+    def test_unknown_capacity_stays_unknown_and_connected_unlimited_is_omitted(self) -> None:
+        props = ServerProperties(fetched=utc_now(), source_url="fixture", model_alias="unknown-capacity")
+        for native in (False, True):
+            with self.subTest(native=native):
+                deployment = self._deployment(server_props=props)
+                if native:
+                    deployment.scope = ManagementScope.managed
+                model = chat_model_for_deployment(deployment, per_request=resolve_bags().per_request)
+                try:
+                    self.assertNotIn("max_input_tokens", model.profile)
+                    model.invoke([HumanMessage(content="ping")])
+                    body = _RecordingHandler.requests[-1]["body"]
+                    if native:
+                        self.assertEqual(body["max_tokens"], -1)
+                    else:
+                        self.assertNotIn("max_tokens", body)
+                        self.assertNotIn("max_completion_tokens", body)
+                finally:
+                    model.close()
+
+    def test_native_input_count_uses_projected_tools_reasoning_media_schema_and_matching_cache(self) -> None:
+        from workbench_backend.agents.context import token_counter_for_model
+        props = ServerProperties(fetched=utc_now(), source_url="fixture", model_alias="counted-model", n_ctx=32768,
+            chat_template_caps={"supports_preserve_reasoning": True, "supports_reasoning_effort": True})
+        deployment = self._deployment(server_props=props, applied_startup={"reasoning_preserve": True})
+        deployment.scope = ManagementScope.managed
+        sink = []
+        model = chat_model_for_deployment(deployment, capture_sink=sink,
+            per_request=resolve_bags(per_request={"reasoning": "on", "reasoning_effort": "xhigh", "top_k": 20}).per_request)
+        model.default_headers = {"X-Workbench-Test": "count-projection"}
+        model.openai_api_key = SecretStr("count-test-key")
+        image = _image_fixture()
+        messages = [HumanMessage(content=[{"type": "text", "text": "Inspect this image"},
+                        {"type": "image_url", "image_url": {"url": image}}]),
+            AIMessage(content="", additional_kwargs={"reasoning_content": "current-tool-reasoning"},
+                tool_calls=[{"id": "inspect-one", "name": "inspect_image", "args": {}}]),
+            ToolMessage(tool_call_id="inspect-one", content=[{"type": "text", "text": "Image found"},
+                {"type": "image_url", "image_url": {"url": _image_fixture("blue")}}])]
+        original = [message.model_dump() for message in messages]
+        tool = {"type": "function", "function": {"name": "inspect_image", "description": "Inspect a selected image",
+            "strict": True, "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}}
+        schema = {"type": "json_schema", "json_schema": {"name": "image_report", "schema": {
+            "type": "object", "properties": {"description": {"type": "string"}}, "required": ["description"]}}}
+        try:
+            counter = token_counter_for_model(model, response_format=schema)
+            self.assertEqual(counter(messages, tools=[tool]), 61)
+            self.assertEqual(counter(messages, tools=[tool]), 61)
+            self.assertEqual(model.input_count_basis, "native")
+            model.invoke(messages, tools=[tool], response_format=schema)
+        finally:
+            model.close()
+        counted = [item for item in _RecordingHandler.requests if item["path"].endswith("/input_tokens")]
+        generated = [item for item in _RecordingHandler.requests if item["path"].endswith("/chat/completions")]
+        self.assertEqual(len(counted), 1)
+        self.assertEqual(counted[0]["path"], "/v1/chat/completions/input_tokens")
+        self.assertEqual(counted[0]["headers"]["X-Workbench-Test"], "count-projection")
+        self.assertEqual(counted[0]["headers"]["Authorization"], "Bearer count-test-key")
+        body = {**generated[0]["body"], "stream": False}
+        body.pop("stream_options", None)
+        self.assertEqual(counted[0]["body"], body)
+        self.assertEqual(body["messages"][1]["reasoning_content"], "current-tool-reasoning")
+        self.assertEqual(body["messages"][2]["tool_call_id"], "inspect-one")
+        self.assertEqual(body["messages"][3]["role"], "user")
+        self.assertEqual(body["response_format"], schema)
+        self.assertEqual(body["chat_template_kwargs"]["enable_thinking"], True)
+        self.assertEqual(body["reasoning_effort"], "xhigh")
+        self.assertEqual(body["tools"], [tool])
+        self.assertEqual(body["max_tokens"], -1)
+        self.assertEqual([message.model_dump() for message in messages], original)
+        self.assertEqual(len(sink), 1, "Input counting must not become a visible generation request")
+
+    def test_failed_native_counts_are_bounded_estimated_and_do_not_veto_generation(self) -> None:
+        from workbench_backend.agents.context import estimate_payload, token_counter_for_model
+        from workbench_backend.inference.adapter import INPUT_COUNT_TIMEOUT
+        for failure in (404, 405, 501, 503, "timeout"):
+            with self.subTest(failure=failure):
+                counts = []
+                def respond(request):
+                    if request.url.path.endswith("/input_tokens"):
+                        counts.append(request)
+                        if failure == "timeout":
+                            raise httpx.ReadTimeout("bounded count unavailable", request=request)
+                        return httpx.Response(failure, json={"error": {"message": "counter unavailable"}})
+                    return httpx.Response(200, json={"id": "count-fallback", "object": "chat.completion",
+                        "choices": [{"index": 0, "message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}]})
+                client = httpx.Client(transport=httpx.MockTransport(respond))
+                props = ServerProperties(fetched=utc_now(), source_url="fixture", model_alias="fallback-model", n_ctx=1000)
+                deployment = self._deployment(server_props=props)
+                deployment.scope = ManagementScope.managed
+                model = chat_model_for_deployment(deployment, http_client=client)
+                messages = [HumanMessage(content="Long input " * 4000)]
+                try:
+                    counter = token_counter_for_model(model)
+                    expected = estimate_payload(model.project_context_payload(messages))
+                    self.assertGreater(expected, 1000)
+                    self.assertEqual(counter(messages), expected)
+                    self.assertEqual(counter(messages), expected)
+                    self.assertEqual(model.input_count_basis, "estimated")
+                    self.assertEqual(model.invoke(messages).content, "pong")
+                    self.assertEqual(len(counts), 1 if failure in (404, 405, 501) else 2)
+                    self.assertEqual(counts[0].extensions["timeout"]["read"], INPUT_COUNT_TIMEOUT)
+                finally:
+                    model.close()
+                    client.close()
+
+    def test_failed_native_count_does_not_disable_later_valid_count_and_zero_is_cached(self) -> None:
+        for failure in (400, 500, 429, 503, "timeout"):
+            with self.subTest(failure=failure):
+                requests = []
+                def respond(request):
+                    requests.append(request)
+                    if len(requests) == 1:
+                        if failure == "timeout":
+                            raise httpx.ReadTimeout("bounded count unavailable", request=request)
+                        return httpx.Response(failure, json={"error": {"message": "No messages provided."}})
+                    return httpx.Response(200, json={"input_tokens": 0})
+                client = httpx.Client(transport=httpx.MockTransport(respond))
+                props = ServerProperties(fetched=utc_now(), source_url="fixture", model_alias="partial-template")
+                model = chat_model_for_deployment(self._deployment(server_props=props), http_client=client)
+                model.set_input_token_counting(client, self.endpoint, native=True)
+                try:
+                    partial = model.project_context_payload([AIMessage(content="Earlier answer")])
+                    repaired = model.project_context_payload([HumanMessage(content="repaired")])
+                    self.assertIsNone(model.count_input_tokens(partial))
+                    self.assertEqual(model.input_count_basis, "estimated")
+                    self.assertEqual(model.count_input_tokens(repaired), 0)
+                    self.assertEqual(model.count_input_tokens(repaired), 0)
+                    self.assertEqual(model.input_count_basis, "native")
+                    self.assertEqual(len(requests), 2)
+                finally:
+                    model.close()
+                    client.close()
+
+    def test_native_input_count_cache_is_bounded_and_retains_recent_matches(self) -> None:
+        requests = []
+        def respond(request):
+            requests.append(request)
+            return httpx.Response(200, json={"input_tokens": len(requests)})
+        client = httpx.Client(transport=httpx.MockTransport(respond))
+        props = ServerProperties(fetched=utc_now(), source_url="fixture", model_alias="cached-counter")
+        model = chat_model_for_deployment(self._deployment(server_props=props), http_client=client)
+        model.set_input_token_counting(client, self.endpoint, native=True)
+        payloads = [model.project_context_payload([HumanMessage(content=value)]) for value in ("A", "B", "C")]
+        try:
+            with patch("workbench_backend.inference.adapter.INPUT_COUNT_CACHE_SIZE", 2):
+                self.assertEqual(model.count_input_tokens(payloads[0]), 1)
+                self.assertEqual(model.count_input_tokens(payloads[1]), 2)
+                self.assertEqual(model.count_input_tokens(payloads[0]), 1)
+                self.assertEqual(model.count_input_tokens(payloads[2]), 3)
+                self.assertEqual(model.count_input_tokens(payloads[0]), 1)
+                self.assertEqual(model.count_input_tokens(payloads[1]), 4)
+                self.assertEqual(len(requests), 4)
+        finally:
+            model.close()
+            client.close()
 
     def test_browser_tool_schema_with_type_property_reaches_model_and_keeps_media_redacted(self) -> None:
         sink: list[dict[str, Any]] = []

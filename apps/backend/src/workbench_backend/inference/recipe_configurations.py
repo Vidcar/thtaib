@@ -8,7 +8,7 @@ from pathlib import Path
 from jinja2 import Environment, TemplateSyntaxError, nodes
 
 from workbench_backend.errors import ManagerError
-from workbench_backend.inference.configurations import ensure_model_configurations
+from workbench_backend.inference.configurations import ensure_model_configurations, model_default_values
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.inspect import read_gguf_runtime_metadata
 from workbench_backend.inference.schemas import (
@@ -77,6 +77,7 @@ def create_recipe_configurations(
                 if recipe.reasoning != "preserve":
                     requested["reasoning"] = recipe.reasoning
                 now = utc_now()
+                initial_startup, response_defaults = model_default_values(store, bundle, startup=base.bags.startup.requested)
                 profile = RunProfile(
                     id=identity or new_id("profile"),
                     display_name=_unique_name(recipe.name, names),
@@ -89,7 +90,8 @@ def create_recipe_configurations(
                         card_sha256=recipe.card_sha256,
                         section=recipe.section,
                     ),
-                    bags=resolve_bags(startup=dict(base.bags.startup.requested), per_request=requested),
+                    bags=resolve_bags(startup=dict(base.bags.startup.requested), per_request=requested,
+                        startup_defaults=initial_startup, per_request_defaults=response_defaults),
                     settings_schema_version=2,
                     created_at=now,
                     updated_at=now,
@@ -196,13 +198,14 @@ def _require_template_toggle(bundle, recipes: list[ResponseRecipe]) -> None:
         except (OSError, ValueError, KeyError, TypeError) as exc:
             raise ManagerError("The selected GGUF template could not be checked for thinking support.",
                 code="recipe_template", status_code=409) from exc
+    if not template:
+        return  # Unknown capability remains usable; it is not incompatibility.
     try:
         parsed = Environment(extensions=["jinja2.ext.loopcontrols"]).parse(template)
         uses_toggle = any(node.name == "enable_thinking" and node.ctx == "load"
             for node in parsed.find_all(nodes.Name))
-    except TemplateSyntaxError as exc:
-        raise ManagerError("The selected model template could not be parsed for thinking support.",
-            code="recipe_template", status_code=409) from exc
+    except TemplateSyntaxError:
+        return  # The native template engine remains authoritative.
     if not uses_toggle:
         raise ManagerError("This GGUF template does not verify the card's thinking and non-thinking modes.",
             code="recipe_thinking_unsupported", status_code=409)

@@ -72,12 +72,15 @@ class BundleConfigurationOptionsTests(unittest.TestCase):
         self.assertEqual(body["metadata"]["context_length"], 262144)
         self.assertEqual(body["metadata"]["block_count"], 65)
         self.assertEqual(body["context_size"]["flag"], "--ctx-size")
-        self.assertIsNone(body["context_size"]["applied"])
+        self.assertEqual(body["context_size"]["applied"], 32768)
+        self.assertEqual(body["context_size"]["default_value"], 32768)
+        self.assertEqual(body["context_size"]["step"], 1024)
+        self.assertEqual(body["context_size"]["minimum"], 1024)
         self.assertIsNone(body["context_size"]["observed"])
         context_values = [item["value"] for item in body["context_size"]["options"]]
         self.assertEqual(
             context_values,
-            [None, 0, 32768, 49152, 65536, 98304, 131072, 163840, 196608, 262144],
+            ["auto", 0, 32768, 49152, 65536, 98304, 131072, 163840, 196608, 262144],
         )
         self.assertEqual(body["gpu_layers"]["flag"], "--n-gpu-layers")
         self.assertEqual(body["gpu_layers"]["applied"], "auto")
@@ -91,11 +94,11 @@ class BundleConfigurationOptionsTests(unittest.TestCase):
         self.assertEqual(body["startup_defaults"]["flash_attn"]["applied"], "auto")
         self.assertEqual(body["startup_defaults"]["cache_type_k"]["applied"], "f16")
         self.assertEqual(body["startup_defaults"]["fit"]["applied"], "on")
-        self.assertEqual(body["startup_defaults"]["threads"]["source"], "backend_recommendation")
+        self.assertEqual(body["startup_defaults"]["threads"]["source"], "pinned_runtime_default")
         self.assertIsNotNone(body["startup_defaults"]["threads"]["recommended"])
         effort = body["per_request_defaults"]["reasoning_effort"]
         self.assertEqual(effort["source"], "unavailable")
-        self.assertEqual(effort["applied"], "default")
+        self.assertIsNone(effort["applied"])
         self.assertEqual(
             [item["value"] for item in effort["options"]],
             [],
@@ -109,7 +112,7 @@ class BundleConfigurationOptionsTests(unittest.TestCase):
             {% if enable_thinking %}Think{% endif %}
         """)
         report = bundle_configuration_options("bundle", metadata)
-        self.assertEqual([o.value for o in report.per_request_defaults["reasoning_effort"].options], ["default", "low", "medium", "xhigh"])
+        self.assertEqual([o.value for o in report.per_request_defaults["reasoning_effort"].options], ["low", "medium", "xhigh"])
         self.assertEqual(report.per_request_defaults["reasoning_effort"].accepted_values, ["high", "low", "medium", "xhigh"])
         self.assertTrue(report.per_request_defaults["reasoning"].supported)
         self.assertEqual(report.per_request_defaults["reasoning_effort"].default_value, "xhigh")
@@ -126,7 +129,7 @@ class BundleConfigurationOptionsTests(unittest.TestCase):
         self.assertEqual(report.per_request_defaults["temperature"].suggested_maximum, 2)
         self.assertEqual(report.per_request_defaults["top_p"].maximum, 1)
         self.assertIn("flash_attn", report.startup_defaults["cache_type_v"].dependencies)
-        self.assertEqual(report.startup_defaults["parallel"].applied, 4)
+        self.assertEqual(report.startup_defaults["parallel"].applied, -1)
         self.assertEqual(report.response_presets, [])
 
     def test_comment_only_thinking_controls_are_not_template_evidence(self) -> None:
@@ -143,19 +146,21 @@ class BundleConfigurationOptionsTests(unittest.TestCase):
         self.assertTrue(descriptor.supported)
         self.assertEqual(descriptor.apply_timing, "next_request")
         self.assertIs(descriptor.default_value, True)
-        self.assertEqual([option.value for option in descriptor.options], [None, True, False])
+        self.assertEqual([option.value for option in descriptor.options], [True, False])
 
     def test_unknown_or_conflicting_template_default_stays_unknown(self) -> None:
         for template in ("{{ reasoning_effort }}", "{{ reasoning_effort|default('low') }} {{ reasoning_effort|default('high') }}"):
             report = bundle_configuration_options("bundle", GgufRuntimeMetadata(chat_template=template))
             self.assertIsNone(report.per_request_defaults["reasoning_effort"].default_value)
 
-    def test_template_undefined_defaults_do_not_invent_the_native_auto_probe_result(self) -> None:
-        for template in ("{% if enable_thinking is undefined or enable_thinking is true %}think{% endif %}",
-                "{% if enable_thinking|default(false) %}think{% endif %}"):
+    def test_explicit_template_defaults_are_guidance_until_native_observation(self) -> None:
+        for template, expected in (("{% if enable_thinking is undefined or enable_thinking is true %}think{% endif %}", "on"),
+                ("{% if enable_thinking|default(false) %}think{% endif %}", "off")):
             report = bundle_configuration_options("bundle", GgufRuntimeMetadata(chat_template=template))
             self.assertTrue(report.per_request_defaults["reasoning"].supported)
-            self.assertIsNone(report.per_request_defaults["reasoning"].default_value)
+            self.assertEqual(report.per_request_defaults["reasoning"].default_value, expected)
+            self.assertEqual(report.per_request_defaults["reasoning"].default_source, "gguf_template")
+            self.assertIsNone(report.per_request_defaults["reasoning"].observed)
 
     def test_thinking_history_requires_template_evidence(self) -> None:
         keep = bundle_configuration_options("bundle", GgufRuntimeMetadata(chat_template=
@@ -186,7 +191,7 @@ class BundleConfigurationOptionsTests(unittest.TestCase):
         self.assertIsNone(body["bundle_id"])
         self.assertEqual(body["context_size"]["observed"], 98304)
         self.assertEqual(body["per_request_defaults"]["reasoning_effort"]["default_value"], "xhigh")
-        self.assertIsNone(body["per_request_defaults"]["reasoning"]["default_value"])
+        self.assertEqual(body["per_request_defaults"]["reasoning"]["default_value"], "on")
         self.assertEqual(body["per_request_defaults"]["temperature"]["default_value"], 0.6)
 
     def test_missing_template_is_unverified_and_only_closed_constraints_define_accepted_values(self) -> None:
@@ -205,6 +210,68 @@ class BundleConfigurationOptionsTests(unittest.TestCase):
         with_head = bundle_configuration_options("bundle", GgufRuntimeMetadata(has_mtp_tensors=True, nextn_predict_layers=1))
         self.assertIn("draft-mtp", [o.value for o in with_head.startup_defaults["spec_type"].options])
         self.assertEqual(with_head.startup_defaults["spec_draft_n_max"].applied, 3)
+
+    def test_exact_native_bindings_and_unlimited_defaults_are_shared(self) -> None:
+        report = bundle_configuration_options("bundle", GgufRuntimeMetadata())
+        for key in ("temperature", "top_p", "top_k", "min_p", "presence_penalty", "frequency_penalty",
+                    "repeat_penalty", "max_tokens", "reasoning_effort", "reasoning_budget_tokens", "reasoning_format"):
+            self.assertEqual(report.per_request_defaults[key].request_path, key)
+            self.assertIsNone(report.per_request_defaults[key].flag)
+        self.assertEqual(report.per_request_defaults["reasoning"].request_path, "chat_template_kwargs.enable_thinking")
+        self.assertEqual(report.per_request_defaults["reasoning_preserve"].request_path, "chat_template_kwargs.preserve_reasoning")
+        self.assertEqual(report.per_request_defaults["max_tokens"].default_value, -1)
+        self.assertEqual([item.value for item in report.per_request_defaults["max_tokens"].options], [-1])
+        self.assertEqual(report.startup_defaults["mmproj_use_gpu"].flag, "--mmproj-offload")
+        self.assertEqual(report.startup_defaults["spec_draft_cache_type_k"].flag, "--spec-draft-type-k")
+        self.assertEqual(report.startup_defaults["spec_draft_cache_type_v"].flag, "--spec-draft-type-v")
+        self.assertEqual(report.startup_defaults["spec_draft_p_min"].default_value, 0)
+
+    def test_unknown_template_parser_support_is_not_incompatibility(self) -> None:
+        report = bundle_configuration_options("bundle", GgufRuntimeMetadata(chat_template="{% native_extension unknown %}"))
+        for key in ("reasoning", "reasoning_preserve", "reasoning_effort"):
+            self.assertIsNone(report.per_request_defaults[key].supported)
+
+    def test_unlimited_thinking_budget_does_not_reject_non_thinking_model(self) -> None:
+        from workbench_backend.errors import HarnessError
+        from workbench_backend.inference.configuration_options import validate_model_reasoning
+        from workbench_backend.inference.schemas import Deployment, DeploymentStatus, ManagementScope
+        from workbench_backend.inference.settings import resolve_bags
+        deployment = Deployment(id="plain", display_name="Plain", scope=ManagementScope.connected,
+            status=DeploymentStatus.running, created_at="now", updated_at="now", endpoint="http://127.0.0.1:9/v1",
+            server_props=ServerProperties(fetched="now", source_url="fixture", chat_template="{{ messages }}",
+                chat_template_caps={"supports_thinking": False}))
+        unlimited = resolve_bags(per_request_defaults={"reasoning_budget_tokens": -1}).per_request
+        validate_model_reasoning(deployment, unlimited)
+        with self.assertRaises(HarnessError) as caught:
+            validate_model_reasoning(deployment, resolve_bags(per_request={"reasoning_budget_tokens": 1024}).per_request)
+        self.assertEqual(caught.exception.code, "model_reasoning_budget_unsupported")
+
+    def test_context_floor_and_initial_value_follow_small_and_unknown_models(self) -> None:
+        for maximum, expected, floor in ((None, 32768, 1024), (8192, 8192, 1024), (768, 768, 768)):
+            report = bundle_configuration_options("bundle", GgufRuntimeMetadata(context_length=maximum))
+            self.assertEqual(report.context_size.default_value, expected)
+            self.assertEqual(report.context_size.minimum, floor)
+            self.assertEqual(report.context_size.step, 1024)
+
+    def test_card_initialization_requires_one_compatible_mode_recommendation(self) -> None:
+        from workbench_backend.inference.configuration_options import preferred_response_recipe
+        from workbench_backend.inference.schemas import HuggingFaceConfiguration, ResponseRecipe
+        metadata = GgufRuntimeMetadata(chat_template="""
+            {% if enable_thinking|default(true) %}think{% endif %}
+            {% set reasoning_effort = reasoning_effort|default('xhigh') %}
+            {% if reasoning_effort not in ['low', 'xhigh'] %}{{ raise_exception('Invalid') }}{% endif %}
+        """)
+        origin = dict(section="Sampling", source_repo_id="publisher/model", source_revision="a" * 40, card_sha256="b" * 64)
+        thinking = ResponseRecipe(id="thinking", name="Thinking", reasoning="on", per_request={"temperature": 1}, **origin)
+        non_thinking = thinking.model_copy(update={"id": "non-thinking", "reasoning": "off", "name": "Non-thinking"})
+        config = HuggingFaceConfiguration(response_recipes=[thinking, non_thinking])
+        self.assertEqual(preferred_response_recipe(metadata, config), thinking)
+        self.assertIsNone(preferred_response_recipe(GgufRuntimeMetadata(), config))
+        coding = thinking.model_copy(update={"id": "coding", "name": "Coding", "per_request": {"temperature": 0.6}})
+        ambiguous = config.model_copy(update={"response_recipes": [thinking, coding, non_thinking]})
+        self.assertIsNone(preferred_response_recipe(metadata, ambiguous))
+        incompatible = thinking.model_copy(update={"per_request": {"reasoning_effort": "medium", "temperature": 0.5}})
+        self.assertIsNone(preferred_response_recipe(metadata, config.model_copy(update={"response_recipes": [incompatible]})))
 
     def test_mtp_head_and_thinking_template_are_read_from_file_directory(self) -> None:
         path = self.root / "model-with-head.gguf"
@@ -265,7 +332,7 @@ class BundleConfigurationOptionsTests(unittest.TestCase):
         bundle_id = self._bundle(context_length=8192, block_count=4)
         body = self.client.get(f"/v1/bundles/{bundle_id}/configuration-options").json()
         context_values = [item["value"] for item in body["context_size"]["options"]]
-        self.assertEqual(context_values, [None, 0, 1024, 2048, 4096, 8192])
+        self.assertEqual(context_values, ["auto", 0, 1024, 2048, 4096, 8192])
 
     def test_metadata_uses_general_architecture_specific_keys(self) -> None:
         bundle_id = self._bundle(

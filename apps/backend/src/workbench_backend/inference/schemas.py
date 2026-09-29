@@ -257,6 +257,7 @@ class ModelEstimateRequest(BaseModel):
     primary_files: list[str] = Field(default_factory=list, max_length=256)
     projector_files: list[str] = Field(default_factory=list, max_length=16)
     startup: dict[str, Any] = Field(default_factory=dict)
+    method: Literal["metadata", "native"] = "metadata"
     refresh: bool = False
 
 
@@ -264,6 +265,7 @@ class ModelMemoryEstimate(BaseModel):
     source: Literal["metadata", "native_prediction"] = "metadata"
     source_identity: str
     estimated_at: str
+    calculation_ms: float | None = None
     hardware: HardwareMemoryObservation
     selected_startup: dict[str, Any] = Field(default_factory=dict)
     evaluated_startup: dict[str, Any] = Field(default_factory=dict)
@@ -272,6 +274,8 @@ class ModelMemoryEstimate(BaseModel):
     projector_disk_bytes: int | None = None
     weights_bytes: int | None = None
     kv_bytes: int | None = None
+    attention_cache_bytes: int | None = None
+    recurrent_state_bytes: int | None = None
     runtime_overhead_bytes: int | None = None
     gpu_bytes: int | None = None
     ram_bytes: int | None = None
@@ -346,24 +350,6 @@ class SettingNote(BaseModel):
     reason: str
 
 
-class ResponseBudgetPolicy(BaseModel):
-    version: int = 1
-    mode: Literal["explicit", "publisher", "workbench_auto"] = "workbench_auto"
-    total_tokens: int | None = None
-    thinking: bool | None = None
-    source: str = "Workbench Auto"
-
-
-class ResponseBudgetBinding(BaseModel):
-    version: int = 1
-    total_tokens: int
-    capacity_tokens: int
-    margin_tokens: int
-    source: str
-    model_identity: str
-    bound_at: str
-
-
 class SettingsBag(BaseModel):
     requested: dict[str, Any] = Field(default_factory=dict)
     applied: dict[str, Any] = Field(default_factory=dict)
@@ -373,8 +359,6 @@ class SettingsBag(BaseModel):
     unverified: list[str] = Field(default_factory=list)
     retired: list[SettingNote] = Field(default_factory=list)
     """Requested keys the pinned runtime no longer accepts; each note says what replaces it."""
-    output_budget_policy: ResponseBudgetPolicy | None = None
-    output_budget_binding: ResponseBudgetBinding | None = None
     recipe_origin: ResponseRecipeOrigin | None = None
 
 
@@ -596,6 +580,7 @@ class RuntimeControlOption(BaseModel):
 class RuntimeControlDescriptor(BaseModel):
     key: str
     flag: str | None = None
+    request_path: str | None = None
     label: str
     description: str
     source: str

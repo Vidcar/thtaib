@@ -9,6 +9,7 @@ import struct
 import tempfile
 import unittest
 import zlib
+import httpx
 from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar
@@ -25,12 +26,13 @@ from tests.scripted_model import ScriptedChatModel
 from workbench_backend.agents.effective_setup import EffectiveSetup
 from workbench_backend.agents.execution_policy import CURRENT_TOOL_CALL
 from workbench_backend.agents.harness import HarnessService
-from workbench_backend.agents.context import count_context_tokens, token_counter_for_model
+from workbench_backend.agents.context import token_counter_for_model
 from workbench_backend.agents.harness_backend import BoundedImageFilesystemBackend
 from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
 from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.capabilities import setup_fingerprint
+from workbench_backend.inference.adapter import chat_model_for_deployment
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.image_validation import CANNOT_READ_IMAGE
 from workbench_backend.inference.probes import _image_fixture
@@ -125,18 +127,53 @@ class VisualMiddlewareTests(unittest.TestCase):
         self.assertEqual(middleware._with_current_tool_images(continued).messages,
             [*projected.messages, *continued.messages[len(preceding):]])
 
-    def test_native_counter_counts_visual_context_without_hydrating_or_probing(self) -> None:
+    def test_native_counter_hydrates_actual_visual_input_without_probing_or_checkpoint_bytes(self) -> None:
         encoded, _, captures, middleware, original, call = self._setup()
         retained = middleware.wrap_tool_call(call, lambda _: original)
-        messages = [AIMessage(content="", tool_calls=[{"name": "read_file", "args": {}, "id": "image-call"}]), retained]
-        model = ScriptedChatModel([], profile={"image_inputs": True, "image_tool_message": True})
+        messages = [HumanMessage(content="Inspect the retained image"),
+            AIMessage(content="", tool_calls=[{"name": "read_file", "args": {}, "id": "image-call"}]), retained]
+        checkpoint = [message.model_dump() for message in messages]
+        counts, generations = [], []
+        def respond(request):
+            body = json.loads(request.content)
+            if request.url.path.endswith("/chat/completions/input_tokens"):
+                counts.append(body)
+                return httpx.Response(200, json={"input_tokens": 317})
+            self.assertTrue(request.url.path.endswith("/chat/completions"))
+            generations.append(body)
+            return httpx.Response(200, json={"id": "visual-count", "object": "chat.completion",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "red"}, "finish_reason": "stop"}]})
+        client = httpx.Client(transport=httpx.MockTransport(respond))
+        now = utc_now()
+        deployment = Deployment(id="vision-model", display_name="Vision count fixture", scope="managed", status="running",
+            endpoint="http://127.0.0.1:9/v1", created_at=now, updated_at=now,
+            server_props=ServerProperties(fetched=now, source_url="fixture", model_alias="vision-model", n_ctx=4096))
+        model = chat_model_for_deployment(deployment, http_client=client)
         middleware.tool_image_preparer = lambda: self.fail("Counting cannot run capability inference")
-        count = token_counter_for_model(model, message_projection=middleware.tool_image_messages_for_count)
-        self.assertGreater(count(messages), count_context_tokens(messages) + 2048)
-        self.assertEqual(captures.reads, [])
-        self.assertNotIn(encoded, json.dumps([message.model_dump() for message in messages]))
-        self.assertEqual(middleware.tool_image_messages_for_count([HumanMessage(content="Compacted history")]),
-            [HumanMessage(content="Compacted history")])
+        try:
+            count = token_counter_for_model(model, message_projection=middleware.tool_image_messages_for_count)
+            self.assertEqual(count(messages, tools=[]), 317)
+            self.assertEqual(model.input_count_basis, "native")
+            self.assertEqual(captures.reads, ["/asset_" + "a" * 32 + ".png"])
+            self.assertEqual(generations, [], "Counting must not run model generation or a capability probe")
+            self.assertEqual(len(counts), 1)
+            body = counts[0]
+            self.assertEqual(body["messages"][2]["tool_call_id"], "image-call")
+            self.assertEqual(body["messages"][3]["role"], "user")
+            images = [block for block in body["messages"][3]["content"] if block["type"] == "image_url"]
+            self.assertEqual(images, [{"type": "image_url", "image_url": {"url": "data:image/png;base64," + encoded}}])
+            actual_messages = middleware.tool_image_messages_for_count(messages)
+            self.assertEqual(model.invoke(actual_messages).content, "red")
+            wire = {**generations[0], "stream": False}
+            wire.pop("stream_options", None)
+            self.assertEqual(body, wire, "Native counting must use the same hydrated input that generation sends")
+            self.assertEqual([message.model_dump() for message in messages], checkpoint)
+            self.assertNotIn(encoded, json.dumps(checkpoint))
+            self.assertEqual(middleware.tool_image_messages_for_count([HumanMessage(content="Compacted history")]),
+                [HumanMessage(content="Compacted history")])
+        finally:
+            model.close()
+            client.close()
 
     def test_disabled_capture_context_cannot_probe_historical_images(self) -> None:
         _, _, _, middleware, original, call = self._setup()

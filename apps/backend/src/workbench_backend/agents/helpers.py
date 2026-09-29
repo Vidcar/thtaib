@@ -5,7 +5,6 @@ from workbench_backend.agents.setup_schemas import FrozenHelperSelection, SetupC
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.schemas import Deployment, ManagedDeploymentRequest, SettingsBags
 from workbench_backend.inference.settings import PER_REQUEST_KEYS, resolve_bag, resolve_bags, split_response_startup
-from workbench_backend.inference.response_budget import freeze_output_policy
 
 
 def freeze_settings(manager, configuration):
@@ -22,7 +21,10 @@ def freeze_settings(manager, configuration):
     if configuration.startup_overrides:
         selected = {**frozen.startup.requested, **configuration.startup_overrides}
         loading, response_overrides = split_response_startup(selected, response_overrides)
-        frozen.startup = resolve_bags(startup={key: value for key, value in loading.items() if value is not None}).startup
+        defaults = {key: value for key, value in frozen.startup.applied.items()
+            if key not in frozen.startup.requested}
+        frozen.startup = resolve_bags(startup={key: value for key, value in loading.items()
+            if value is not None}, startup_defaults=defaults).startup
     if response_overrides:
         requested = {**frozen.per_request.requested, **response_overrides}
         defaults = {key: value for key, value in frozen.per_request.applied.items()
@@ -30,22 +32,8 @@ def freeze_settings(manager, configuration):
         frozen.per_request = resolve_bag({key: value for key, value in requested.items() if value is not None},
             PER_REQUEST_KEYS, defaults=defaults)
     bundle_id = configuration.bundle_id or (profile.bundle_id if profile else deployment.bundle_id if deployment else None)
-    default_thinking = None
-    if bundle_id and hasattr(manager, "get_bundle_configuration_options"):
-        compatible = getattr(manager, "compatible_deployment", None)
-        exact = compatible(bundle_id, frozen) if callable(compatible) else None
-        options = manager.get_bundle_configuration_options(bundle_id, deployment_id=exact.id if exact else None,
-            startup=frozen.startup.requested)
-        thinking = options.per_request_defaults.get("reasoning")
-        if thinking is not None and thinking.default_value in ("on", "off"):
-            default_thinking = thinking.default_value == "on"
-    elif deployment is not None and deployment.scope.value == "connected":
-        from workbench_backend.inference.configuration_options import bundle_configuration_options
-        from workbench_backend.inference.schemas import GgufRuntimeMetadata
-        thinking = bundle_configuration_options(None, GgufRuntimeMetadata(), deployment=deployment).per_request_defaults["reasoning"]
-        if thinking.default_source == "server_properties" and thinking.default_value in ("on", "off"):
-            default_thinking = thinking.default_value == "on"
-    frozen.per_request = freeze_output_policy(frozen.per_request, default_thinking=default_thinking)
+    # Freeze the actual response value, never a capacity/Thinking-derived policy.
+    frozen.per_request.applied.setdefault("max_tokens", -1)
     frozen.per_request.recipe_origin = profile.recipe_origin.model_copy(deep=True) if profile and profile.recipe_origin else None
     model_store = getattr(manager, "store", None)
     runtime = getattr(manager, "runtime", None)
@@ -71,7 +59,7 @@ def prepare_frozen_model(manager, configuration, settings, *, error_type=Harness
     Chat, direct runs and helpers use the same record selection. Response values
     remain in the acceptance snapshot; a reused child's setup never supplies them.
     """
-    from workbench_backend.inference.configurations import loaded_model_identity, requested_identity
+    from workbench_backend.inference.configurations import loaded_model_identity, loading_startup_settings, requested_identity
 
     bags = SettingsBags.model_validate(settings)
     selected = manager.store.get_deployment(configuration.deployment_id or "")
@@ -100,7 +88,9 @@ def prepare_frozen_model(manager, configuration, settings, *, error_type=Harness
             raise error_type("The saved model is unavailable. Choose another model.", code="deploy_missing", status_code=409)
         profile = manager.get_profile(configuration.profile_id) if configuration.profile_id else None
         startup = {key: None for key in profile.bags.startup.requested} if profile else {}
-        startup.update(bags.startup.requested)
+        startup.update(loading_startup_settings(bags))
+        if bags.startup.requested.get("ctx_size") == "auto":
+            startup["ctx_size"] = "auto"
         selected = manager.create_managed(ManagedDeploymentRequest(bundle_id=configuration.bundle_id,
             profile_id=configuration.profile_id, startup=startup, auto_start=False))
     return configuration.model_copy(update={"deployment_id": selected.id})

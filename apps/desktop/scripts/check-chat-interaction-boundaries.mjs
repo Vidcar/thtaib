@@ -1863,7 +1863,7 @@ async function testAttachmentOnlySdkSubmitKeepsMetadata(vite) {
     assert.equal(message.content, "", "attachment-only submit sends an empty human message body");
     assert.deepEqual(metadata.attachment_ids, ["asset_1"], "SDK metadata preserves staged attachment ids");
     assert.equal(metadata.approval_mode, "full_access", "approval mode is carried in SDK metadata");
-    assert.deepEqual(metadata.per_request_overrides, { reasoning_effort: "high" }, "per-message reasoning override is carried in SDK metadata");
+    assert.deepEqual(metadata.per_request_overrides, { reasoning: "on", reasoning_effort: "high" }, "per-message Thinking mode and effort are carried in SDK metadata");
     assert.equal(command.params.multitaskStrategy, "reject", "SDK direct submit preserves reject multitask strategy");
   } finally {
     await closeHarness(renderer, harness);
@@ -2058,7 +2058,7 @@ async function testQueuedSubmitKeepsAttachmentsToolsAndOverrides(vite) {
     assert.equal(queued.project_path, "D:\\LocalAIWorkbench\\workspaces\\queued-branch");
     assert.deepEqual(queued.attachment_ids, ["asset_1"], "queue request preserves staged attachment ids");
     assert.equal(queued.approval_mode, "full_access", "queue request preserves the approval mode");
-    assert.deepEqual(queued.per_request_overrides, { reasoning_effort: "medium" }, "queue request preserves per-message reasoning override");
+    assert.deepEqual(queued.per_request_overrides, { reasoning: "on", reasoning_effort: "medium" }, "queue request preserves per-message Thinking mode and effort");
     assert.deepEqual(harness.state.conversations.conv_a.queue[0].intended_config.attachment_ids, ["asset_1"], "queued item intended config stores attachment ids for reload");
   } finally {
     await closeHarness(renderer, harness);
@@ -2258,13 +2258,13 @@ async function testUnknownProjectionRequiresAuthoritativeCurrentRun(vite) {
 
 async function testMeasurementOnlyProjectionRefreshesCurrentConversation(vite) {
   const context = estimatedInput => ({
-    schema_version: 1,
+    schema_version: 2,
     capacity_tokens: 8192,
     capacity_source: "server_props.n_ctx",
-    output_reservation_tokens: 1024,
-    estimated_input_tokens: estimatedInput,
-    margin_tokens: 64,
-    fits: true,
+    configured_output_tokens: -1,
+    input_tokens: estimatedInput,
+    counting_basis: "estimated",
+    fits: null,
     counting_method: "estimate",
     summarization_path: "deepagents-upstream",
     notes: [],
@@ -2291,22 +2291,22 @@ async function testMeasurementOnlyProjectionRefreshesCurrentConversation(vite) {
     await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
     await act(async () => button(renderer, "Conversation A").props.onClick());
     await waitFor(() => assert.ok(harness.state.openStreams.has("thread_a")), "A SDK stream connected");
-    await waitFor(() => assert.equal(measurements().props.run?.context_observation?.estimated_input_tokens, 1000), "initial A context");
+    await waitFor(() => assert.equal(measurements().props.run?.context_observation?.input_tokens, 1000), "initial A context");
     assert.equal(measured.id, initial.id);
     assert.equal(measured.status, initial.status);
     assert.equal(measured.events.length, initial.events.length, "the update has no new audit event");
     await publish("thread_a", measured);
     await waitFor(() => assert.match(textOf(measurements()), /45\.6 tok\/s/), "same-event-count measurement reaches visible composer");
-    assert.equal(measurements().props.run.context_observation.estimated_input_tokens, 1000, "generation-only update preserves its prepared request context");
+    assert.equal(measurements().props.run.context_observation.input_tokens, 1000, "generation-only update preserves its prepared request context");
 
     const readout = () => renderer.root.findByProps({ className: "chat-measurements" });
     await publish("thread_a", { ...measured, context_observation: context(1700) });
-    await waitFor(() => assert.equal(Number(readout().props["data-estimated-input"]), 1700), "context-only update reaches composer without a new generation or audit event");
+    await waitFor(() => assert.equal(Number(readout().props["data-input-tokens"]), 1700), "context-only update reaches composer without a new generation or audit event");
 
     const nextRequest = { ...measured, generation_observation: null, context_observation: context(2100) };
     await publish("thread_a", nextRequest);
     await waitFor(() => assert.equal(readout().props["data-tokens-per-second"], ""), "next model request clears previous generation");
-    assert.equal(Number(readout().props["data-estimated-input"]), 2100);
+    assert.equal(Number(readout().props["data-input-tokens"]), 2100);
     assert.doesNotMatch(textOf(measurements()), /45\.6 tok\/s/, "pending call must not show the preceding call's speed");
 
     await act(async () => button(renderer, "Conversation B").props.onClick());
@@ -2316,7 +2316,7 @@ async function testMeasurementOnlyProjectionRefreshesCurrentConversation(vite) {
     await publish("thread_b", measured);
     await flush();
     assert.equal(measurements().props.run.id, other.id);
-    assert.equal(measurements().props.run.context_observation.estimated_input_tokens, 300);
+    assert.equal(measurements().props.run.context_observation.input_tokens, 300);
     assert.equal(measurements().props.run.generation_observation, null);
     assert.doesNotMatch(textOf(measurements()), /45\.6 tok\/s/, "A's late telemetry cannot bleed into B's composer");
   } finally {

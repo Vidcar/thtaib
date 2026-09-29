@@ -124,8 +124,10 @@ class ChatModelStagingTests(unittest.TestCase):
         self.assertEqual(finished["status"], "completed", finished.get("error"))
         frozen = self.manager.get_deployment(finished["deployment_id"])
         self.assertNotEqual(frozen.id, active_id)
-        self.assertEqual(frozen.requested_startup, staged.bags.startup.requested)
-        self.assertNotIn("cache_type_v", frozen.requested_startup, "Later saved keys must not leak into accepted B")
+        from workbench_backend.inference.configurations import loading_startup_settings
+        self.assertEqual(frozen.requested_startup, loading_startup_settings(staged.bags))
+        self.assertEqual(frozen.requested_startup["cache_type_v"], "f16",
+            "Accepted native defaults stay frozen; later saved q8_0 must not leak into B")
         self.assertEqual(self.manager.get_deployment(active_id).settings, active_before.settings)
         self.assertEqual(finished["effective_setup"]["bags"]["startup"]["requested"], staged.bags.startup.requested)
 
@@ -156,5 +158,8 @@ class ChatModelStagingTests(unittest.TestCase):
         self.assertEqual(parent.effective_setup.bags.per_request.applied["temperature"], 0.2)
         self.assertEqual(child.effective_setup.bags.startup.requested, helper_profile.bags.startup.requested)
         self.assertEqual(child.effective_setup.bags.per_request.applied["temperature"], 0.4)
-        self.assertEqual(self.manager.get_deployment(child.deployment_id).requested_startup, helper_profile.bags.startup.requested)
+        from workbench_backend.inference.configurations import loading_startup_settings
+        self.assertEqual(self.manager.get_deployment(child.deployment_id).requested_startup,
+            loading_startup_settings(helper_profile.bags))
+        self.assertEqual(self.manager.get_deployment(child.deployment_id).requested_startup["cache_type_v"], "f16")
         self.assertEqual(completed["child_runs"][0]["status"], "completed")

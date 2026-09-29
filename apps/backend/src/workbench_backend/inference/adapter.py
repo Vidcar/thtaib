@@ -11,6 +11,9 @@ import json
 import asyncio
 import contextvars
 import re
+import hashlib
+import threading
+from collections import OrderedDict
 from typing import Any, Callable
 
 import httpx
@@ -25,12 +28,13 @@ from workbench_backend.inference.configuration_options import reasoning_history_
 from workbench_backend.inference.capabilities import capability_support
 from workbench_backend.inference.schemas import Deployment, GgufRuntimeMetadata, SettingsBag
 from workbench_backend.inference.settings import normalize_on_off_auto
-from workbench_backend.inference.response_budget import TOKEN_MARGIN_RATIO, bind_output_budget, output_reservation
 from workbench_backend.inference.telemetry import LatestGenerationPublisher, RequestTelemetry, current_request_purpose
 from workbench_backend.inference.request_projection import project_outbound_payload, project_context_payload, ReasoningReplayScope
 
 # Transport timeout only — not a product task budget (AGT-003).
 DEFAULT_ADAPTER_TIMEOUT = 120.0
+INPUT_COUNT_TIMEOUT = 2.0
+INPUT_COUNT_CACHE_SIZE = 128
 CAPTURE_TEXT_LIMIT = 240
 CAPTURE_EVENT_LIMIT = 64
 _stream_chunk_count: contextvars.ContextVar[int] = contextvars.ContextVar("adapter_stream_chunk_count", default=0)
@@ -153,6 +157,12 @@ class WorkbenchChatOpenAI(ChatOpenAI):
     _capture_sink: list[dict[str, Any]] | None = PrivateAttr(default=None)
     _context_guard: Callable[[dict[str, Any]], None] | None = PrivateAttr(default=None)
     _generation_publisher: LatestGenerationPublisher | None = PrivateAttr(default=None)
+    _input_count_client: httpx.Client | None = PrivateAttr(default=None)
+    _input_count_endpoint: str | None = PrivateAttr(default=None)
+    _input_count_cache: OrderedDict[str, int] = PrivateAttr(default_factory=OrderedDict)
+    _input_count_lock: Any = PrivateAttr(default_factory=threading.Lock)
+    _input_count_available: bool = PrivateAttr(default=True)
+    _input_count_basis: str = PrivateAttr(default="estimated")
 
     def set_adapter_ownership(
         self,
@@ -222,15 +232,79 @@ class WorkbenchChatOpenAI(ChatOpenAI):
 
     def project_context_payload(self, messages: list[Any], *, tools: list[Any] | None = None,
                                 response_format: Any = None) -> dict[str, Any]:
-        return project_context_payload(messages, tools=tools, response_format=response_format,
-                                       reasoning_scope=self._reasoning_replay_scope)
+        from langchain_core.utils.function_calling import convert_to_openai_tool
+        settings: dict[str, Any] = {}
+        if tools:
+            settings["tools"] = [convert_to_openai_tool(tool) for tool in tools]
+        if response_format is not None:
+            settings["response_format"] = response_format
+        payload = super()._get_request_payload(messages, **settings)
+        return self._project_payload(payload, self._convert_input(messages).to_messages())
+
+    def set_input_token_counting(self, client: httpx.Client, endpoint: str, *, native: bool) -> None:
+        """Configure the existing native count endpoint without owning another client."""
+        self._input_count_client = client
+        self._input_count_endpoint = f"{endpoint.rstrip('/')}/chat/completions/input_tokens" if native else None
+
+    @property
+    def input_count_basis(self) -> str:
+        return self._input_count_basis
+
+    def count_input_tokens(self, payload: dict[str, Any]) -> int | None:
+        """Ask llama.cpp to count its actual template/input; never generate or fit."""
+        self._input_count_basis = "estimated"
+        if not self._input_count_available or self._input_count_endpoint is None or self._input_count_client is None:
+            return None
+        body = {key: value for key, value in payload.items() if key != "extra_body"}
+        body.update(payload.get("extra_body") or {})
+        # These transport switches do not change the rendered input.
+        body.pop("stream_options", None)
+        body["stream"] = False
+        key = hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
+        with self._input_count_lock:
+            cached = self._input_count_cache.get(key)
+            if cached is not None:
+                self._input_count_cache.move_to_end(key)
+                self._input_count_basis = "native"
+                return cached
+        try:
+            headers = dict(self.default_headers or {})
+            if self.openai_api_key is not None:
+                headers.setdefault("Authorization", f"Bearer {self.openai_api_key.get_secret_value()}")
+            response = self._input_count_client.post(self._input_count_endpoint, json=body,
+                headers=headers, timeout=INPUT_COUNT_TIMEOUT)
+            # A retention slice can make the model template return 500 even
+            # while complete requests count successfully. Only a definitively
+            # unsupported endpoint disables counting for this adapter.
+            if response.status_code in {404, 405, 501}:
+                self._input_count_available = False
+                return None
+            response.raise_for_status()
+            count = response.json().get("input_tokens")
+            if type(count) is not int or count < 0:
+                return None
+        except httpx.TransportError:
+            return None
+        except (httpx.HTTPError, ValueError, TypeError, AttributeError):
+            return None
+        with self._input_count_lock:
+            self._input_count_cache[key] = count
+            self._input_count_cache.move_to_end(key)
+            while len(self._input_count_cache) > INPUT_COUNT_CACHE_SIZE:
+                self._input_count_cache.popitem(last=False)
+        self._input_count_basis = "native"
+        return count
+
+    def _project_payload(self, payload: dict[str, Any], native: list[BaseMessage]) -> dict[str, Any]:
+        payload = project_outbound_payload(payload, native, reasoning_scope=self._reasoning_replay_scope)
+        if self._prefer_max_tokens and "max_completion_tokens" in payload:
+            payload["max_tokens"] = payload.pop("max_completion_tokens")
+        return payload
 
     def _get_request_payload(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         payload = super()._get_request_payload(*args, **kwargs)
         native = self._convert_input(args[0]).to_messages() if args else []
-        payload = project_outbound_payload(payload, native, reasoning_scope=self._reasoning_replay_scope)
-        if self._prefer_max_tokens and "max_completion_tokens" in payload:
-            payload["max_tokens"] = payload.pop("max_completion_tokens")
+        payload = self._project_payload(payload, native)
         if self._context_guard is not None:
             self._context_guard(payload)
         publisher = self._generation_publisher
@@ -361,15 +435,19 @@ def chat_model_for_deployment(
         )
 
     per_request = per_request if per_request is not None else deployment.settings.per_request
-    per_request = bind_output_budget(deployment, per_request)
     validate_model_reasoning(deployment, per_request)
     kwargs = _direct_kwargs(per_request)
     extra_body = _extra_body(per_request)
     generation_defaults = deployment.server_props.default_generation_settings if deployment.server_props else {}
     native_params = generation_defaults.get("params", generation_defaults)
-    if deployment.scope == "managed" or (isinstance(native_params, dict) and "timings_per_token" in native_params):
+    native = deployment.scope == "managed" or (isinstance(native_params, dict) and "timings_per_token" in native_params)
+    if native:
+        kwargs.setdefault("max_tokens", -1)
         # These extensions belong to llama.cpp, not arbitrary compatible APIs.
         extra_body.update(timings_per_token=True, return_progress=True)
+    elif kwargs.get("max_tokens") == -1:
+        # Unlimited on a non-native endpoint is omission, not a llama.cpp sentinel.
+        kwargs.pop("max_tokens")
     client = http_client
     async_client = http_async_client
     owned_client: httpx.Client | None = None
@@ -423,6 +501,7 @@ def chat_model_for_deployment(
         reasoning_replay_scope=reasoning_replay_scope,
         capture_sink=capture_sink,
     )
+    model.set_input_token_counting(client, endpoint, native=native)
     return model
 
 
@@ -587,12 +666,9 @@ def image_model_profile(deployment: Deployment, per_request: SettingsBag | None 
 def _model_profile(deployment: Deployment, per_request: SettingsBag) -> ModelProfile:
     profile = image_model_profile(deployment, per_request)
     capacity = deployment.server_props.n_ctx if deployment.server_props is not None else None
-    if not isinstance(capacity, int) or capacity <= 0:
+    if type(capacity) is not int or capacity <= 0:
         return profile
-    reservation = output_reservation(bind_output_budget(deployment, per_request))
-    margin = int(capacity * TOKEN_MARGIN_RATIO)
-    max_input_tokens = max(0, capacity - reservation - margin)
-    profile["max_input_tokens"] = max_input_tokens
+    profile["max_input_tokens"] = capacity
     return profile
 
 

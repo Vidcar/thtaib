@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { errorMessage } from "./errors";
-import { settingValue } from "./effectiveSettings";
+import { settingValue, type EffectiveSetting } from "./effectiveSettings";
 import { Notice } from "./Notice";
 import type { BundleConfigurationOptions, ModelBundle, ResponseRecipe, ResponseRecipeOrigin } from "./types";
 
-const labels: Record<string, string> = { reasoning: "Thinking", reasoning_effort: "Thinking level", temperature: "Temperature", top_p: "Top P", top_k: "Top K", min_p: "Min P", max_tokens: "Response budget", presence_penalty: "Presence penalty", repeat_penalty: "Repetition penalty", frequency_penalty: "Frequency penalty" };
+const labels: Record<string, string> = { reasoning: "Thinking", reasoning_effort: "Thinking level", temperature: "Temperature", top_p: "Top P", top_k: "Top K", min_p: "Min P", max_tokens: "Maximum output tokens", presence_penalty: "Presence penalty", repeat_penalty: "Repetition penalty", frequency_penalty: "Frequency penalty" };
 export function presetValues(recipe: ResponseRecipe) { return { ...recipe.per_request, ...(recipe.reasoning === "preserve" ? {} : { reasoning: recipe.reasoning }) }; }
-export function ModelPresetPanel({ bundle, value, origin, options, onApply, onChanged, disabled = false }: {
+export function ModelPresetPanel({ bundle, value, facts = {}, origin, options, onApply, onChanged, onReadCard, disabled = false }: {
   bundle: ModelBundle; value: Record<string, unknown>; origin: ResponseRecipeOrigin | null; options: BundleConfigurationOptions | null;
+  facts?: Record<string, EffectiveSetting>; onReadCard?: () => void;
   onApply: (value: Record<string, unknown>, origin: ResponseRecipeOrigin) => void; onChanged?: () => Promise<void>;
   disabled?: boolean;
 }) {
@@ -22,7 +23,12 @@ export function ModelPresetPanel({ bundle, value, origin, options, onApply, onCh
   }, [bundle.id]);
   const hidden = bundle.huggingface_configuration?.hidden_response_recipe_ids ?? [];
   const recipes = (bundle.huggingface_configuration?.response_recipes ?? []).filter(recipe => !hidden.includes(recipe.id));
-  const recipe = recipes.find(item => item.id === selected);
+  const effectiveThinking = value.reasoning ?? facts["per_request.reasoning"]?.value;
+  const matching = recipes.filter(item => item.reasoning === effectiveThinking);
+  const recipe = recipes.find(item => item.id === selected) ?? (!selected && matching.length === 1 ? matching[0] : !selected && recipes.length === 1 ? recipes[0] : undefined);
+  const source = bundle.huggingface_configuration?.source_repo_id ?? bundle.source.repo_id;
+  const revision = bundle.huggingface_configuration?.source_revision ?? bundle.source.resolved_revision;
+  const pinnedCardUrl = source && revision ? `https://huggingface.co/${source.split("/").map(encodeURIComponent).join("/")}/blob/${encodeURIComponent(revision)}/README.md` : null;
   const incompatible = recipe && (recipe.reasoning !== "preserve" && options?.per_request_defaults.reasoning?.supported === false || Object.keys(recipe.per_request).some(key => options?.per_request_defaults[key]?.supported === false));
   async function update(operation: () => Promise<unknown>, onSuccess?: () => void) {
     if (pending.current || disabled) return;
@@ -38,15 +44,15 @@ export function ModelPresetPanel({ bundle, value, origin, options, onApply, onCh
     finally { pending.current = false; if (owner === generation.current) setBusy(false); }
   }
   return <section className="model-preset-panel">
-    <p className="hint">Apply publisher response values to this draft, then Save.</p>
-    <div className="actions"><button type="button" disabled={blocked || bundle.source.kind !== "huggingface"} onClick={() => void update(() => api.refreshResponseRecipes(bundle.id))}>Refresh from model card</button><button type="button" disabled={blocked || !hidden.length} onClick={() => void update(() => api.refreshResponseRecipes(bundle.id, true))}>Restore presets from model card</button></div>
+    <p className="hint">Apply a preset to this draft, then Save.</p>
     {error ? <Notice tone="error">{error}</Notice> : null}
-    <div className="model-preset-choices" role="radiogroup" aria-label="Model-card preset">{recipes.map(item => <label key={item.id}><input type="radio" name={`card-preset-${bundle.id}`} value={item.id} checked={selected === item.id} disabled={blocked} onChange={() => setSelected(item.id)} /><span><strong>{item.name}</strong><small>{item.reasoning === "preserve" ? "Thinking unchanged" : `Thinking ${item.reasoning}`}</small></span></label>)}</div>
+    <div className="model-preset-choices" role="radiogroup" aria-label="Model-card preset">{recipes.map(item => <label key={item.id}><input type="radio" name={`card-preset-${bundle.id}`} value={item.id} checked={recipe?.id === item.id} disabled={blocked} onChange={() => setSelected(item.id)} /><span><strong>{item.name}</strong><small>{item.reasoning === "preserve" ? "Thinking unchanged" : `Thinking ${item.reasoning}`}</small></span></label>)}</div>
     {!recipes.length ? <p className="hint">{hidden.length ? "All presets were removed from this list. Restore them from the model card." : "No compatible publisher presets are recorded for this model."}</p> : null}
-    {recipe ? <><h4>Values to apply</h4><table className="model-preset-diff"><thead><tr><th>Setting</th><th>Current draft</th><th>Preset</th></tr></thead><tbody>{Object.entries(presetValues(recipe)).map(([key, next]) => <tr key={key}><th>{labels[key] ?? key.replaceAll("_", " ")}</th><td>{Object.hasOwn(value, key) ? settingValue(value[key], key) : "Model default"}</td><td>{settingValue(next, key)}</td></tr>)}</tbody></table>
-      <p className="hint">Loading settings and response values outside this list stay as they are.</p><p className="hint">{recipe.source_repo_id} · {recipe.source_revision.slice(0, 12)}<br />{recipe.section}</p>
+    {recipe ? <><h4>Values to apply</h4><table className="model-preset-diff"><thead><tr><th>Setting</th><th>Current draft</th><th>Preset</th></tr></thead><tbody>{Object.entries(presetValues(recipe)).map(([key, next]) => <tr key={key}><th>{labels[key] ?? key.replaceAll("_", " ")}</th><td>{settingValue(Object.hasOwn(value, key) ? value[key] : facts[`per_request.${key}`]?.value ?? options?.per_request_defaults[key]?.applied, key)}</td><td>{settingValue(next, key)}</td></tr>)}</tbody></table>
+      <p className="hint">Only these response settings change.</p>
       {incompatible ? <Notice tone="warn">This preset contains settings unavailable for the selected template.</Notice> : null}
       <div className="actions"><button type="button" className="primary-button" disabled={blocked || Boolean(incompatible) || !options} onClick={() => onApply({ ...value, ...presetValues(recipe) }, { recipe_id: recipe.id, name: recipe.name, source_repo_id: recipe.source_repo_id, source_revision: recipe.source_revision, card_sha256: recipe.card_sha256, section: recipe.section })}>Apply to draft</button><button type="button" disabled={blocked} onClick={() => void update(() => api.setResponseRecipeVisibility(bundle.id, recipe.id, false), () => setSelected(""))}>Remove from list</button></div>
     </> : null}
+    <details className="technical-details"><summary>Card details</summary><div className="actions">{onReadCard ? <button type="button" onClick={onReadCard}>Read model card</button> : null}{pinnedCardUrl ? <a href={pinnedCardUrl} target="_blank" rel="noreferrer noopener">Open publisher card ↗</a> : null}<button type="button" disabled={blocked || bundle.source.kind !== "huggingface"} onClick={() => void update(() => api.refreshResponseRecipes(bundle.id))}>Refresh presets</button><button type="button" disabled={blocked || !hidden.length} onClick={() => void update(() => api.refreshResponseRecipes(bundle.id, true))}>Restore presets</button></div>{recipe ? <p className="hint">{recipe.source_repo_id} · {recipe.source_revision.slice(0, 12)}<br />{recipe.section}</p> : null}</details>
   </section>;
 }

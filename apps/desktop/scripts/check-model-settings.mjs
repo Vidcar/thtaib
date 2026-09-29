@@ -14,7 +14,9 @@ assert.equal(startupPayload({ n_gpu_layers: 'all' }, '{}').n_gpu_layers, 'all', 
 assert.equal(startupPayload({ n_gpu_layers: 'auto' }, '{}').n_gpu_layers, 'auto', 'Auto must stay distinct from All');
 assert.equal(startupPayload({ n_gpu_layers: '-1' }, '{}').n_gpu_layers, -1, 'Existing automatic configurations retain their value');
 assert.equal(startupPayload({ spec_type: 'draft-mtp', spec_draft_n_max: '6' }, '{}').spec_draft_n_max, 6, 'MTP draft count is sent as an integer');
-assert.ok(!('spec_draft_n_max' in startupPayload({ spec_type: 'none', spec_draft_n_max: '6' }, '{}')), 'Inactive draft settings are omitted');
+assert.equal(startupPayload({ spec_type: 'none', spec_draft_n_max: '6' }, '{}').spec_draft_n_max, 6, 'Native draft tuning remains independent of the selected speculation mode');
+assert.deepEqual(startupPayload({ spec_draft_p_min: '0.1', spec_draft_p_split: '0.2', spec_draft_threads: '-1' }, '{}'), { spec_draft_p_min: 0.1, spec_draft_p_split: 0.2, spec_draft_threads: -1 }, 'Speculative probabilities and thread counts keep native numeric types');
+assert.equal(startupPayload({ ctx_size: 'auto' }, '{}').ctx_size, 'auto', 'Explicit native Auto is preserved for backend normalization');
 assert.deepEqual(startupPayload({ reasoning_preserve: 'keep' }, '{}'), { reasoning_preserve: true }, 'Keep uses the existing boolean startup key');
 assert.deepEqual(startupPayload({ reasoning_preserve: 'drop' }, '{}'), { reasoning_preserve: false }, 'Drop is an explicit false');
 assert.deepEqual(startupPayload({ reasoning_preserve: '' }, '{}', { reasoning_preserve: true }, new Set(['reasoning_preserve'])), { reasoning_preserve: null }, 'Default clears a saved Keep override');
