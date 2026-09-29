@@ -1,6 +1,6 @@
 # Current handover
 
-Updated 2026-09-29. The window grant and the image-input check now live in admission. `desktop_scope_snapshot` takes the desktop automation service, and `validate_content_capabilities` takes the deployment and the request. HarnessService no longer implements either check. Deep Agents `create_deep_agent` is unchanged. No OpenSpec edit.
+Updated 2026-09-29. The window grant and the image-input check now live in admission. `desktop_scope_snapshot` takes the desktop automation service, and `validate_content_capabilities` takes the deployment and the request. HarnessService no longer implements either check. Deep Agents `create_deep_agent` is unchanged. No OpenSpec edit. This admission move is pull request #201.
 
 Checks for this move: backend `uv run python -m tests.run` (1235 tests, 1 skip) and `uv run python -m tests.run --tier integration --durations 10` (213 tests, 3 skips). Desktop files did not change. The running app was left as it was: port 9222 stayed closed, no second Electron was started, and the live backend was not restarted. No weights were downloaded or deleted.
 
