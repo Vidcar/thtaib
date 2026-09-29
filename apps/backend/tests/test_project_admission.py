@@ -53,9 +53,9 @@ class ProjectAdmissionTests(unittest.TestCase):
                 coordinator.observe(run)
 
         self.factory, self.observer = factory, observer
-        self.app.state.harness = self.harness = HarnessService(lambda: self.app.state.manager,
-            model_factory=factory, app_store=self.app.state.app_store,
-            knowledge_provider=lambda: self.app.state.knowledge, interaction_observer=observer)
+        # Keep the application's real interaction and reservation-release wiring.
+        self.harness = self.app.state.harness
+        self.harness._model_factory = factory
         self.client = offline_workbench_client(self.app)
         self.deployment = self.client.post("/v1/deployments/connected", json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "admission fixture"}).json()["id"]
 
@@ -115,6 +115,290 @@ class ProjectAdmissionTests(unittest.TestCase):
         second_run = self.app.state.chat.store.get(second["id"]).run_ids[0]
         self.assertEqual(wait_for_run(self.client, second_run)["status"], "completed")
         self.assertLess(self.started.index("first"), self.started.index("second"))
+
+    def interaction(self, chat):
+        response = self.client.post("/v1/agent-interaction/threads", json={
+            "source_surface": "chat", "conversation_id": chat["id"]})
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()["thread_id"]
+
+    def submit_interaction(self, thread, ident="queued-input", task="queued work"):
+        return self.client.post(f"/v1/agent-interaction/threads/{thread}/commands", json={
+            "id": "command-" + ident, "method": "run.start", "params": {
+                "input": {"messages": [{"id": ident, "type": "human", "content": task}]},
+                "metadata": {"workbench": {}}}})
+
+    def test_interaction_accepts_busy_project_once_and_streams_the_same_input(self):
+        owner, waiter = self.chat(), self.chat()
+        thread = self.interaction(waiter)
+        self.app.state.chat_coordinator = ChatCoordinator(self.app)
+        self.start(owner, "owner")
+        self.assertTrue(self.entered.wait(8))
+        accepted = self.submit_interaction(thread)
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        self.assertNotIn("run_id", accepted.json()["result"])
+        frozen = self.app.state.chat.store.get(waiter["id"]).queue[0].execution_snapshot
+        repeated = self.submit_interaction(thread)
+        self.assertEqual(repeated.status_code, 200, repeated.text)
+        saved = self.app.state.chat.store.get(waiter["id"])
+        self.assertEqual(len(saved.queue), 1)
+        self.assertEqual(saved.queue[0].execution_snapshot, frozen)
+        state = self.client.get(f"/v1/agent-interaction/threads/{thread}/state").json()
+        self.assertEqual(state["next"], ["running"], "queued work must keep passive observation active")
+        self.assertIsNone(state["values"]["workbench"].get("run"))
+        edited = self.submit_interaction(thread, task="edited retry")
+        self.assertEqual(edited.status_code, 409, edited.text)
+        self.assertEqual(edited.json()["error"], "submission_identity_conflict")
+        self.assertEqual(self.started, ["owner"])
+        self.hold.set()
+        self.until(lambda: len(self.app.state.chat.store.get(waiter["id"]).run_ids) == 1)
+        run_id = self.app.state.chat.store.get(waiter["id"]).run_ids[0]
+        self.assertEqual(wait_for_run(self.client, run_id)["status"], "completed")
+        self.until(lambda: not self.app.state.chat.store.get(waiter["id"]).queue)
+        state = self.client.get(f"/v1/agent-interaction/threads/{thread}/state").json()
+        self.assertEqual(state["values"]["workbench"]["run"]["input_message_id"], "queued-input")
+        self.assertEqual([message["id"] for message in state["values"]["messages"]
+            if message["type"] == "human"], ["queued-input"])
+        self.assertEqual(self.started.count("queued work"), 1)
+        self.assertEqual(len(self.app.state.chat.store.get(waiter["id"]).run_ids), 1)
+
+    def test_interaction_queued_acceptance_does_not_return_the_previous_run(self):
+        waiter = self.chat()
+        prior = self.start(waiter, "previous work", "previous-input")
+        wait_for_run(self.client, prior["current_run_id"])
+        thread = self.interaction(waiter)
+        self.start(self.chat(), "owner")
+        self.assertTrue(self.entered.wait(8))
+        accepted = self.submit_interaction(thread)
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        self.assertNotIn("run_id", accepted.json()["result"])
+        saved = self.app.state.chat.store.get(waiter["id"])
+        self.assertEqual(saved.current_run_id, prior["current_run_id"])
+        self.assertEqual(saved.queue[0].input_message_id, "queued-input")
+        self.assertEqual(self.started, ["previous work", "owner"])
+
+    def test_identical_queued_interaction_retry_wakes_idle_coordinator(self):
+        waiter = self.chat()
+        thread = self.interaction(waiter)
+        queued = self.client.post(f"/v1/chat/conversations/{waiter['id']}/queue",
+            json={"task": "queued work", "input_message_id": "queued-input"})
+        self.assertEqual(queued.status_code, 200, queued.text)
+        self.app.state.chat_coordinator = ChatCoordinator(self.app)
+        accepted = self.submit_interaction(thread)
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        self.until(lambda: len(self.app.state.chat.store.get(waiter["id"]).run_ids) == 1)
+        run_id = self.app.state.chat.store.get(waiter["id"]).run_ids[0]
+        self.assertEqual(wait_for_run(self.client, run_id)["status"], "completed")
+        self.assertEqual(self.started, ["queued work"])
+
+    def test_stopped_queued_submission_settles_without_restart_and_preserves_tombstone(self):
+        owner, waiter = self.chat(), self.chat()
+        current = self.start(owner, "owner")
+        self.assertTrue(self.entered.wait(8))
+        queued = self.start(waiter, "stopped work", "stopped-input")
+        thread = self.interaction(waiter)
+        self.assertEqual(self.client.get(f"/v1/agent-interaction/threads/{thread}/state").json()["next"], ["running"])
+        stopped = self.client.post(f"/v1/chat/conversations/{waiter['id']}/cancel",
+            json={"input_message_id": "stopped-input"})
+        self.assertEqual(stopped.status_code, 200, stopped.text)
+        self.assertEqual(stopped.json()["pending_cancel_input_ids"], [])
+        self.assertEqual(stopped.json()["queue"][0]["status"], "paused")
+        self.assertEqual(self.client.get(f"/v1/agent-interaction/threads/{thread}/state").json()["next"], [])
+        self.assertTrue(self.app.state.app_store.chat_submission_cancel_known(waiter["id"], "stopped-input"))
+        self.assertFalse(self.harness._cancels[current["current_run_id"]].is_set())
+        removed = self.client.delete(f"/v1/chat/conversations/{waiter['id']}/queue/{queued['queue'][0]['id']}")
+        self.assertEqual(removed.status_code, 200, removed.text)
+        self.assertEqual(removed.json()["pending_cancel_input_ids"], [])
+        self.assertEqual(removed.json()["queue"], [])
+        self.hold.set()
+        wait_for_run(self.client, current["current_run_id"])
+        retried = self.start(waiter, "stopped work", "stopped-input")
+        cancelled = wait_for_run(self.client, retried["current_run_id"])
+        self.assertEqual(cancelled["status"], "cancelled")
+        self.assertNotIn("stopped work", self.started)
+
+    def test_accepted_interaction_queue_recovers_after_restart_without_refreezing(self):
+        waiter = self.chat()
+        thread = self.interaction(waiter)
+        queued = self.client.post(f"/v1/chat/conversations/{waiter['id']}/queue",
+            json={"task": "saved queued work", "input_message_id": "saved-input"})
+        self.assertEqual(queued.status_code, 200, queued.text)
+        frozen = self.app.state.chat.store.get(waiter["id"]).queue[0].execution_snapshot
+        close_workbench_sqlite(self.app, self.client)
+        self.app = create_app(data_root=self.root / "data")
+        self.harness = self.app.state.harness
+        self.harness._model_factory = self.factory
+        self.client = offline_workbench_client(self.app)
+        self.app.state.chat.reconcile_saved_queue_on_startup()
+        self.assertEqual(self.app.state.chat.store.get(waiter["id"]).queue[0].execution_snapshot, frozen)
+        state = self.client.get(f"/v1/agent-interaction/threads/{thread}/state").json()
+        self.assertEqual(state["next"], ["running"])
+        self.assertIsNone(state["values"]["workbench"].get("run"))
+        self.app.state.chat_coordinator = ChatCoordinator(self.app)
+        accepted = self.submit_interaction(thread, "saved-input", "saved queued work")
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        self.until(lambda: len(self.app.state.chat.store.get(waiter["id"]).run_ids) == 1)
+        run_id = self.app.state.chat.store.get(waiter["id"]).run_ids[0]
+        wait_for_run(self.client, run_id)
+        state = self.client.get(f"/v1/agent-interaction/threads/{thread}/state").json()
+        self.assertEqual(state["values"]["workbench"]["run"]["input_message_id"], "saved-input")
+        self.assertEqual(self.started, ["saved queued work"])
+
+    def test_stop_before_or_during_queue_admission_settles_without_owner_completion(self):
+        owner = self.chat()
+        current = self.start(owner, "owner")
+        self.assertTrue(self.entered.wait(8))
+        for phase in ("before request", "before queue commit", "after queue commit"):
+            with self.subTest(phase=phase):
+                waiter = self.chat()
+                ident = "stop-" + phase
+                entered, release = threading.Event(), threading.Event()
+                result = []
+                append = self.app.state.chat._append_queue_item_reserved
+
+                def held_append(*args, **kwargs):
+                    queued = append(*args, **kwargs) if phase == "after queue commit" else None
+                    entered.set()
+                    if not release.wait(8):
+                        raise TimeoutError("Queue admission was not released")
+                    return queued if queued is not None else append(*args, **kwargs)
+
+                def stop():
+                    response = self.client.post(f"/v1/chat/conversations/{waiter['id']}/cancel",
+                        json={"input_message_id": ident})
+                    self.assertEqual(response.status_code, 200, response.text)
+                    return response.json()
+
+                if phase == "before request":
+                    self.assertEqual(stop()["pending_cancel_input_ids"], [])
+                with patch.object(self.app.state.chat, "_append_queue_item_reserved", side_effect=held_append):
+                    worker = threading.Thread(target=lambda: result.append(self.client.post(
+                        f"/v1/chat/conversations/{waiter['id']}/start",
+                        json={"task": ident, "input_message_id": ident})))
+                    worker.start()
+                    try:
+                        self.assertTrue(entered.wait(6))
+                        if phase != "before request":
+                            self.assertIn(ident, stop()["pending_cancel_input_ids"])
+                        release.set()
+                        worker.join(10)
+                        self.assertFalse(worker.is_alive())
+                    finally:
+                        release.set()
+                        worker.join(10)
+                self.assertEqual(result[0].status_code, 200, result[0].text)
+                observed = self.client.get(f"/v1/chat/conversations/{waiter['id']}").json()
+                self.assertEqual(observed["pending_cancel_input_ids"], [])
+                self.assertEqual(observed["queue"][0]["status"], "paused")
+                self.assertEqual(observed["queue"][0]["pause_reason"], "cancelled")
+                self.assertEqual(observed["run_ids"], [])
+                self.assertTrue(self.app.state.app_store.chat_submission_cancel_known(waiter["id"], ident))
+                self.assertFalse(self.harness._cancels[current["current_run_id"]].is_set())
+                repeated = self.start(waiter, ident, ident)
+                self.assertEqual(len(repeated["queue"]), 1)
+                self.assertEqual(repeated["queue"][0]["status"], "paused")
+                self.assertNotIn(ident, self.started)
+        self.hold.set()
+        wait_for_run(self.client, current["current_run_id"])
+        self.assertEqual(self.app.state.chat.dispatch_idle_queued(), 0)
+        self.assertEqual(self.started, ["owner"])
+
+    def test_lab_capture_release_advances_waiting_chat_on_success_and_failure(self):
+        from workbench_backend.lab.snapshot import capture_project_snapshot
+        self.app.state.chat_coordinator = ChatCoordinator(self.app)
+        for fails in (False, True):
+            with self.subTest(capture_fails=fails):
+                workspace = self.client.post("/v1/lab/workspaces", json={
+                    "display_name": "capture fixture", "files": {"notes.md": "before"}}).json()
+                response = self.client.post("/v1/chat/conversations", json={
+                    "deployment_id": self.deployment, "workspace_id": workspace["id"], "presented_tools": []})
+                self.assertEqual(response.status_code, 200, response.text)
+                waiter = response.json()
+                entered, release = threading.Event(), threading.Event()
+                result = []
+                def paused_snapshot(*args, **kwargs):
+                    entered.set()
+                    if not release.wait(8):
+                        raise TimeoutError("Snapshot was not released")
+                    if fails:
+                        raise OSError("capture fixture failure")
+                    return capture_project_snapshot(*args, **kwargs)
+                def capture():
+                    try:
+                        result.append(self.client.post("/v1/lab/cases/capture", json={
+                            "workspace_id": workspace["id"], "deployment_id": self.deployment, "task": "Read notes"}))
+                    except OSError as exc:
+                        result.append(exc)
+                with patch("workbench_backend.lab.service.capture_project_snapshot", side_effect=paused_snapshot):
+                    worker = threading.Thread(target=capture)
+                    worker.start()
+                    try:
+                        self.assertTrue(entered.wait(6))
+                        task = "after capture " + str(fails)
+                        queued = self.start(waiter, task)
+                        self.assertEqual(queued["queue"][0]["wait_reason"], "project_busy")
+                        self.until(lambda: self.app.state.chat_coordinator.events.unfinished_tasks == 0)
+                        self.assertNotIn(task, self.started)
+                        release.set()
+                        worker.join(10)
+                        self.assertFalse(worker.is_alive())
+                        if fails:
+                            self.assertIsInstance(result[0], OSError)
+                        else:
+                            self.assertEqual(result[0].status_code, 200, result[0].text)
+                        self.until(lambda: len(self.app.state.chat.store.get(waiter["id"]).run_ids) == 1)
+                        run_id = self.app.state.chat.store.get(waiter["id"]).run_ids[0]
+                        self.assertEqual(wait_for_run(self.client, run_id)["status"], "completed")
+                        self.until(lambda: not self.app.state.chat.store.get(waiter["id"]).queue)
+                        self.assertEqual(self.started.count(task), 1)
+                    finally:
+                        release.set()
+                        worker.join(10)
+
+    def test_failed_admission_releases_waiting_chat_without_terminal_run(self):
+        self.app.state.chat_coordinator = ChatCoordinator(self.app)
+        waiter = self.chat()
+        entered, release = threading.Event(), threading.Event()
+        original = self.harness._start_admitted
+        result = []
+        def start_or_fail(request, **kwargs):
+            if request.task == "failed admission":
+                entered.set()
+                if not release.wait(8):
+                    raise TimeoutError("Admission was not released")
+                raise HarnessError("fixture admission failure", code="fixture_failure", status_code=409)
+            return original(request, **kwargs)
+        def start_owner():
+            result.append(self.client.post("/v1/agent-runs", json={"deployment_id": self.deployment,
+                "project_path": str(self.project), "task": "failed admission", "presented_tools": []}))
+        with patch.object(self.harness, "_start_admitted", side_effect=start_or_fail):
+            worker = threading.Thread(target=start_owner)
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(6))
+                self.start(waiter, "after failed admission")
+                self.until(lambda: self.app.state.chat_coordinator.events.unfinished_tasks == 0)
+                self.assertEqual(self.started, [])
+                release.set()
+                worker.join(10)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(result[0].status_code, 409)
+                self.until(lambda: len(self.app.state.chat.store.get(waiter["id"]).run_ids) == 1)
+                run_id = self.app.state.chat.store.get(waiter["id"]).run_ids[0]
+                self.assertEqual(wait_for_run(self.client, run_id)["status"], "completed")
+                self.assertEqual(self.started, ["after failed admission"])
+            finally:
+                release.set()
+                worker.join(10)
+
+    def test_nested_reservations_wake_once_after_the_outer_owner_releases(self):
+        self.app.state.chat_coordinator = ChatCoordinator(self.app)
+        with patch.object(self.app.state.chat_coordinator, "wake") as wake:
+            with self.harness.project_admission(str(self.project)):
+                with self.harness.project_admission(str(self.project / "child")):
+                    wake.assert_not_called()
+                wake.assert_not_called()
+            wake.assert_called_once_with()
 
     def test_cancelling_waiter_does_not_cancel_owner(self):
         owner, waiter = self.chat(), self.chat()

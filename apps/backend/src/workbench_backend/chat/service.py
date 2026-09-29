@@ -266,6 +266,7 @@ class ChatService:
         with self.store.conversation_lock(conversation_id):
             conversation = self._require(conversation_id)
             self._persist_thread_if_missing(conversation)
+            conversation = self._resolve_orphan_pending_cancellations(conversation)
         return self._view(conversation, persist=True)
 
     def readiness(self, conversation_id: str, request: ChatReadinessRequest) -> ChatReadiness:
@@ -892,6 +893,15 @@ class ChatService:
                 )
                 self.harness.cancel(matched_run_id)
             updated = self._pause_matching_dispatch(conversation.id, input_message_id) or conversation
+            admission_lock = self.store.conversation_lock(conversation_id)
+            if admission_lock.acquire(blocking=False):
+                try:
+                    # No admission owns this chat. A stopped queued-only input
+                    # has no worker left to settle its pending cancellation.
+                    # Keep the tombstone so an old request cannot replay it.
+                    updated = self._resolve_orphan_pending_cancellations(self._require(conversation_id))
+                finally:
+                    admission_lock.release()
             return self._view(updated)
         with self.store.conversation_lock(conversation_id):
             conversation = self._require(conversation_id)
@@ -1284,7 +1294,14 @@ class ChatService:
         request: ChatStartRequest,
     ) -> ChatConversation:
         frozen = self._admit_snapshot(conversation, request)
-        return self._append_queue_item_reserved(self._require(conversation.id), request, frozen)
+        queued = self._append_queue_item_reserved(self._require(conversation.id), request, frozen)
+        with self.app_store._lock:
+            if request.input_message_id and self.app_store.chat_submission_cancel_known(queued.id, request.input_message_id):
+                # Stop can arrive before the queued row exists, including a
+                # resolved tombstone from before this request acquired admission.
+                queued = self._pause_matching_dispatch(queued.id, request.input_message_id) or queued
+                self.app_store.resolve_chat_submission_cancel(queued.id, request.input_message_id)
+        return queued
 
     def _append_queue_item_reserved(self, conversation: ChatConversation, request: ChatStartRequest, frozen: FrozenExecutionSelection) -> ChatConversation:
         with self.app_store._lock:
@@ -1433,6 +1450,7 @@ class ChatService:
             run = self._find_chat_run_by_input(conversation, input_message_id)
             if run is not None and is_run_lifecycle_live(run.status):
                 continue
+            conversation = self._pause_matching_dispatch(conversation.id, input_message_id) or conversation
             self.app_store.resolve_chat_submission_cancel(conversation.id, input_message_id)
         return self._require(conversation.id)
 

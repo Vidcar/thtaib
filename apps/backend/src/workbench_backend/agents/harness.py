@@ -174,6 +174,7 @@ class HarnessService:
         app_store: ApplicationStore | None = None,
         embeddings_factory: EmbeddingsFactory | None = None,
         interaction_observer: InteractionObserver | None = None,
+        project_available_observer: Callable[[], None] | None = None,
         assets: Any = None,
         browser: Any = None,
         preview: Any = None,
@@ -185,6 +186,7 @@ class HarnessService:
         self._app_store = app_store
         self._embeddings_factory = embeddings_factory or openai_embeddings_for_deployment
         self._interaction_observer = interaction_observer
+        self._project_available_observer = project_available_observer
         self.assets = assets
         self.browser = browser
         if browser is not None and hasattr(browser, "screenshot_reader"):
@@ -389,6 +391,13 @@ class HarnessService:
         finally:
             with self._lock:
                 self._project_admissions.pop(token, None)
+                available = self._project_available_observer is not None and not any(
+                    roots_overlap(project_path, path) for path, _owner in self._project_admissions.values()
+                ) and project_blocker_locked(self._project_admissions, self.store, self._runs, project_path) is None
+            if available:
+                # Notify the existing queue owner only after the outermost
+                # reservation is free. A live run retains its terminal wake.
+                self._project_available_observer()
 
     def _request_project_path(self, request: AgentStartRequest) -> str | None:
         workspace = LabStore(self.manager.paths).get_workspace(request.workspace_id) if request.workspace_id else None

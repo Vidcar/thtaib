@@ -702,6 +702,10 @@ class InteractionService:
             values.get("workbench", {}).pop("interrupt_run_id", None)
         run = values.get("workbench", {}).get("run") or {}
         active = run.get("status") in {"queued", "running", "cancel_requested"}
+        if not active and binding["surface"] == "chat":
+            conversation = self.chat.store.get(binding["conversation_id"])
+            active = bool(conversation and any(item.status in {"queued", "dispatching"}
+                for item in conversation.queue))
         interrupts = values.get("__interrupt__", [])
         return {"values": values, "next": ["input.respond" if interrupts else "running"] if active else [],
                 "tasks": [{"interrupts": interrupts}] if interrupts else [],
@@ -843,6 +847,11 @@ class InteractionService:
         if binding["surface"] == "chat":
             result = self.chat.start(binding["conversation_id"], ChatStartRequest.model_validate(setup))
             run = result.current_run
+            if run is None or run.input_message_id != ident:
+                # Folder admission may accept this input into the durable Chat
+                # queue before it owns a run. Do not attribute an earlier turn
+                # to this submission; the protocol permits an omitted run_id.
+                return {"applied_through_seq": binding["seq"]}
         else:
             setup.update(thread_id=binding["graph_thread_id"], source_surface="agent-run")
             run = self.harness.start(AgentStartRequest.model_validate(setup))
