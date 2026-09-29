@@ -104,6 +104,7 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   const [busy, setBusy] = useState(false);
   const [loadingChoice, setLoadingChoice] = useState("");
   const [error, setError] = useState("");
+  const [tuningRefreshFailure, setTuningRefreshFailure] = useState<{ detail: string; settingsApplied: boolean } | null>(null);
   const contextDrafts = useRef(new Map<string, { context: number | null; base: number | null }>());
   const pending = useRef(false);
   const ownerKey = [conversationId, projectId, agentSetupVersionId, configuration.model_configuration_id ?? selectedConfigurationId].join(":");
@@ -114,6 +115,7 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   latest.current = { configuration, onApply, onReloaded, runtimeBusy };
   const incomingThinking = JSON.stringify(thinkingSettings(configuration));
   const incomingContext = typeof configuration.startup_overrides?.ctx_size === "number" ? configuration.startup_overrides.ctx_size : null;
+  useEffect(() => { setTuningRefreshFailure(null); }, [ownerKey]);
   useEffect(() => {
     setThinking(JSON.parse(incomingThinking) as Record<string, unknown>);
     const draft = contextDrafts.current.get(ownerKey);
@@ -236,9 +238,26 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
     } catch (failure) { if (owner.current.generation === currentGeneration) { setThinking(thinkingSettings(latest.current.configuration)); setError(errorMessage(failure)); } }
     finally { pending.current = false; setBusy(false); }
   }
+  async function refreshTuningStatus(settingsApplied: boolean): Promise<boolean> {
+    try {
+      await latest.current.onReloaded();
+      if (owner.current.generation === currentGeneration) setTuningRefreshFailure(null);
+      return true;
+    } catch (failure) {
+      if (owner.current.generation === currentGeneration) setTuningRefreshFailure({ detail: errorMessage(failure), settingsApplied });
+      return false;
+    }
+  }
+  async function retryTuningStatus() {
+    if (pending.current || !tuningRefreshFailure) return;
+    pending.current = true; setBusy(true);
+    try { await refreshTuningStatus(tuningRefreshFailure.settingsApplied); }
+    finally { pending.current = false; setBusy(false); }
+  }
   async function applyTuning(close: () => void) {
     if (pending.current || preview.loading || preview.error || !preview.data || (context !== null && (!Number.isInteger(context) || context < 0))) return;
-    pending.current = true; setBusy(true); setError("");
+    pending.current = true; setBusy(true); setError(""); setTuningRefreshFailure(null);
+    let loadAttempted = false, settingsApplied = false;
     try {
       const current = latest.current.configuration;
       const next = chatTuningCandidate(current, thinking, context);
@@ -246,26 +265,26 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
       const key = selectedBundleId ?? selectedDeployment?.id;
       if (key) Object.assign(next, { model_overrides: { ...remembered(current), [key]: { model_configuration_id: selectedProfile?.id ?? null, startup_overrides: startup, per_request_overrides: next.per_request_overrides } } });
       if (!latest.current.runtimeBusy && selectedProfile?.bundle_id) {
+        loadAttempted = true;
         const loaded = await api.applyChatStartupOverrides(selectedProfile.bundle_id, selectedProfile.id, startup);
         if (!loaded.health?.healthy || loaded.status !== "running") throw new Error(loaded.error ?? "Model did not become ready.");
         next.deployment_id = loaded.id;
-        if (owner.current.generation !== currentGeneration) return;
-        await latest.current.onReloaded();
       }
       if (owner.current.generation !== currentGeneration) return;
       await latest.current.onApply(next);
+      if (owner.current.generation !== currentGeneration) return;
       contextDrafts.current.set(ownerKey, { context, base: context });
-      close();
+      settingsApplied = true;
     } catch (failure) {
-      const parts = [errorMessage(failure)];
-      try {
-        await latest.current.onReloaded();
-      } catch (refreshFailure) {
-        parts.push(errorMessage(refreshFailure));
+      if (owner.current.generation === currentGeneration) setError(errorMessage(failure));
+    } finally {
+      // The accepted candidate owns the chat binding; observation cannot undo it.
+      if (owner.current.generation === currentGeneration) {
+        const refreshed = !loadAttempted || await refreshTuningStatus(settingsApplied);
+        if (settingsApplied && refreshed && owner.current.generation === currentGeneration) close();
       }
-      if (owner.current.generation === currentGeneration) setError(parts.filter(Boolean).join(" "));
+      pending.current = false; setBusy(false);
     }
-    finally { pending.current = false; setBusy(false); }
   }
 
   function choiceRow(profile: RunProfile | null, connected: Deployment | null, label: string, close: () => void, className = "chat-model-choice", description = "", details = description) {
@@ -351,6 +370,7 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
           {!contextSupported ? <span className="hint">{selectedDeployment?.scope === "connected" ? "Context is managed by this connection." : "Context control unavailable."}</span> : null}
         </section>
         {error || preview.error ? <Notice tone="error">{error || preview.error}</Notice> : null}
+        {tuningRefreshFailure ? <Notice tone="warn" action={<button type="button" disabled={busy} onClick={() => void retryTuningStatus()}>Refresh status</button>}>{tuningRefreshFailure.settingsApplied ? "Settings applied. " : ""}Model status could not refresh. {tuningRefreshFailure.detail}</Notice> : null}
         </div>
         <div className="actions chat-model-controls-actions"><button type="button" className="primary-button" disabled={!contextSupported || !needsReload || busy || preview.loading || !preview.data || Boolean(preview.error) || (context !== null && (!Number.isInteger(context) || context < 0))} onClick={() => void applyTuning(close)}>{busy ? "Applying…" : runtimeBusy ? "Stage for next message" : "Apply this chat's settings"}</button></div>
       </>}

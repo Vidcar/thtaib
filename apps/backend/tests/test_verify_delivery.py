@@ -1,0 +1,155 @@
+"""The verification wrapper must fail visibly when its real child checks fail."""
+
+from __future__ import annotations
+
+from contextlib import redirect_stderr, redirect_stdout
+import importlib.util
+import io
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+
+_SPEC = importlib.util.spec_from_file_location("thtaib_verify", Path(__file__).resolve().parents[3] / "scripts/verify.py")
+assert _SPEC is not None and _SPEC.loader is not None
+verify = importlib.util.module_from_spec(_SPEC)
+sys.modules[_SPEC.name] = verify
+_SPEC.loader.exec_module(verify)
+
+
+class VerificationSelectionTests(unittest.TestCase):
+    def checks(self, *argv: str) -> dict:
+        return {item.name: item for item in verify.select_checks(verify.arguments(list(argv)))}
+
+    def test_default_and_shared_acceptance_include_both_consumers(self) -> None:
+        required = {"backend-default", "backend-integration", "desktop-build", "shared-contracts"}
+        self.assertTrue(required <= self.checks().keys())
+        self.assertTrue(required <= self.checks("--scope", "shared").keys())
+        self.assertEqual(self.checks("--scope", "shared")["shared-contracts"].cwd, verify.ROOT / "apps/backend")
+
+    def test_workflow_and_trivial_docs_do_not_require_product_builds(self) -> None:
+        self.assertEqual(set(self.checks("--scope", "docs")), {"working-diff", "staged-diff"})
+        self.assertEqual(set(self.checks("--scope", "workflow")), {"working-diff", "staged-diff", "verification-regressions"})
+
+    def test_explicit_scopes_are_additive_and_fast_allows_focused_feedback(self) -> None:
+        checks = self.checks("--tier", "fast", "--scope", "backend", "--scope", "spec", "--test", "tests.test_verify_delivery")
+        self.assertEqual(set(checks), {"working-diff", "staged-diff", "backend-focused", "openspec"})
+        self.assertEqual(checks["backend-focused"].command[-1], "tests.test_verify_delivery")
+        desktop = self.checks("--tier", "fast", "--scope", "desktop", "--desktop-check", "scripts/check-model-settings.mjs")
+        self.assertEqual(set(desktop), {"working-diff", "staged-diff", "desktop-typecheck", "desktop-check-model-settings"})
+
+    def test_focus_cannot_silently_narrow_acceptance_or_escape_selected_scope(self) -> None:
+        cases = [
+            ["--test", "tests.test_verify_delivery"],
+            ["--tier", "delivery", "--desktop-check", "scripts/check-model-settings.mjs"],
+            ["--tier", "fast", "--scope", "docs", "--test", "tests.test_verify_delivery"],
+            ["--tier", "fast", "--test", "test_verify_delivery"],
+            ["--tier", "fast", "--desktop-check", "../outside.mjs"],
+            ["--real-model"],
+        ]
+        for argv in cases:
+            with self.subTest(argv=argv), redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as raised:
+                    verify.arguments(argv)
+                self.assertNotEqual(raised.exception.code, 0)
+
+    def test_delivery_smoke_requires_assets_and_is_only_explicit(self) -> None:
+        self.assertNotIn("real-model-smoke", self.checks("--tier", "delivery"))
+        smoke = self.checks("--tier", "delivery", "--real-model")["real-model-smoke"]
+        self.assertEqual(smoke.env, {"WORKBENCH_REAL_MODEL_SMOKE": "required"})
+        self.assertEqual(smoke.command[-1], "tests_integration.test_real_model_smoke")
+
+    def test_plan_has_no_execution_or_evidence(self) -> None:
+        with redirect_stdout(io.StringIO()) as output, patch.object(
+            verify, "run_checks", side_effect=AssertionError("plan mode must not execute checks or write evidence")
+        ) as execute:
+            self.assertEqual(verify.main(["--scope", "docs", "--plan"]), 0)
+        execute.assert_not_called()
+        self.assertIn("nothing executed", output.getvalue())
+
+
+class VerificationExecutionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # tests.__init__ keeps every fixture under the repository's .scratch/.
+        self.tmp = tempfile.TemporaryDirectory(prefix="verify-fixture-")
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.git("init", "-q")
+        (self.root / ".gitignore").write_text(".scratch/\n", encoding="utf-8")
+        (self.root / "input.txt").write_text("original\n", encoding="utf-8")
+        self.git("add", ".")
+        self.git("-c", "user.name=Verification fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture")
+        self.args = verify.arguments(["--scope", "docs"])
+
+    def git(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(self.root), *args], check=True, capture_output=True)
+
+    def run_check(self, body: str | None = None, *, command: tuple | None = None, cwd: Path | None = None) -> tuple[int, dict]:
+        check = verify.Check("fixture", command or (sys.executable, "-c", body), cwd or self.root, "isolated regression fixture")
+        with redirect_stdout(io.StringIO()):
+            code, path = verify.run_checks(self.root, [check], self.args)
+        return code, json.loads(path.read_text(encoding="utf-8"))
+
+    def test_real_child_success_records_exact_revision_command_and_boundaries(self) -> None:
+        code, report = self.run_check("print('fixture passed')")
+        self.assertEqual(code, 0)
+        self.assertTrue(report["inputs_current"])
+        self.assertEqual(report["before"]["head"], self.git("rev-parse", "HEAD").stdout.decode().strip())
+        self.assertEqual(report["checks"][0]["command"], [sys.executable, "-c", "print('fixture passed')"])
+        self.assertEqual(report["checks"][0]["cwd"], str(self.root))
+        self.assertIn("not certified", report["independent_review"])
+        self.assertIn("not validated", report["running_application"])
+        self.assertIn("fixture passed", Path(report["checks"][0]["log"]).read_text())
+
+    def test_false_green_text_cannot_hide_deliberate_failure(self) -> None:
+        code, report = self.run_check("print('All checks passed'); raise SystemExit(7)")
+        self.assertEqual(code, 1)
+        self.assertEqual(report["status"], "incomplete")
+        self.assertEqual(report["checks"][0]["status"], "failed")
+        self.assertEqual(report["checks"][0]["returncode"], 7)
+        self.assertFalse(report["automatic_checks_passed"])
+
+    def test_missing_command_and_working_directory_are_mandatory_failures(self) -> None:
+        for kwargs in ({"command": ("thtaib-guaranteed-missing-verifier-7f2519",)},
+                       {"body": "pass", "cwd": self.root / "missing"}):
+            with self.subTest(kwargs=kwargs):
+                code, report = self.run_check(**kwargs)
+                self.assertEqual(code, 1)
+                self.assertEqual(report["checks"][0]["status"], "unavailable")
+                self.assertFalse(report["automatic_checks_passed"])
+
+    def test_worktree_edit_during_passing_check_invalidates_result(self) -> None:
+        code, report = self.run_check("from pathlib import Path; Path('input.txt').write_text('changed')")
+        self.assertEqual(code, 1)
+        self.assertEqual(report["checks"][0]["status"], "passed")
+        self.assertTrue(report["automatic_checks_passed"])
+        self.assertFalse(report["inputs_current"])
+
+    def test_untracked_content_changes_are_detected_even_when_status_is_identical(self) -> None:
+        target = self.root / "new.txt"
+        target.write_text("first", encoding="utf-8")
+        before = verify.snapshot(self.root)
+        target.write_text("other", encoding="utf-8")
+        after = verify.snapshot(self.root)
+        self.assertEqual(before["status"], after["status"])
+        self.assertNotEqual(before["fingerprint"], after["fingerprint"])
+        self.assertNotEqual(before["files"]["new.txt"], after["files"]["new.txt"])
+
+    def test_suite_declared_skip_is_recorded_without_claiming_it_ran(self) -> None:
+        code, report = self.run_check("print('OK (skipped=1)')")
+        self.assertEqual(code, 0)
+        self.assertEqual(report["checks"][0]["suite_skip_observations"], ["OK (skipped=1)"])
+
+    def test_unversioned_directory_cannot_produce_acceptance(self) -> None:
+        # The repository-root check must also reject accidental inheritance from a parent checkout.
+        with tempfile.TemporaryDirectory(prefix="verify-no-git-") as location, redirect_stdout(io.StringIO()):
+            code, _ = verify.run_checks(Path(location), [], self.args)
+        self.assertEqual(code, 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
