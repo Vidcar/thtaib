@@ -29,6 +29,7 @@ function state(thread_id, patch = {}) {
 const states = new Map([["one", state("one", { state: "closed", session_id: null, tabs: [], active_page_id: null })], ["two", state("two", { control: "user" })]]);
 const previousFetch = globalThis.fetch;
 let aborted = 0;
+let initialRead = null;
 globalThis.fetch = async (url, init = {}) => {
   const pathname = new URL(String(url)).pathname;
   const match = pathname.match(/^\/v1\/browser\/sessions\/([^/]+)(\/.*)?$/);
@@ -59,7 +60,8 @@ globalThis.fetch = async (url, init = {}) => {
     if (action.type === "upload") next = { ...next, file_chooser: null };
   }
   states.set(thread, next);
-  return { ok: true, json: async () => next };
+  const held = !endpoint && (init.method ?? "GET") === "GET" ? initialRead : null;
+  return { ok: true, json: async () => { if (held) await held.promise; return next; } };
 };
 function text(node) { return typeof node === "string" ? node : node?.children?.map(text).join("") ?? ""; }
 function button(renderer, label) { return renderer.root.find(node => node.type === "button" && text(node).trim() === label); }
@@ -170,6 +172,23 @@ try {
   assert.equal(renderer.root.findAllByType("img").length, 0, "chat switching rejects former session frames");
   await act(async () => renderer.unmount());
   assert.ok(aborted >= 3); assert.equal(streams.size, 0); assert.equal(frames.size, 0);
+
+  for (const readFails of [false, true]) {
+    let release;
+    initialRead = { promise: new Promise((resolve, reject) => { release = () => readFails ? reject(new Error("Obsolete initial read failed")) : resolve(); }) };
+    states.set("one", state("one", { state: "closed", session_id: null, active_page_id: null, tabs: [] }));
+    await act(async () => { renderer = create(React.createElement(BrowserRail, props)); await tick(); });
+    states.set("one", state("one", { session_id: "new-session" }));
+    await emit("one", "state", states.get("one"));
+    assert.match(text(renderer.root.findByProps({ className: "browser-state" })), /Agent has control/);
+    await act(async () => { release(); await tick(); });
+    initialRead = null;
+    assert.match(text(renderer.root.findByProps({ className: "browser-state" })), /Agent has control/, "an initial read cannot replace newer stream state");
+    assert.doesNotMatch(text(renderer.toJSON()), /Obsolete initial read failed/, "an obsolete initial error cannot mark the live browser unavailable");
+    await emit("one", "frame", fixtureFrame("one")); await flushFrames();
+    assert.equal(renderer.root.findAllByType("img").length, 1, "current frames remain visible after the obsolete initial read settles");
+    await act(async () => renderer.unmount());
+  }
 
   const activities = [];
   function Activity({ thread }) { useBrowserRailActivity(thread, true, active => activities.push(active)); return null; }

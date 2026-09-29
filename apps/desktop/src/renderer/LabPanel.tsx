@@ -81,6 +81,8 @@ export function LabPanel() {
   const [labCase, setLabCase] = useState<LabCase | null>(null);
   const [restore, setRestore] = useState<LabRestore | null>(null);
   const [result, setResult] = useState<LabResult | null>(null);
+  const [runLoadError, setRunLoadError] = useState("");
+  const [runLoadAttempt, setRunLoadAttempt] = useState(0);
   const [engine, setEngine] = useState<EngineMeasurement | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -105,8 +107,21 @@ export function LabPanel() {
     });
   }, []);
 
-  const liveRunId = run && isAgentRunLive(run.status) ? run.id : null;
+  const unresolvedRunId = result?.agent_run_id && run?.id !== result.agent_run_id ? result.agent_run_id : null;
+  const liveRunId = unresolvedRunId ?? (run && isAgentRunLive(run.status) ? run.id : null);
   liveRunIdRef.current = liveRunId;
+
+  useEffect(() => {
+    setRunLoadError("");
+    if (!unresolvedRunId) return;
+    let cancelled = false;
+    void api.agentRun(unresolvedRunId).then(next => {
+      if (!cancelled) setRun(next);
+    }).catch(error => {
+      if (!cancelled) setRunLoadError(error instanceof Error ? error.message : String(error));
+    });
+    return () => { cancelled = true; };
+  }, [unresolvedRunId, runLoadAttempt]);
 
   function updateRunBinding(next: { runId: string; threadId: string } | null): void {
     runBindingRef.current = next;
@@ -164,8 +179,8 @@ export function LabPanel() {
   }
 
   async function showResult(next: LabResult): Promise<void> {
+    setRun(null);
     setResult(next);
-    if (next.agent_run_id) setRun(await api.agentRun(next.agent_run_id));
   }
 
   function toolModeLabel(mode: LabToolMode): string {
@@ -270,6 +285,7 @@ export function LabPanel() {
             setRun(current => current?.id === next.id ? next : current);
           });
         }} /> : null}
+        {unresolvedRunId ? runLoadError ? <Notice tone="error" action={<button type="button" onClick={() => setRunLoadAttempt(current => current + 1)}>Retry status</button>}>Comparison started, but its status could not load. {runLoadError}</Notice> : <p className="hint" role="status">Loading comparison status…</p> : null}
         {run?.error ? <Notice tone="error">{run.error}</Notice> : null}
       </form>
       </div>

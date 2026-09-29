@@ -28,6 +28,7 @@ from workbench_backend.agents.schemas import AgentRun, ToolMode
 from workbench_backend.assets.extraction import MAX_IMAGE_BYTES
 from workbench_backend.desktop_automation.runtime import WinAppCliRuntime, WinAppRuntimeError
 from workbench_backend.paths import WorkbenchPaths
+from workbench_backend.errors import HarnessError
 
 _MAX_IMAGE_PIXELS = 32_000_000
 _MAX_UI_OUTPUT_BYTES = 192_000
@@ -360,11 +361,13 @@ class DesktopAutomationService:
                 return []
         service = self
 
-        def result_of(action: Callable[[], Any]) -> str:
+        def result_of(action: Callable[[], Any], *, effectful: bool = False) -> str:
             try:
                 return json.dumps(action(), ensure_ascii=False, separators=(",", ":"))
             except (DesktopAutomationError, WinAppRuntimeError) as exc:
                 code = exc.code if isinstance(exc, DesktopAutomationError) else "desktop_unavailable"
+                if effectful and code == "desktop_effect_uncertain":
+                    raise HarnessError(str(exc), code=code, status_code=502) from exc
                 raise ToolException(f"{code}: {exc}") from exc
 
         @tool("desktop_list_windows")
@@ -398,19 +401,19 @@ class DesktopAutomationService:
         @tool("desktop_invoke")
         def desktop_invoke(selector: str, hwnd: int | None = None) -> str:
             """Invoke an accessibility control in an authorized window; Access may require approval."""
-            return result_of(lambda: service.invoke(thread_id, selector, hwnd=hwnd, _bound=bound))
+            return result_of(lambda: service.invoke(thread_id, selector, hwnd=hwnd, _bound=bound), effectful=True)
 
         @tool("desktop_set_value")
         def desktop_set_value(selector: str, value: str, hwnd: int | None = None) -> str:
             """Set an accessible field's value in an authorized window; Access may require approval."""
             return result_of(lambda: service.set_value(thread_id, selector, value,
-                hwnd=hwnd, _bound=bound))
+                hwnd=hwnd, _bound=bound), effectful=True)
 
         @tool("desktop_send_keys")
         def desktop_send_keys(keys: str, hwnd: int | None = None, target: str | None = None) -> str:
             """Send target-window keys without global system-key input; Access may require approval."""
             return result_of(lambda: service.send_keys(thread_id, keys, hwnd=hwnd,
-                target=target, _bound=bound))
+                target=target, _bound=bound), effectful=True)
 
         @tool("desktop_screenshot")
         def desktop_screenshot(hwnd: int | None = None, selector: str | None = None) -> str:

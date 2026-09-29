@@ -135,15 +135,17 @@ export function AttentionButton({ onOpen, active = false, collapsed = false, cla
 
   useEffect(() => {
     let cancelled = false;
+    let generation = 0;
     async function refresh(): Promise<void> {
+      const currentGeneration = ++generation;
       try {
         const items = await packet03Api.attention();
-        if (!cancelled) {
+        if (!cancelled && generation === currentGeneration) {
           setCount(items.length);
           setLoadError("");
         }
       } catch (error) {
-        if (!cancelled) setLoadError(errorMessage(error));
+        if (!cancelled && generation === currentGeneration) setLoadError(errorMessage(error));
       }
     }
     void refresh();
