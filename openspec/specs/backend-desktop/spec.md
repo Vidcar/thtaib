@@ -4,7 +4,7 @@
 
 Specify how the one FastAPI backend coordinates APIs, records, jobs, approvals, events, and artifacts while the one Electron desktop presents them without becoming execution authority.
 
-The built desktop does not yet offer the planned Lab views or a visual workflow editor. Their delivery is tracked by [lab-workbench](../../changes/lab-workbench/tasks.md) and [consolidate-product-contract](../../changes/consolidate-product-contract/tasks.md). Initial catalogue failure recovery remains open in [startup-catalogue](../../changes/startup-catalogue/tasks.md).
+The built desktop does not yet offer the planned Lab views or a visual workflow editor. Their delivery is tracked by [lab-workbench](../../changes/lab-workbench/tasks.md) and [consolidate-product-contract](../../changes/consolidate-product-contract/tasks.md). Initial catalogue failure recovery is delivered in [startup-catalogue](../../changes/archive/2026-09-29-startup-catalogue/tasks.md).
 
 ## Requirements
 
@@ -99,6 +99,19 @@ The Windows launcher SHALL reuse a healthy product backend or start it hidden, t
 The lower-left status dot is the only startup status. Its hover is one short phrase for reading the catalogue, starting the model, ready, or the service being unavailable. The visible word stays "Local" while the service is up, including while the rail is collapsed down to the dot.
 
 Opening a finished chat SHALL show its saved transcript and latest display snapshot. It MUST NOT scan that chat's token log. The chat list MUST NOT include transcripts, run bodies, or model-request logs.
+
+Each catalogue list SHALL retain its own loading and failure state. Only a successful response for the current list selection SHALL permit its empty-list state. Failed reads SHALL retry with capped backoff until first success or disposal; success for one list MUST NOT clear another list's failure. Unmounting or changing the relevant selection SHALL cancel obsolete retries, and late responses MUST NOT overwrite the replacement state.
+
+#### Scenario: Initial catalogue failure outlasts thirty reads
+
+- **WHEN** one or both initial catalogue reads fail more than thirty times
+- **THEN** each failed list remains unresolved with its own visible failure and continues retrying with capped backoff
+- **AND** a later success recovers that list without clearing another list's failure or presenting it as empty or ready.
+
+#### Scenario: A catalogue reader is replaced or unmounted
+
+- **WHEN** the relevant list selection changes or the sidebar unmounts while a read or retry is pending
+- **THEN** its obsolete retries are cancelled and its late success or failure cannot change the replacement list's content, error or readiness.
 
 #### Scenario: Desktop launch and model state
 

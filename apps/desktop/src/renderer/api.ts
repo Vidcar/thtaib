@@ -302,10 +302,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  chatConversations: (includeArchived = false) => {
+  chatConversations: (includeArchived = false, refresh = false) => {
     const key = includeArchived ? "archived" : "open";
     const existing = chatListFlights.get(key);
-    if (existing) return existing;
+    if (existing && !refresh) return existing;
     const flight = request<ChatConversation[]>(`/v1/chat/conversations?include_archived=${includeArchived ? "true" : "false"}`)
       .finally(() => { if (chatListFlights.get(key) === flight) chatListFlights.delete(key); });
     chatListFlights.set(key, flight);

@@ -8,7 +8,7 @@ context: |
   integration constraints; they are not proof of implementation. Active change
   tasks record remaining delivery. Lab replacement belongs to lab-workbench;
   workflow/registry and media delivery belongs to consolidate-product-contract;
-  initial catalogue failure recovery belongs to startup-catalogue.
+  initial catalogue failure recovery was delivered in the archived startup-catalogue change.
 
   The application has one FastAPI backend (`apps/backend`) and one Electron/React
   desktop (`apps/desktop`). Reuse upstream mechanisms: Hugging Face for model

@@ -67,8 +67,15 @@ export function WorkbenchSidebar(props: {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<ChatConversation | null>(null);
   const [listError, setListError] = useState("");
-  const [chatsLoaded, setChatsLoaded] = useState(false);
-  const [projectsLoaded, setProjectsLoaded] = useState(false);
+  // Readiness belongs to this selection, even before its effect starts.
+  const chatReadOwner = useMemo(() => ({}), [includeArchived, props.historyRevision]);
+  const projectReadOwner = useMemo(() => ({}), [props.projectRevision]);
+  const [chatRead, setChatRead] = useState({ owner: chatReadOwner, loaded: false, error: "" });
+  const [projectRead, setProjectRead] = useState({ owner: projectReadOwner, loaded: false, error: "" });
+  const chatsLoaded = chatRead.owner === chatReadOwner && chatRead.loaded;
+  const projectsLoaded = projectRead.owner === projectReadOwner && projectRead.loaded;
+  const chatError = chatRead.owner === chatReadOwner ? chatRead.error : "";
+  const projectError = projectRead.owner === projectReadOwner ? projectRead.error : "";
   const [closedFolders, setClosedFolders] = useState<Set<string>>(() => new Set());
   const [projectMenu, setProjectMenu] = useState<{ projectId: string; x: number; y: number } | null>(null);
 
@@ -87,51 +94,48 @@ export function WorkbenchSidebar(props: {
 
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
-      for (let attempt = 0; attempt < 30 && !cancelled; attempt += 1) {
-        try {
-          const next = await api.chatConversations(includeArchived);
-          if (cancelled) return;
-          setConversations(newestConversationFirst(next));
-          setChatsLoaded(true);
-          setListError("");
-          return;
-        } catch (error: unknown) {
-          if (attempt === 29 && !cancelled) {
-            setListError(errorMessage(error));
-            setChatsLoaded(true);
-            return;
-          }
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let delay = 1000;
+    setChatRead({ owner: chatReadOwner, loaded: false, error: "" });
+    async function read() {
+      try {
+        // A new history revision must not adopt an obsolete in-flight read.
+        const next = await api.chatConversations(includeArchived, true);
+        if (cancelled) return;
+        setConversations(newestConversationFirst(next));
+        setChatRead({ owner: chatReadOwner, loaded: true, error: "" });
+      } catch (error: unknown) {
+        if (cancelled) return;
+        setChatRead({ owner: chatReadOwner, loaded: false, error: errorMessage(error) });
+        retry = setTimeout(() => void read(), delay);
+        delay = Math.min(delay * 2, 8000);
       }
-    })();
-    return () => { cancelled = true; };
-  }, [includeArchived, props.historyRevision]);
+    }
+    void read();
+    return () => { cancelled = true; clearTimeout(retry); };
+  }, [chatReadOwner, includeArchived]);
 
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
-      for (let attempt = 0; attempt < 30 && !cancelled; attempt += 1) {
-        try {
-          const next = await workspaceApi.projects();
-          if (cancelled) return;
-          setProjects(next);
-          setProjectsLoaded(true);
-          setListError("");
-          return;
-        } catch (error: unknown) {
-          if (attempt === 29 && !cancelled) {
-            setListError(errorMessage(error));
-            setProjectsLoaded(true);
-            return;
-          }
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let delay = 1000;
+    setProjectRead({ owner: projectReadOwner, loaded: false, error: "" });
+    async function read() {
+      try {
+        const next = await workspaceApi.projects();
+        if (cancelled) return;
+        setProjects(next);
+        setProjectRead({ owner: projectReadOwner, loaded: true, error: "" });
+      } catch (error: unknown) {
+        if (cancelled) return;
+        setProjectRead({ owner: projectReadOwner, loaded: false, error: errorMessage(error) });
+        retry = setTimeout(() => void read(), delay);
+        delay = Math.min(delay * 2, 8000);
       }
-    })();
-    return () => { cancelled = true; };
-  }, [props.projectRevision]);
+    }
+    void read();
+    return () => { cancelled = true; clearTimeout(retry); };
+  }, [projectReadOwner]);
 
   useEffect(() => {
     props.onListsReady?.(chatsLoaded && projectsLoaded);
@@ -148,7 +152,10 @@ export function WorkbenchSidebar(props: {
         // hydrate any result that arrived after the last history refresh.
         const known = new Map(conversations.map(item => [item.id, item]));
         const matches = await Promise.all(results.map(item => known.get(item.conversation.id) ?? api.chatConversation(item.conversation.id)));
-        if (!cancelled) setSearchResults(newestConversationFirst(matches));
+        if (!cancelled) {
+          setSearchResults(newestConversationFirst(matches));
+          setListError("");
+        }
       }).catch((error: unknown) => { if (!cancelled) setListError(errorMessage(error)); });
     }, 250);
     return () => { cancelled = true; clearTimeout(timer); };
@@ -226,6 +233,7 @@ export function WorkbenchSidebar(props: {
       setConversations(replace);
       setSearchResults(current => current ? replace(current) : null);
       if (!archived) setIncludeArchived(true);
+      setListError("");
       notice({ conversation: next, leave: archived && props.activeConversationId === item.id && !includeArchived });
     } catch (error) {
       setListError(errorMessage(error));
@@ -257,6 +265,7 @@ export function WorkbenchSidebar(props: {
       const replace = (current: ChatConversation[]) => current.map(item => byId.get(item.id) ?? item);
       setConversations(replace);
       setSearchResults(current => current ? replace(current) : null);
+      setListError("");
       const active = nextItems.find(item => item.id === props.activeConversationId);
       notice(active ? { conversation: active, leave: !includeArchived } : { conversation: nextItems[0] });
     } catch (error) {
@@ -270,6 +279,7 @@ export function WorkbenchSidebar(props: {
     try {
       await workspaceApi.removeProject(project.id);
       setProjects(current => current.filter(item => item.id !== project.id));
+      setListError("");
       props.onProjectChanged?.();
     } catch (error) {
       setListError(errorMessage(error));
@@ -325,6 +335,8 @@ export function WorkbenchSidebar(props: {
         <label className="archive-filter" title="Include archived chats"><input type="checkbox" aria-label="Show archived" checked={includeArchived} onChange={event => setIncludeArchived(event.target.checked)} /><Icon name="archive" size={14} /></label>
       </div>
       <div className="sidebar-scroll">
+        {chatError ? <p className="hint">Chats: {chatError}</p> : null}
+        {projectError ? <p className="hint">Projects: {projectError}</p> : null}
         {listError ? <p className="hint">{listError}</p> : null}
         {searchMiss ? <p className="hint">No matching conversations</p> : null}
         <div className="chat-groups">

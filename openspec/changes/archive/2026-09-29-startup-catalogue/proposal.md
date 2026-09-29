@@ -8,7 +8,7 @@ The original catalogue and terminal-token improvements are implemented, but the 
 
 - Retain the delivered independent small project/chat lists, saved-transcript opening, status dot and ordered terminal-token compaction.
 - Finish initial-load recovery: retry until the first success, preserve a reading or unavailable state on failure, and never report a failed list as empty or ready.
-- Retire the original automatic model-warming work. It was superseded by [the delivered model-residency change](../archive/2026-09-25-simplify-chat-model-agent-setup/tasks.md); launch, restoration and passive reads do not load a model.
+- Retire the original automatic model-warming work. It was superseded by [the delivered model-residency change](../2026-09-25-simplify-chat-model-agent-setup/tasks.md); launch, restoration and passive reads do not load a model.
 
 ## Capabilities
 
