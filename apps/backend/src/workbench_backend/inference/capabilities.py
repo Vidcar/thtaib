@@ -71,15 +71,45 @@ def setup_identity(deployment: Deployment, per_request: SettingsBag | dict | Non
     }
 
 
+def _identity_fingerprint(identity: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
 def setup_fingerprint(deployment: Deployment, per_request: SettingsBag | dict | None = None) -> str:
-    return hashlib.sha256(json.dumps(setup_identity(deployment, per_request), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return _identity_fingerprint(setup_identity(deployment, per_request))
+
+
+# Context, cache, placement and MTP change memory, not the checked behaviour.
+_PROOF_IGNORED_STARTUP = frozenset({
+    "ctx_size", "cache_type_k", "cache_type_v", "kv_offload", "n_gpu_layers",
+    "flash_attn", "fit", "parallel", "kv_unified",
+})
+
+
+def proof_scope(identity: dict[str, Any]) -> dict[str, Any]:
+    startup = identity.get("startup") if isinstance(identity.get("startup"), dict) else {}
+    scoped = {key: value for key, value in identity.items() if key != "context"}
+    scoped["startup"] = {
+        key: value for key, value in startup.items()
+        if key not in _PROOF_IGNORED_STARTUP and not str(key).startswith("spec_")
+    }
+    return scoped
 
 
 def capability_support(deployment: Deployment, capability: str, per_request: SettingsBag | dict | None = None) -> ProbeStatus:
-    fingerprint = setup_fingerprint(deployment, per_request)
+    identity = setup_identity(deployment, per_request)
+    fingerprint = _identity_fingerprint(identity)
+    scoped = _identity_fingerprint(proof_scope(identity))
+    matched: ProbeStatus | None = None
     for raw in reversed(deployment.capability_evidence):
-        if raw.get("capability") == capability and raw.get("fingerprint") == fingerprint:
-            status = raw.get("status")
-            if status in {"passed", "failed", "untested", "inconclusive"}:
-                return status
-    return "untested"
+        if raw.get("capability") != capability:
+            continue
+        status = raw.get("status")
+        if status not in {"passed", "failed", "untested", "inconclusive"}:
+            continue
+        if raw.get("fingerprint") == fingerprint:
+            return status
+        setup = raw.get("setup")
+        if matched is None and isinstance(setup, dict) and _identity_fingerprint(proof_scope(setup)) == scoped:
+            matched = status
+    return matched or "untested"

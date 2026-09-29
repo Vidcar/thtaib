@@ -230,10 +230,11 @@ REQUEST_PATHS.update({
     "reasoning_preserve": "chat_template_kwargs.preserve_reasoning",
 })
 
+# Host and port are required for the managed server. Pinned llama.cpp defaults
+# in DEFAULT_GPU_PROFILE stay catalogue facts; a fresh launch omits those flags.
 DEFAULT_STARTUP: dict[str, Any] = {
     "host": "127.0.0.1",
     "port": 8080,
-    **DEFAULT_GPU_PROFILE,
 }
 
 # Shared validation and presentation facts. Suggested spans are comfortable UI

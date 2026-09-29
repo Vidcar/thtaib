@@ -11511,6 +11511,13 @@
       },
       "ModelMemoryEstimate": {
         "properties": {
+          "advertised_modalities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Advertised Modalities",
+            "type": "array"
+          },
           "architecture": {
             "anyOf": [
               {
@@ -11539,6 +11546,11 @@
               }
             ],
             "title": "Attention Cache Bytes"
+          },
+          "builtin_mtp": {
+            "default": false,
+            "title": "Builtin Mtp",
+            "type": "boolean"
           },
           "calculation_ms": {
             "anyOf": [
@@ -11705,6 +11717,13 @@
               }
             ],
             "title": "Model Disk Bytes"
+          },
+          "mtp_draft_files": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Mtp Draft Files",
+            "type": "array"
           },
           "observed_runtime": {
             "anyOf": [

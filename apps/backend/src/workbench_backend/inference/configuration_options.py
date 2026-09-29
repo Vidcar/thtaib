@@ -97,8 +97,8 @@ def bundle_configuration_options(
                     per_request_defaults[key] = descriptor.model_copy(update={
                         "applied": value, "default_value": value, "default_source": source,
                     })
-    startup_defaults = {**_startup_catalogue(), **_startup_defaults(recommended_threads=recommended_threads,
-        context_length=metadata.context_length), **_speculative_descriptors(metadata)}
+    startup_defaults = {**_startup_catalogue(), **_startup_defaults(recommended_threads=recommended_threads),
+        **_speculative_descriptors(metadata)}
     history = reasoning_history_descriptor(metadata, deployment)
     if selected_source and history.source == "gguf_template":
         history.source = selected_source
@@ -529,9 +529,9 @@ def _context_descriptor(maximum: int | None, observed: int | None) -> RuntimeCon
             "server is healthy."
         ),
         source="gguf_metadata" if maximum is not None else "runtime_observation",
-        applied=initial_context_size(maximum),
-        default_value=initial_context_size(maximum),
-        default_source="workbench_default",
+        applied=None,
+        default_value=None,
+        default_source="engine_default",
         observed=observed,
         minimum=min(1024, maximum) if type(maximum) is int and maximum > 0 else 1024,
         maximum=maximum,
@@ -574,11 +574,7 @@ def _gpu_layers_descriptor(block_count: int | None) -> RuntimeControlDescriptor:
     )
 
 
-def initial_context_size(maximum: int | None) -> int:
-    return min(32768, maximum) if type(maximum) is int and maximum > 0 else 32768
-
-
-def _startup_defaults(*, recommended_threads: int | None, context_length: int | None) -> dict[str, RuntimeControlDescriptor]:
+def _startup_defaults(*, recommended_threads: int | None) -> dict[str, RuntimeControlDescriptor]:
     threads = _threads_descriptor(recommended_threads)
     return {
         "n_gpu_layers": RuntimeControlDescriptor(
@@ -606,9 +602,9 @@ def _startup_defaults(*, recommended_threads: int | None, context_length: int | 
             key="ctx_size",
             flag="--ctx-size",
             label="Context",
-            description="Initial context is 32,768 tokens or the model maximum if smaller; explicit Auto leaves it to native fitting.",
-            source="workbench_default",
-            applied=initial_context_size(context_length),
+            description="Omitted on a fresh launch so llama.cpp keeps its own context. Automatic fit and an explicit size are separate choices.",
+            source="engine_default",
+            applied=None,
         ),
         "threads": threads,
         "cache_type_k": RuntimeControlDescriptor(

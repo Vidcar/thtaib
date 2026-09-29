@@ -11,7 +11,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 import json
 import math
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sys
@@ -26,7 +26,6 @@ from huggingface_hub import get_token, hf_hub_url
 from workbench_backend.errors import ManagerError
 from workbench_backend.inference.bundles import mmproj_companion
 from workbench_backend.inference.configurations import loading_startup_settings, loaded_model_identity
-from workbench_backend.inference.configuration_options import initial_context_size
 from workbench_backend.inference.hardware import HardwareObserver
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.inspect import (GgufFields, IncompleteMetadata, MAX_METADATA_BYTES,
@@ -287,8 +286,6 @@ class MemoryEstimator:
                 result.context_maximum = maximum if isinstance(maximum, int) and 0 < maximum < 2**32 else None
             except (OSError, ValueError, ManagerError) as exc:
                 result.unknown_reasons.append(str(exc) if not isinstance(exc, ManagerError) else exc.message)
-            bags = resolve_bags(startup=request.startup,
-                                startup_defaults={"ctx_size": initial_context_size(result.context_maximum)})
             if projector:
                 try:
                     projector_fields, result.projector_bytes = self._local_directory(Path(projector.path), refresh=request.refresh)
@@ -371,15 +368,19 @@ class MemoryEstimator:
                 result.unknown_reasons.append("Vision runtime/compute allocation is unknown before loading.")
             else:
                 result.projector_bytes = 0
+            verified, draft_by_name = self._verified_mtp_files(listing, request.refresh)
+            result.mtp_draft_files = verified
+            selected_draft = str(bags.startup.applied.get("spec_draft_model") or "")
+            if selected_draft in draft_by_name:
+                draft_fields = draft_by_name[selected_draft]
             result.weights_bytes = self._weight_bytes(fields, bags.startup.applied) if fields.tensors else result.weights_bytes
             if request.method == "native":
                 result.unknown_reasons.append("Native checking is available after the selected model is installed.")
         else:
             raise ManagerError("Choose an installed model or exact repository files.", code="estimate_selection", status_code=400)
+        result.builtin_mtp = self._builtin_mtp(fields)
+        result.advertised_modalities = self._advertised_modalities(fields)
         if result.source != "native_prediction":
-            maximum = fields.get(f"{fields.get('general.architecture')}.context_length")
-            maximum = maximum if type(maximum) is int and maximum > 0 else None
-            bags = resolve_bags(startup=request.startup, startup_defaults={"ctx_size": initial_context_size(maximum)})
             self._metadata_prediction(fields, bags.startup.applied, result,
                                       projector_fields=projector_fields, draft_fields=draft_fields)
         result.unknown_reasons.extend(hardware.reasons)
@@ -459,21 +460,80 @@ class MemoryEstimator:
         return set(raw if isinstance(raw, list) else str(raw).split(","))
 
     @staticmethod
-    def _selected_tensors(fields, applied):
-        tensors = getattr(fields, "tensors", ())
-        arch = fields.get("general.architecture")
-        layers = _positive(fields.get(f"{arch}.block_count"))
-        nextn = _positive(fields.get(f"{arch}.nextn_predict_layers", 0), zero=True)
-        if (arch in HYBRID_ARCHITECTURES and layers and nextn is not None
-                and "draft-mtp" not in MemoryEstimator._spec_modes(applied)):
-            trunk = layers - nextn
-            return tuple(tensor for tensor in tensors if
-                         (match := re.match(r"^blk\.(\d+)\.", tensor.name)) is None or int(match[1]) < trunk)
-        return tensors
+    def _builtin_mtp(fields) -> bool:
+        return any(getattr(tensor, "name", "").endswith(".nextn.eh_proj.weight") for tensor in getattr(fields, "tensors", ()))
 
     @staticmethod
-    def _weight_bytes(fields, applied):
-        tensors = MemoryEstimator._selected_tensors(fields, applied)
+    def _has_nextn_tensor(fields) -> bool:
+        return any(".nextn." in getattr(tensor, "name", "") for tensor in getattr(fields, "tensors", ()))
+
+    @staticmethod
+    def _is_mtp_candidate(name: str) -> bool:
+        path = PurePosixPath(name)
+        return bool(path.name) and (bool(path.parts) and path.parts[0].casefold() == "mtp" or path.name.casefold().startswith("mtp-"))
+
+    @staticmethod
+    def _advertised_modalities(fields) -> list[str]:
+        names = [str(key).casefold() for key in fields]
+        found: list[str] = []
+        if any(key.startswith("clip.") or ".vision" in key or key.startswith("vision.") for key in names):
+            found.append("image")
+        if any(".video" in key or key.startswith("video.") for key in names):
+            found.append("video")
+        architecture = str(fields.get("general.architecture") or "").casefold()
+        if architecture == "whisper" or any(key.startswith("audio.") or ".audio" in key for key in names):
+            found.append("audio")
+        return found
+
+    def _verified_mtp_files(self, listing, refresh: bool) -> tuple[list[str], dict[str, Any]]:
+        """Range-read MTP-named auxiliaries and keep those whose header has a NextN tensor."""
+        verified: list[str] = []
+        fields_by_name: dict[str, Any] = {}
+        for item in getattr(listing, "auxiliary_ggufs", ()) or ():
+            names = list(getattr(item, "files", ()) or ())
+            if not names or not getattr(item, "complete", True) or not any(self._is_mtp_candidate(name) for name in names):
+                continue
+            try:
+                draft_fields, _ = self._remote_directories(listing.repo_id, listing.resolved_revision, names, refresh)
+            except (ValueError, OSError, httpx.HTTPError):
+                continue
+            if not self._has_nextn_tensor(draft_fields):
+                continue
+            for name in names:
+                verified.append(name)
+                fields_by_name[name] = draft_fields
+        return verified, fields_by_name
+
+    @staticmethod
+    def _nextn_trunk(fields) -> int | None:
+        architecture = fields.get("general.architecture")
+        layers = _positive(fields.get(f"{architecture}.block_count"))
+        nextn = _positive(fields.get(f"{architecture}.nextn_predict_layers", 0), zero=True)
+        if not layers or nextn is None or nextn > layers:
+            return None
+        return layers - nextn
+
+    @staticmethod
+    def _embedded_nextn(name: str, trunk: int | None) -> bool:
+        if ".nextn." in name:
+            return True
+        match = re.match(r"^blk\.(\d+)\.", name)
+        return trunk is not None and match is not None and int(match[1]) >= trunk
+
+    @staticmethod
+    def _selected_tensors(fields, applied, *, keep_embedded_mtp: bool | None = None):
+        tensors = getattr(fields, "tensors", ())
+        if keep_embedded_mtp is None:
+            keep_embedded_mtp = ("draft-mtp" in MemoryEstimator._spec_modes(applied)
+                                 and not applied.get("spec_draft_model"))
+        if keep_embedded_mtp:
+            return tensors
+        trunk = MemoryEstimator._nextn_trunk(fields)
+        return tuple(tensor for tensor in tensors if not MemoryEstimator._embedded_nextn(tensor.name, trunk))
+
+    @staticmethod
+    def _weight_bytes(fields, applied, *, keep_embedded_mtp: bool | None = None):
+        tensors = MemoryEstimator._selected_tensors(fields, applied, keep_embedded_mtp=keep_embedded_mtp)
         return sum(tensor.n_bytes for tensor in tensors) if tensors and all(tensor.n_bytes is not None for tensor in tensors) else None
 
     @staticmethod
@@ -535,7 +595,7 @@ class MemoryEstimator:
                 result.speculation_bytes = None
                 result.unknown_reasons.append("The selected speculative allocation is unavailable; target components remain known.")
             else:
-                draft_weights = self._weight_bytes(draft_fields, applied)
+                draft_weights = self._weight_bytes(draft_fields, applied, keep_embedded_mtp=True)
                 if modes & {"draft-eagle3", "draft-dflash", "draft-dspark"}:
                     speculative.attention_known = speculative.recurrent_known = False
                     speculative.unknown.append("Specialist draft cache geometry is unavailable; its weight bytes remain known.")
@@ -610,7 +670,7 @@ class MemoryEstimator:
             draft_count = applied.get("spec_draft_ngl", "auto")
             if draft_count in {None, -1, "auto", "all"}:
                 draft_count = draft_layers + 1 if draft_layers else None
-            for tensor in self._selected_tensors(draft_fields, applied):
+            for tensor in self._selected_tensors(draft_fields, applied, keep_embedded_mtp=True):
                 add_tensor(tensor, count=draft_count, layers=draft_layers)
             for layer, size in speculative.attention.items():
                 target = device_for_layer(layer, count=draft_count, layers=draft_layers, cache=True)
@@ -676,8 +736,7 @@ class MemoryEstimator:
     def _native_prediction(self, bundle, request, result):
         manifest = self.manager.runtime.current()
         executable = require_planner(manifest)
-        bags = resolve_bags(startup=request.startup,
-                            startup_defaults={"ctx_size": initial_context_size(result.context_maximum)})
+        bags = resolve_bags(startup=request.startup)
         selected = loading_startup_settings(bags)
         # Operational endpoints and aliases cannot affect allocation. They are
         # neither needed nor passed to the subprocess's real server parser.

@@ -285,9 +285,9 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(changed.requested_startup["threads"], 4)
         self.assertEqual(changed.profile_id, profile.id)
         self.assertEqual(changed.settings.per_request.applied["temperature"], 0.2)
-        self.assertEqual(changed.applied_startup["ctx_size"], 32768)
+        self.assertNotIn("ctx_size", changed.applied_startup)
         argv = self.supervisor.launched[-1]
-        self.assertEqual(argv[argv.index("--ctx-size") + 1], "32768")
+        self.assertNotIn("--ctx-size", argv)
 
         automatic = self.manager.reconfigure_deployment(changed.id,
             ReconfigureDeploymentRequest(startup={"ctx_size": "auto"}))
@@ -300,9 +300,9 @@ class DeploymentTests(unittest.TestCase):
             ReconfigureDeploymentRequest(startup={"ctx_size": None}))
         self.assertEqual(reset.status, DeploymentStatus.running)
         self.assertNotIn("ctx_size", reset.requested_startup)
-        self.assertEqual(reset.applied_startup["ctx_size"], 32768)
+        self.assertNotIn("ctx_size", reset.applied_startup)
         argv = self.supervisor.launched[-1]
-        self.assertEqual(argv[argv.index("--ctx-size") + 1], "32768")
+        self.assertNotIn("--ctx-size", argv)
         self.assertEqual(reset.profile_id, profile.id)
         self.assertEqual(reset.settings.per_request.applied["temperature"], 0.2)
 

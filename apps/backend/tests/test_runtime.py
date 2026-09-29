@@ -220,17 +220,13 @@ class RuntimePinTests(unittest.TestCase):
         deployment = manager.create_managed(
             ManagedDeploymentRequest(bundle_id=job.bundle_id or "", auto_start=False)
         )
-        self.assertEqual(deployment.applied_startup["ctx_size"], 32768)
-        self.assertEqual(deployment.applied_startup["n_gpu_layers"], "auto")
-        self.assertEqual(deployment.applied_startup["flash_attn"], "auto")
-        self.assertEqual(deployment.applied_startup["parallel"], -1)
-        self.assertTrue(deployment.applied_startup["kv_unified"])
+        for key in ("ctx_size", "n_gpu_layers", "flash_attn", "parallel", "kv_unified"):
+            self.assertNotIn(key, deployment.applied_startup)
+        self.assertEqual(deployment.applied_startup["host"], "127.0.0.1")
         args = startup_cli_args(deployment.applied_startup)
-        self.assertEqual(args[args.index("--ctx-size") + 1], "32768")
-        self.assertEqual(args[args.index("--parallel") + 1], "-1")
-        flash_at = args.index("--flash-attn")
-        self.assertEqual(args[flash_at + 1], "auto")
-        self.assertNotEqual(deployment.requested_startup, {"startup": {}})
+        for flag in ("--ctx-size", "--n-gpu-layers", "--parallel", "--flash-attn"):
+            self.assertNotIn(flag, args)
+        self.assertNotIn("ctx_size", deployment.requested_startup)
 
     def test_pin_while_running_is_rejected_without_half_pin(self) -> None:
         manager = self._manager(nvidia_present=lambda: True)

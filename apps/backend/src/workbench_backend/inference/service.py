@@ -1004,8 +1004,20 @@ class ModelManager:
                     and deployment.process_identity == identity
                     and self.deployments.processes.classify(identity) == "match"
                     and same_frozen_launch(deployment)):
-                    # The requester binds its own saved response setup. Sharing
-                    # a child never rewrites that child's historical snapshot.
+                    # Same argv keeps the process. Context Auto is still stored
+                    # on the request. Response-only keys leave this snapshot.
+                    loading_request, _ = split_response_startup(requested, {})
+                    stored_request, _ = split_response_startup(deployment.requested_startup, {})
+                    if loading_request != stored_request:
+                        overrides = dict(request.startup) if request.replace_startup else {**deployment.startup_overrides, **request.startup}
+                        return self.store.put_deployment(deployment.model_copy(update={
+                            "requested_startup": requested,
+                            "startup_overrides": overrides,
+                            "settings": deployment.settings.model_copy(update={
+                                "startup": deployment.settings.startup.model_copy(update={"requested": dict(requested)}),
+                            }),
+                            "updated_at": utc_now(),
+                        }))
                     return deployment
             # Preflight changed fixed ports while the old process remains usable.
             if requested.get("port") is not None and (requested.get("port") != deployment.applied_startup.get("port") or requested.get("host", "127.0.0.1") != deployment.applied_startup.get("host", "127.0.0.1")):

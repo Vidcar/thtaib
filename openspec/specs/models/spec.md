@@ -142,14 +142,17 @@ Guided Hugging Face imports SHALL read repository metadata before weight transfe
 - THEN import or deployment MUST require an explicit selection or text-only choice
 - AND legacy ambiguous projector records MUST fail at deployment start rather than guessing.
 
-The guided import SHALL present Find, Choose and Review/download stages. Find SHALL support repository search and exact supported Hugging Face links; Choose SHALL preserve complete primary/projector selections and offer the advisory hardware estimate; Review SHALL show exact selection and initial configuration before explicit Download. Back SHALL preserve selections and draft settings. Advanced metadata SHALL remain expandable. Selected context, supported KV precision and placement SHALL become the initial saved configuration rather than display-only suggestions; publisher recipe selection and native metadata provenance SHALL remain explicit and intact.
-
-A 32,768-token context (or a smaller verified model maximum), f16 key/value cache, automatic GPU layers and native GPU KV SHALL be the fresh import defaults. The shared slider SHALL increment by 1,024 tokens and display the resolved value directly. Import-created recipe configurations SHALL inherit the selected job's startup in their own stable identities; retry/recovery SHALL NOT overwrite prior or deliberately edited configurations. Ordinary repeated model-card recipe creation SHALL preserve existing editable recipe identities.
+The guided import SHALL present Find, Choose and Review/download stages. Find SHALL support repository search and exact supported Hugging Face links. Choose SHALL preserve complete primary and projector selections and SHALL keep the publisher response recipe as a generation template only. Review SHALL show the exact selection, the advisory hardware estimate, and the loading settings before explicit Download. Back SHALL preserve selections and draft settings. Advanced metadata SHALL remain expandable. A loading setting becomes part of the initial saved configuration only after the person sets it on Review. Untouched context, GPU layers, key and value cache precision, cache location, flash attention and MTP SHALL stay omitted so llama.cpp keeps its own defaults. The shared slider SHALL increment by 1,024 tokens and display the resolved value directly. Import-created recipe configurations SHALL inherit the selected job's startup in their own stable identities; retry/recovery SHALL NOT overwrite prior or deliberately edited configurations. Ordinary repeated model-card recipe creation SHALL preserve existing editable recipe identities.
 
 #### Scenario: Review and revise import options
 
-- **WHEN** a person selects a complete quantization, context and KV options, opens Review then goes Back
-- **THEN** the exact selections remain, and explicit Download retains the chosen initial settings alongside the immutable revision, file membership and projector/text-only choice.
+- **WHEN** a person selects a complete quantization and an explicit projector or text-only choice, opens Review, sets loading options, then goes Back
+- **THEN** the exact selections remain, and explicit Download retains only the loading settings the person set, alongside the immutable revision, file membership and projector/text-only choice.
+
+#### Scenario: Untouched loading settings stay omitted
+
+- **WHEN** a person downloads a complete selection without changing context, GPU layers, cache precision, cache location, flash attention or MTP
+- **THEN** the saved launch setup omits those flags and still records the model path, the address the app needs, a selected vision file, and a verified chat template when the repository has one.
 
 #### Scenario: Exact linked primary file
 
@@ -306,12 +309,19 @@ Bounded redacted evidence SHALL link transmitted requests and wire outcomes to c
 
 ### Requirement: MOD-019 - Keep capability probes specific to the tested setup
 
-Reusable probes SHALL exercise shared-adapter streaming, a harmless real tool round trip, structured output and suitable reasoning/image support. Records SHALL retain test inputs/outcomes, runtime/deployment/bundle, template/projector and effective settings. A relevant setup change invalidates transferred proof. Publisher guidance, recommendations, user opt-outs, tested adjustments, failed, untested and inconclusive outcomes remain distinct. A failed probe MUST NOT establish universal model incompatibility or prevent explicitly unverified ordinary use.
+Reusable probes SHALL exercise shared-adapter streaming, a harmless real tool round trip, structured output and suitable reasoning/image support. Records SHALL retain test inputs/outcomes, runtime/deployment/bundle, template/projector and effective settings. Proof follows the weight files, projector, template and runtime. Changing context, key or value cache precision, cache location, GPU layers, flash attention or MTP on the same weights and projector SHALL NOT discard that proof. Changing the weight files, projector, template or runtime SHALL. Publisher guidance, recommendations, user opt-outs, tested adjustments, failed, untested and inconclusive outcomes remain distinct. A failed probe MUST NOT establish universal model incompatibility or prevent explicitly unverified ordinary use.
+
+The model screen SHALL show one icon each for text, tools, thinking, structured output, image, video and audio. Detail and retest stay in the icon hover. A failed or inconclusive check stays distinct from a pass. Video and audio icons follow a reported modality and are not generation-probed. The first healthy load SHALL run the existing probes for each advertised kind those probes cover, and SHALL NOT repeat them for the same weights and projector.
 
 #### Scenario: Changed setup
 
-- **WHEN** a previously tested template, projector, runtime or relevant configuration changes
+- **WHEN** a previously tested template, projector, runtime or weight selection changes
 - **THEN** old evidence remains attributable to its original setup and the new setup is not automatically labelled verified.
+
+#### Scenario: Loading adjustments keep weight and projector proof
+
+- **WHEN** context, cache precision, cache location, GPU layers, flash attention or MTP change on the same weights and projector
+- **THEN** existing proof for those weights remains applicable.
 
 ### Requirement: MOD-021 - Report known defaults and their source
 
@@ -609,7 +619,7 @@ For supported timing streams, inference SHALL retain actual cached and newly pro
 
 ### Requirement: MOD-036 - Estimate model hardware use without restricting user choice
 
-Choose, import review, Models and Chat context candidates SHALL consume the shared non-disruptive hardware preview. Ordinary installed-model preview SHALL use fast cached metadata/tensor calculations. A deliberate native check SHALL use a bounded subprocess compiled against the exact pinned llama.cpp native APIs. Both methods SHALL account for the selected server parallel slots, unified context, embeddings and speculation; measure target, selected projector and draft/MTP together; and count shared MTP weights once. The helper protocol, digest and native compatibility SHALL be recorded in the runtime manifest. It SHALL NOT start or stop a deployment or replace the running inference process.
+Import review, Models and Chat context candidates SHALL consume the shared non-disruptive hardware preview. Choose selects quantization, projector or text-only, and the publisher generation recipe. Ordinary installed-model preview SHALL use fast cached metadata/tensor calculations. A deliberate native check SHALL use a bounded subprocess compiled against the exact pinned llama.cpp native APIs. Both methods SHALL account for the selected server parallel slots, unified context, embeddings and speculation; measure target, selected projector and draft/MTP together; and count shared MTP weights once. A built-in draft head is a tensor whose name ends in `nextn.eh_proj.weight`, for every architecture. A separate draft file counts only after that file's own header contains a NextN tensor. MTP memory is included only when draft-mtp is selected. MTP off excludes embedded next-token tensors from the estimate; those tensors remain in the downloaded file. A built-in head counts shared weights once and adds the head cache. A separate draft adds that file and does not recount the target's embedded tensors. The helper protocol, digest and native compatibility SHALL be recorded in the runtime manifest. It SHALL NOT start or stop a deployment or replace the running inference process. The estimate SHALL NOT block Download.
 
 Results SHALL expose per-device estimates, evaluated placement, shared context, per-request capacity, slots, plan identity, calculation time and complete/partial/unavailable status. Native context allocations SHALL be labelled Cache and model state; projector totals SHALL NOT invent an internal breakdown. Requested Auto values remain distinct from evaluated results. Dynamic driver, host cache and operating-system costs SHALL remain unknown or separately budgeted. Missing facts MUST NOT become zero or a green fits claim. Observed memory SHALL be labelled Observed, timestamped and associated only with the exact loaded identity; cached estimates retain their original time. Shared router process usage MUST NOT be presented as model process RAM.
 
@@ -658,8 +668,13 @@ Remote discovery SHALL retain bounded revision/file metadata estimates with exac
 - **THEN** known file sizes and settings remain usable, unavailable estimate components are explicit, and the app does not fabricate precise fit.
 
 #### Scenario: Context and KV placement update together
-- **WHEN** the person adjusts the context slider or chooses supported CPU KV placement
+- **WHEN** the person adjusts the context slider or chooses supported CPU KV placement on Review
 - **THEN** the estimate updates its cache and GPU/RAM breakdown and those same explicit choices carry into the initial saved configuration.
+
+#### Scenario: Draft head is offered only from tensor evidence
+- **WHEN** a repository GGUF header contains a `nextn.eh_proj` tensor, or a separate MTP-named file's header contains a NextN tensor
+- **THEN** Review offers MTP and includes its memory only after the person turns that head on
+- **AND** a filename alone, including an imatrix file, does not offer MTP.
 
 #### Scenario: Runtime contradicts the estimate
 - **WHEN** the native engine reports a different actual allocation or fails to load the chosen setup
@@ -687,7 +702,7 @@ Models readouts SHALL resolve the selected model, configuration and unsaved draf
 
 ### Requirement: MOD-038 - Keep import choices and estimates truthful
 
-Model import SHALL retain Find, Choose and Review/download stages; Back and failed requests SHALL preserve choices. Selected context and independent K/V settings SHALL become the initial configuration while exact shards, projectors, capabilities and import defaults remain authoritative. Slider fill SHALL reflect the actual displayed value; an automatic setting SHALL not imply a fixed value. Hardware presentation SHALL expose real GPU/RAM availability and qualified weights/cache/overhead estimates, with unknown components and device boundaries explicit. Estimates SHALL never block valid choices or silently reduce settings. A manual Refresh SHALL bypass estimate caching only for that request.
+Model import SHALL retain Find, Choose and Review/download stages; Back and failed requests SHALL preserve choices. Context and independent K/V settings SHALL become the initial configuration only after the person sets them on Review. Untouched loading settings SHALL stay omitted so llama.cpp keeps its own defaults. Exact shards, projectors, capabilities and import defaults remain authoritative. Slider fill SHALL reflect the actual displayed value; an automatic setting SHALL not imply a fixed value. Hardware presentation SHALL expose real GPU/RAM availability and qualified weights/cache/overhead estimates, with unknown components and device boundaries explicit. Estimates SHALL never block valid choices or silently reduce settings. A manual Refresh SHALL bypass estimate caching only for that request.
 
 #### Scenario: Review then go Back
 - **WHEN** a person chooses files, context and cache precision, advances to Review, then goes Back

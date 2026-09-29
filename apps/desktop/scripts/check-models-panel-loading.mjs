@@ -39,6 +39,7 @@ try {
   await checkCardViewerAndLateRefreshRetainNewSelection(ModelsPanel);
   await checkRepositorySelectionLoadsFiles(ModelsPanel);
   await checkRepositoryChoicesAndLateResults((await vite.ssrLoadModule("/src/renderer/HuggingFaceImport.tsx")).HuggingFaceImport);
+  await checkReviewOffersBuiltinMtp((await vite.ssrLoadModule("/src/renderer/HuggingFaceImport.tsx")).HuggingFaceImport);
   await checkPermanentDeletionPreview((await vite.ssrLoadModule("/src/renderer/ModelDeletion.tsx")).ModelDeletion);
   await checkSavedCapabilities((await vite.ssrLoadModule("/src/renderer/ModelCapabilities.tsx")).ModelCapabilities);
   await checkExplicitVisionSelection((await vite.ssrLoadModule("/src/renderer/ModelProjectorControls.tsx")).ModelProjectorControls);
@@ -457,7 +458,7 @@ async function checkRepositoryChoicesAndLateResults(HuggingFaceImport) {
     await act(async () => review.props.onClick());
     let download = renderer.root.findAllByType("button").find(node => textOf(node) === "Download model");
     await act(async () => { download.props.onClick(); download.props.onClick(); await tick(); });
-    assert.deepEqual(downloads, [{ repo_id: "org/second", revision: "pinned-revision", allow_patterns: ["weights[[]4].gguf", "mmproj.gguf", "README.md"], recipe_ids: [], default_recipe_id: null, initial_startup: { n_gpu_layers: "auto", flash_attn: "auto", ctx_size: 32768 } }], "download pins the inspected revision, exact files and initial settings, escaping glob syntax and deduplicating clicks");
+    assert.deepEqual(downloads, [{ repo_id: "org/second", revision: "pinned-revision", allow_patterns: ["weights[[]4].gguf", "mmproj.gguf", "README.md"], recipe_ids: [], default_recipe_id: null, initial_startup: {} }], "an untouched review downloads the selected files without inventing context or GPU flags");
     assert.equal(completions, 1);
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
@@ -755,26 +756,28 @@ async function checkFileLinkAndRecipes(HuggingFaceImport) {
     assert.ok(textOf(renderer.root).includes("Not copied: Launch flags are guidance only"), "Add models labels omitted card guidance");
     await act(async () => { for (const recipe of recipes) recipe.props.onChange({ target: { checked: true } }); });
     await act(async () => renderer.root.findByProps({ id: "import-initial-recipe" }).props.onChange({ target: { value: "general" } }));
-    await act(async () => {
-      changeContext(renderer, 16384, "Import context");
-      renderer.root.findByProps({ "aria-label":"Import cache location" }).props.onChange({ target:{value:"cpu"} });
-    });
     assert.equal(downloads.length, 0, "Choose never transfers weights");
     await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Back").props.onClick());
     await act(async () => { renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }); await tick(); });
     assert.equal(calls.length, 1, "returning to an unchanged exact source must not re-inspect or reset choices");
     assert.equal(renderer.root.findAllByType("input").find(node => node.props.name === "model-variant" && node.props.value === files[1]).props.checked, true);
-    assert.equal(contextInput(renderer, "Import context").props["data-token-value"], 16384);
-    assert.equal(renderer.root.findByProps({ "aria-label":"Import cache location" }).props.value, "cpu");
     assert.equal(renderer.root.findByProps({ id: "import-initial-recipe" }).props.value, "general");
     await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Review download").props.onClick());
     assert.ok(textOf(renderer.root.findByProps({ className: "selected-download-files" })).includes("LOW-MTP"), "review shows the selected kind and exact file before download");
+    assert.equal(renderer.root.findByProps({ "aria-label": "Import GPU layers" }).props.value, "", "untouched GPU placement does not look chosen");
+    assert.equal(renderer.root.findByProps({ "aria-label": "Import key cache precision" }).props.value, "", "untouched K cache does not display a precision");
+    assert.equal(renderer.root.findByProps({ "aria-label": "Import cache location" }).props.value, "", "untouched cache location does not display GPU");
+    await act(async () => {
+      changeContext(renderer, 16384, "Import context");
+      renderer.root.findByProps({ "aria-label":"Import cache location" }).props.onChange({ target:{value:"cpu"} });
+    });
     await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Back").props.onClick());
+    assert.equal(renderer.root.findByProps({ id: "import-initial-recipe" }).props.value, "general", "Back preserves the generation recipe");
+    await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Review download").props.onClick());
     assert.equal(contextInput(renderer, "Import context").props["data-token-value"], 16384, "Back preserves context");
     assert.equal(renderer.root.findByProps({ "aria-label":"Import cache location" }).props.value, "cpu", "Back preserves KV placement");
-    await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Review download").props.onClick());
     await act(async () => { renderer.root.findAllByType("button").find(node => textOf(node) === "Download model").props.onClick(); await tick(); });
-    assert.deepEqual(downloads, [{ repo_id, revision: "a".repeat(40), allow_patterns: [files[1], "README.md"], recipe_ids: ["general", "coding", "instruct", "recommended"], default_recipe_id: null, initial_startup:{n_gpu_layers:"auto", flash_attn:"auto", kv_offload:false, ctx_size:16384}, initial_recipe_id: "general", initial_per_request: { temperature: 1, min_p: 0, reasoning: "on" } }], "download retains exact LOW-MTP file, explicit recipe/default and initial settings choices");
+    assert.deepEqual(downloads, [{ repo_id, revision: "a".repeat(40), allow_patterns: [files[1], "README.md"], recipe_ids: ["general", "coding", "instruct", "recommended"], default_recipe_id: null, initial_startup:{kv_offload:false, ctx_size:16384}, initial_recipe_id: "general", initial_per_request: { temperature: 1, min_p: 0, reasoning: "on" } }], "download retains the exact file, recipe and only the loading settings the person set");
     inspected = { ...inspected, file_hint: "missing-IQ4_XS.gguf", variants: [inspected.variants[0]] };
     await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Back").props.onClick());
     await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Back").props.onClick());
@@ -822,35 +825,92 @@ async function checkPermanentDeletionPreview(ModelDeletion) {
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
 
+function capabilityMark(renderer, label) {
+  const button = renderer.root.findAllByType("button").find(node => node.props["aria-label"] === label);
+  assert.ok(button, `expected a ${label} capability icon`);
+  const mark = button.findAll(node => node.props?.["data-state"])[0];
+  assert.ok(mark, `expected a ${label} status mark`);
+  return mark;
+}
+
 async function checkSavedCapabilities(ModelCapabilities) {
-  let renderer, requests = 0, fail = false;
+  let renderer, requests = 0, posts = 0, fail = false;
   const evidence = { id: "saved", capability: "tools", status: "passed", fingerprint: "setup-one", tested_at: "2026-09-22T10:00:00Z", observations: {}, note: "A real tool call completed." };
   let report = { current_fingerprint: "setup-one", current_support: { tools: "passed" }, evidence: [evidence], image_setup: { selected_projector: null, projector_present: null, runtime_support: false } };
   globalThis.fetch = async (_url, init = {}) => {
     requests++;
     if (fail) throw new Error("Service unavailable");
-    if (init.method === "POST") { report = { ...report, current_support: { tools: "passed" }, evidence: [...report.evidence, { ...evidence, fingerprint: report.current_fingerprint }] }; return jsonResponse(report.evidence.at(-1)); }
+    if (init.method === "POST") {
+      posts++;
+      report = { ...report, current_support: { ...report.current_support, tools: "passed" }, evidence: [...report.evidence, { ...evidence, fingerprint: report.current_fingerprint }] };
+      return jsonResponse(report.evidence.at(-1));
+    }
     return jsonResponse(report);
   };
-  const deployment = { id: "deployment", status: "running", health: { healthy: true }, scope: "managed", server_props: { modalities: { vision: false } } };
+  const deployment = { id: "deployment", status: "running", health: { healthy: true }, scope: "managed", server_props: { modalities: { vision: false }, chat_template_caps: {} } };
   const action = async (_key, operation) => operation();
-  const row = label => renderer.root.findAllByType("li").find(node => node.findAllByType("strong").some(strong => textOf(strong) === label));
   try {
     await act(async () => { renderer = create(React.createElement(ModelCapabilities, { deployment, busy: "", action })); await tick(); });
-    assert.ok(textOf(row("Tools")).includes("Verified"), "saved probe evidence hydrates without rerunning it");
+    assert.equal(capabilityMark(renderer, "Tools").props["data-state"], "passed", "saved probe evidence hydrates without rerunning it");
     assert.equal(requests, 1);
-    assert.ok(textOf(row("Vision")).includes("No vision file is loaded"));
-    assert.equal(row("Vision").findAllByType("button").find(node => node.props["aria-label"] === "Test vision").props.disabled, true);
-    assert.equal(row("Screenshot reading").findAllByType("button").find(node => node.props["aria-label"] === "Test screenshot reading").props.disabled, true);
+    assert.equal(posts, 0, "a partial status report does not start checks for missing keys");
+    assert.equal(capabilityMark(renderer, "Image").props["data-state"], "absent", "a text model without a vision file shows no image check");
     report = { ...report, current_fingerprint: "setup-two", current_support: { tools: "untested" } };
-    await act(async () => { renderer.update(React.createElement(ModelCapabilities, { deployment: { ...deployment }, busy: "", action })); await tick(); });
-    assert.ok(textOf(row("Tools")).includes("Needs retest"), "changed setup preserves old evidence but never calls it verified");
-    await act(async () => { row("Tools").findByProps({ "aria-label": "Retest tools" }).props.onClick(); await tick(); });
-    assert.ok(textOf(row("Tools")).includes("Verified"), "retest refreshes durable evidence from the service");
+    await act(async () => {
+      renderer.update(React.createElement(ModelCapabilities, { deployment: { ...deployment }, busy: "", action }));
+      for (let attempt = 0; attempt < 6; attempt++) await tick();
+    });
+    assert.equal(posts, 1, "a healthy model runs an untested check once");
+    assert.equal(capabilityMark(renderer, "Tools").props["data-state"], "passed", "the completed check replaces the unchecked icon");
     fail = true;
     await act(async () => { renderer.update(React.createElement(ModelCapabilities, { deployment: { ...deployment }, busy: "", action })); await tick(); });
-    assert.ok(textOf(renderer.root).includes("Saved results unavailable"), "fetch failures are visible instead of silently showing untested");
-    assert.ok(!textOf(row("Tools")).includes("Verified"));
+    assert.ok(textOf(renderer.root).includes("Saved results unavailable"), "fetch failures are visible instead of silently showing a pass");
+    assert.notEqual(capabilityMark(renderer, "Tools").props["data-state"], "passed");
+  } finally { if (renderer) await act(async () => renderer.unmount()); }
+}
+
+async function checkReviewOffersBuiltinMtp(HuggingFaceImport) {
+  const downloads = [], estimates = [];
+  const estimate = {
+    hardware: { gpu_devices: [{ id: "gpu", name: "GPU", total_bytes: 1000, available_bytes: 800 }], observed_at: "2026-09-29T00:00:00Z", source: "test", stale: false, ram_total_bytes: 2000, ram_available_bytes: 1500 },
+    source: "metadata", completeness: "partial", estimated_at: "2026-09-29T00:00:00Z", devices: [], assumptions: [], unknown_reasons: [],
+    builtin_mtp: true, mtp_draft_files: ["MTP/head.gguf"], advertised_modalities: ["image"], context_maximum: 8192,
+    weights_bytes: 100, kv_bytes: 10, gpu_bytes: 80, ram_bytes: 40, speculation_bytes: 0,
+  };
+  globalThis.fetch = async (url, init = {}) => {
+    const address = String(url);
+    if (address.endsWith("/huggingface/inspect")) return jsonResponse({ repo_id: "org/mtp", resolved_revision: "b".repeat(40), variants: [{ name: "Q4", complete: true, files: ["model.gguf"], size_bytes: 100 }], projectors: [], guidance_files: [], warnings: [], auxiliary_ggufs: [{ name: "MTP/head.gguf", files: ["MTP/head.gguf"], complete: true, size_bytes: 20 }] });
+    if (address.endsWith("/models/estimate")) { estimates.push(JSON.parse(init.body)); return jsonResponse(estimate); }
+    if (address.endsWith("/imports/huggingface")) { downloads.push(JSON.parse(init.body)); return jsonResponse({ id: "import", status: "running", bundle_id: null }); }
+    throw new Error(`unexpected fetch ${address}`);
+  };
+  let renderer;
+  try {
+    await act(async () => { renderer = create(React.createElement(HuggingFaceImport, { onStarted: async () => {} })); });
+    await act(async () => renderer.root.findByProps({ id: "model-search-query" }).props.onChange({ target: { value: "org/mtp" } }));
+    await act(async () => { renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }); await tick(); });
+    await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Review download").props.onClick());
+    assert.equal(capabilityMark(renderer, "Text").props["data-state"], "untested");
+    assert.equal(capabilityMark(renderer, "Image").props["data-state"], "absent", "image stays unavailable until the header or a vision file says otherwise");
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 350)); });
+    assert.equal(capabilityMark(renderer, "Image").props["data-state"], "untested", "a header that identifies image input offers that check");
+    const mtp = renderer.root.findByProps({ "aria-label": "Import MTP" });
+    assert.equal(mtp.props.value, "");
+    assert.ok(mtp.findAllByType("option").some(node => node.props.value === "builtin"));
+    assert.ok(mtp.findAllByType("option").some(node => node.props.value === "MTP/head.gguf"));
+    await act(async () => { renderer.root.findAllByType("button").find(node => textOf(node) === "Download model").props.onClick(); await tick(); });
+    assert.deepEqual(downloads[0].initial_startup, {}, "leaving MTP off sends no speculation flag");
+    await act(async () => {
+      renderer.root.findByProps({ "aria-label": "Import MTP" }).props.onChange({ target: { value: "MTP/head.gguf" } });
+      changeContext(renderer, 8192, "Import context");
+    });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 350)); });
+    assert.equal(estimates.at(-1).startup.spec_type, "draft-mtp");
+    assert.equal(estimates.at(-1).startup.spec_draft_model, "MTP/head.gguf");
+    assert.equal("n_gpu_layers" in estimates.at(-1).startup, false);
+    await act(async () => { renderer.root.findAllByType("button").find(node => textOf(node) === "Download model").props.onClick(); await tick(); });
+    assert.deepEqual(downloads[1].initial_startup, { ctx_size: 8192, spec_type: "draft-mtp", spec_draft_model: "MTP/head.gguf" });
+    assert.deepEqual(downloads[1].allow_patterns, ["model.gguf", "MTP/head.gguf"]);
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
 

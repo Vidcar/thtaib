@@ -30,10 +30,15 @@ class SavedSetupChatTests(unittest.TestCase):
             cleared = manager.create_managed(ManagedDeploymentRequest(bundle_id=bundle.bundle_id, profile_id=profile.id, startup={'ctx_size': None}, auto_start=False))
             self.assertNotIn('ctx_size', cleared.requested_startup)
             self.assertEqual(cleared.startup_overrides, {'ctx_size': None})
-            self.assertEqual(cleared.applied_startup['ctx_size'], 32768)
+            self.assertNotIn('ctx_size', cleared.applied_startup)
+            from workbench_backend.inference.settings import resolve_bags
+            recorded = resolve_bags(startup={'ctx_size': 'auto'})
+            self.assertEqual(recorded.startup.requested['ctx_size'], 'auto')
+            self.assertNotIn('ctx_size', recorded.startup.applied)
+            # Explicit auto omits the flag, so it is the same launch as leaving context unset.
             automatic = manager.create_managed(ManagedDeploymentRequest(bundle_id=bundle.bundle_id,
                 profile_id=profile.id, startup={'ctx_size': 'auto'}, auto_start=False))
-            self.assertEqual(automatic.requested_startup['ctx_size'], 'auto')
+            self.assertEqual(automatic.id, cleared.id)
             self.assertNotIn('ctx_size', automatic.applied_startup)
             for deployment in (saved, cleared, automatic):
                 self.assertFalse(manager.deployment_profile_changes(deployment.id).has_pending_startup_changes)
@@ -42,7 +47,7 @@ class SavedSetupChatTests(unittest.TestCase):
             self.assertFalse(manager.deployment_profile_changes(cleared.id).has_pending_startup_changes)
             self.assertFalse(manager.deployment_profile_changes(automatic.id).has_pending_startup_changes)
             self.assertEqual(manager.get_deployment(saved.id).requested_startup['ctx_size'], 4096)
-            self.assertEqual(manager.get_deployment(cleared.id).applied_startup['ctx_size'], 32768)
+            self.assertNotIn('ctx_size', manager.get_deployment(cleared.id).applied_startup)
             self.assertNotIn('ctx_size', manager.get_deployment(automatic.id).applied_startup)
 
     def test_saved_setup_inherits_all_bags_and_explicit_none_opts_out(self):

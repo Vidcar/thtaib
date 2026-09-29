@@ -108,7 +108,7 @@ def model_default_values(store: RecordStore, bundle: ModelBundle, *, startup: di
                          ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Read the shared native/template/card baseline without creating overrides."""
     from workbench_backend.inference.configuration_options import (
-        bundle_configuration_options, initial_context_size, response_default_values,
+        bundle_configuration_options, response_default_values,
     )
     from workbench_backend.inference.inspect import read_gguf_runtime_metadata
     from workbench_backend.inference.inspection_cache import cached_inspection
@@ -142,7 +142,7 @@ def model_default_values(store: RecordStore, bundle: ModelBundle, *, startup: di
         metadata = metadata.model_copy(update={"chat_template": inline if "{{" in inline or "{%" in inline else None})
     options = bundle_configuration_options(bundle.id, metadata, huggingface_configuration=config,
         selected_template_source=selected_source)
-    return {"ctx_size": initial_context_size(metadata.context_length)}, response_default_values(options)
+    return {}, response_default_values(options)
 
 
 def ensure_model_configurations(store: RecordStore) -> None:
