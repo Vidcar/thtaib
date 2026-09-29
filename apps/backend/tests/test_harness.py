@@ -21,7 +21,8 @@ import httpx
 from langgraph.checkpoint.base import empty_checkpoint
 from langchain_core.messages import AIMessage, ToolMessage
 
-from workbench_backend.agents.harness import HarnessService, _graph_checkpoint_snapshot
+from workbench_backend.agents.harness import HarnessService
+from workbench_backend.agents.harness_compile import graph_checkpoint_snapshot as _graph_checkpoint_snapshot
 from workbench_backend.agents.schemas import (
     AgentEvent,
     AgentRun,
