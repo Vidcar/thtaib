@@ -13,4 +13,4 @@
 
 ## 3. Delivery
 
-- [ ] 3.1 Prepare concise handover and completed tooling artifacts for PR delivery; verify the final implementation matches accepted inputs and state the bounded stabilisation scope. Complete Git delivery through the established workflow after these implementation tasks.
+- [x] 3.1 Prepare concise handover and completed tooling artifacts for PR delivery; verify the final implementation matches accepted inputs and state the bounded stabilisation scope. Complete Git delivery through the established workflow after these implementation tasks.
