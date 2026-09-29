@@ -279,7 +279,7 @@ Opening a conversation SHALL restore that conversation's explicit Ask or Full ac
 
 The composer SHALL contain, in order, `+`, access, Plan only while enabled as a removable pill, the model selector with an adjacent tuning icon, the agent selector, compact context/speed and one combined Send/Stop control. A microphone SHALL NOT be shown before speech is delivered. Agent selection SHALL follow AGT-024, including its explicitly assigned-model exception. Grouped and individual tool choices SHALL be managed only in Agents setup, not in the agent dropdown or `+`. The shield selects Ask or Full access for later messages in that chat, does not enable tools and owns live window-grant controls. Changes prepare future submissions without rewriting running or already queued work. Unsupported, overridden or unverified reasoning controls SHALL be labelled truthfully; hiding returned thinking MUST NOT be represented as disabling model reasoning.
 
-The bounded searchable model picker SHALL show one row per model, expanding named configurations only when more than one exists. Expansion SHALL NOT load a model. Ready, loading/waiting, attention and idle dots SHALL reflect the exact configuration's observed state, with equivalent accessible hover/focus labels. Saved configurations alone SHALL NOT imply residency. The tuning icon SHALL open a compact Thinking and Conversation capacity editor. Effective Thinking changes apply to the next accepted message immediately; context choices show memory impact and require one deliberate Reload when idle or Stage for the next submission during active work. Applied chat-local overrides SHALL be remembered separately per model within that chat; first use starts with saved model defaults and returning restores those overrides. Permanent defaults, response-length controls and thinking-token-limit controls SHALL remain in Models. Applying startup changes SHALL reload only when safe and preserve the draft, attachments, history and reading position; active-work changes SHALL use the staging rule in API-028.
+The bounded searchable model picker SHALL show one row per model, expanding named configurations only when more than one exists. Expansion SHALL NOT load a model. Ready, loading/waiting, attention and idle dots SHALL reflect the exact configuration's observed state, with equivalent accessible hover/focus labels. Saved configurations alone SHALL NOT imply residency. The tuning icon SHALL open a compact Thinking and Conversation capacity editor. Effective Thinking changes apply to the next accepted message immediately. Context choices show memory impact. When the chat is idle, applying them uses one control labelled Apply this chat's settings that posts that chat's startup overrides to managed start. During active work the same control is labelled Stage for the next message and does not start a model. Chat, Lab, and Agent run SHALL use that one apply operation. The word Reload belongs only to a control that posts `POST /v1/deployments/{id}/reload`. Applied chat-local overrides SHALL be remembered separately per model within that chat; first use starts with saved model defaults and returning restores those overrides. Permanent defaults, response-length controls and thinking-token-limit controls SHALL remain in Models. Applying this chat's startup overrides SHALL use that control only when idle and safe, and SHALL preserve the draft, attachments, history and reading position; active-work changes SHALL use the staging rule in API-028. Chat send SHALL keep the label Send and SHALL load an unloaded installed model through the existing manager and admission path rather than a second desktop start.
 
 Compact status elements SHALL expose current context fill and generation speed in tok/s, with capacity, counting/measurement basis and relevant interval available on expansion. Observed measurements, labelled estimates and unavailable values SHALL remain distinguishable. Stream chunks MUST NOT be counted as tokens; absent usage MUST NOT appear as zero. Context changes/compaction and current versus completed-turn measurements SHALL remain attributable rather than silently showing stale values as current.
 
@@ -305,7 +305,12 @@ The context/speed hover panel SHALL retain total context, capacity, percentage a
 
 #### Scenario: Setup stays off the transcript
 - **WHEN** a person opens tuning beside the selected model
-- **THEN** one bounded editor shows effective Thinking choices and context with deliberate Reload or Stage, and no response-length or thinking-token-limit control.
+- **THEN** one bounded editor shows effective Thinking choices and context with Apply this chat's settings when idle, or Stage for the next message during active work, and no response-length or thinking-token-limit control.
+
+#### Scenario: Idle chat settings use managed start
+- **WHEN** the chat is idle and the person chooses Apply this chat's settings
+- **THEN** the desktop posts that chat's startup overrides to `POST /v1/deployments/managed`
+- **AND** the control does not post `POST /v1/deployments/{id}/reload`.
 
 #### Scenario: Inherited access follows its named source
 - **WHEN** the application preference changes after a chat explicitly selected Ask
@@ -1160,7 +1165,7 @@ Chat SHALL present each installed model with a readable model name and visible q
 
 Models SHALL own saved model setups, response recipes/budgets/sampling, memory and hardware controls. Its primary Save action SHALL record settings without starting/reloading a model or navigating to Chat. Model load/unload SHALL be separate lifecycle actions. Naming/copy actions SHALL be secondary. Agents SHALL own agent settings and save without a cross-page launch action. Settings SHALL own shared engine connections/residency. Lab and Workflows SHALL reuse saved setups and display executed settings with their task-specific controls.
 
-Chat SHALL expose model/setup selection and chat-local Thinking and context-size adjustments. Thinking SHALL apply to the next accepted input without changing the saved setup, explicit saved samplers or already accepted work. Context changes SHALL show an impact preview and require a deliberate reload when idle; active work SHALL stage the next submission through safe admission. Detailed budget/sampling/hardware editing SHALL stay in Models. No Chat promotion action SHALL change model defaults.
+Chat SHALL expose model/setup selection and chat-local Thinking and context-size adjustments. Thinking SHALL apply to the next accepted input without changing the saved setup, explicit saved samplers or already accepted work. Context changes SHALL show an impact preview. When idle, the control labelled Apply this chat's settings posts that chat's startup overrides to managed start. Active work SHALL label that control Stage for the next message and stage the next submission through safe admission. Chat, Lab, and Agent run SHALL use that one operation. Neither label SHALL post `POST /v1/deployments/{id}/reload`. Detailed budget/sampling/hardware editing SHALL stay in Models. No Chat promotion action SHALL change model defaults.
 
 #### Scenario: Save stays in Models
 - **WHEN** a model setup is edited and saved
@@ -1173,6 +1178,11 @@ Chat SHALL expose model/setup selection and chat-local Thinking and context-size
 #### Scenario: Busy context choice
 - **WHEN** a context change is made during active work
 - **THEN** the candidate is staged for the next submission and no active model call is interrupted.
+
+#### Scenario: Idle context uses the chat's settings
+- **WHEN** the chat is idle and the person chooses Apply this chat's settings
+- **THEN** that action posts the chat's startup overrides to managed start
+- **AND** Chat, Lab, and Agent run share that operation.
 
 #### Scenario: Compact accessible controls
 - **WHEN** controls are used in either theme, a narrow container or scaled Windows layout

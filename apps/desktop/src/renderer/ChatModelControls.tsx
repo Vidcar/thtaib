@@ -197,7 +197,7 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
       if (owner.current.generation !== currentGeneration) return;
       const exactDeployment = deployments.find(item => item.id === resolved.configuration.deployment_id);
       loadAttempted = Boolean(profile?.bundle_id) && !latest.current.runtimeBusy && !(exactDeployment?.status === "running" && exactDeployment.health?.healthy);
-      const loaded = loadAttempted ? await api.startManaged(profile!.bundle_id!, profile!.id, candidate.startup_overrides ?? {}) : null;
+      const loaded = loadAttempted ? await api.applyChatStartupOverrides(profile!.bundle_id!, profile!.id, candidate.startup_overrides ?? {}) : null;
       if (loaded && (!loaded.health?.healthy || loaded.status !== "running")) throw new Error(loaded.error ?? "Model did not become ready.");
       if (owner.current.generation !== currentGeneration) return;
       await latest.current.onApply({ ...candidate, deployment_id: loaded?.id ?? connected?.id ?? (latest.current.runtimeBusy ? null : exactDeployment?.id ?? null) });
@@ -235,7 +235,7 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
       const key = selectedBundleId ?? selectedDeployment?.id;
       if (key) Object.assign(next, { model_overrides: { ...remembered(current), [key]: { model_configuration_id: selectedProfile?.id ?? null, startup_overrides: startup, per_request_overrides: next.per_request_overrides } } });
       if (!latest.current.runtimeBusy && selectedProfile?.bundle_id) {
-        const loaded = await api.startManaged(selectedProfile.bundle_id, selectedProfile.id, startup);
+        const loaded = await api.applyChatStartupOverrides(selectedProfile.bundle_id, selectedProfile.id, startup);
         if (!loaded.health?.healthy || loaded.status !== "running") throw new Error(loaded.error ?? "Model did not become ready.");
         next.deployment_id = loaded.id;
         if (owner.current.generation !== currentGeneration) return;
@@ -327,7 +327,7 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
           <ResponseSettingsEditor part="thinking-only" layout="models" value={thinking} facts={facts} presentationFacts={thinkingFacts} options={options} loading={preview.loading} disabled={busy} onChange={next => void applyThinking(next)} />
         </div>
         <section className="chat-capacity-settings" aria-label="Context">
-          <SettingRow layout="models" label="Context" help={<>Total shared context in tokens. Reload changes loading settings; current and queued work keep their accepted settings.<code>{options?.context_size.flag ?? "--ctx-size"}</code></>} provenance={context === null ? contextDefault.source : "This chat"} onReset={context !== null && !busy ? () => stageContext(null) : undefined} resetLabel="Reset" resetTitle={contextDefault.title}>
+          <SettingRow layout="models" label="Context" help={<>Total shared context in tokens. Apply this chat's settings changes loading settings; current and queued work keep their accepted settings.<code>{options?.context_size.flag ?? "--ctx-size"}</code></>} provenance={context === null ? contextDefault.source : "This chat"} onReset={context !== null && !busy ? () => stageContext(null) : undefined} resetLabel="Reset" resetTitle={contextDefault.title}>
             <ContextSlider label="Chat context" value={displayedContext} maximum={contextMaximum ?? null} disabled={busy || !contextSupported} onChange={stageContext} />
           </SettingRow>
           <dl className="chat-capacity-state"><div><dt>Selected</dt><dd>{capacityLabel(incomingContext ?? selectedContext)}</dd></div><div><dt title="Maximum tokens for one request on the loaded model. Simultaneous requests share its context pool.">Loaded per request</dt><dd>{loadedContext == null ? "Not reported" : capacityLabel(loadedContext)}</dd></div>{tuningChanged || runtimeBusy && incomingContext !== null && incomingContext !== loadedContext ? <div data-pending="true"><dt>Pending</dt><dd>{capacityLabel(context ?? selectedContext)}</dd></div> : null}</dl>
@@ -336,7 +336,7 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
         </section>
         {error || preview.error ? <Notice tone="error">{error || preview.error}</Notice> : null}
         </div>
-        <div className="actions chat-model-controls-actions"><button type="button" className="primary-button" disabled={!contextSupported || !needsReload || busy || preview.loading || !preview.data || Boolean(preview.error) || (context !== null && (!Number.isInteger(context) || context < 0))} onClick={() => void applyTuning(close)}>{busy ? "Applying…" : runtimeBusy ? "Stage for next message" : "Reload"}</button></div>
+        <div className="actions chat-model-controls-actions"><button type="button" className="primary-button" disabled={!contextSupported || !needsReload || busy || preview.loading || !preview.data || Boolean(preview.error) || (context !== null && (!Number.isInteger(context) || context < 0))} onClick={() => void applyTuning(close)}>{busy ? "Applying…" : runtimeBusy ? "Stage for next message" : "Apply this chat's settings"}</button></div>
       </>}
     </MenuPopover>
   </>;

@@ -1681,7 +1681,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       const profile = profiles.find(item => item.id === resolved.configuration.model_configuration_id);
       const resolvedDeployment = deployments.find(item => item.id === resolved.configuration.deployment_id);
       if (!runBusy && profile?.bundle_id && (resolvedDeployment?.status !== "running" || !resolvedDeployment.health?.healthy)) {
-        const loaded = await api.startManaged(profile.bundle_id, profile.id, resolved.configuration.startup_overrides ?? {});
+        const loaded = await api.applyChatStartupOverrides(profile.bundle_id, profile.id, resolved.configuration.startup_overrides ?? {});
         if (!ownsChoice()) return;
         if (loaded.status !== "running" || !loaded.health?.healthy) throw new Error(loaded.error ?? "Model did not become ready.");
         candidate.deployment_id = loaded.id; await refresh();
