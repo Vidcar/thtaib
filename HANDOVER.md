@@ -1,6 +1,6 @@
 # Current handover
 
-Updated 2026-09-29. **Add models Review keeps a fresh import on llama.cpp's own defaults until a loading control is set.** This follows the archived Models native-defaults delivery (`d6c99f2`, PR 192) and is the current Models behavior on `D:\CodeProjects\thtaib`.
+Updated 2026-09-29. **Add models Review keeps a fresh import on llama.cpp's own defaults until a loading control is set**, delivered in [PR 194](https://github.com/Vidcar/thtaib/pull/194), implementation `05f2c4e`. This follows the archived Models native-defaults delivery (`d6c99f2`, PR 192) on `D:\CodeProjects\thtaib`.
 
 Find still accepts a Hugging Face link. Choose is quantization, an explicit projector or text-only choice, and the publisher generation recipe. Review is where context, GPU layers, K cache, V cache, cache location, flash attention, and MTP are set, beside the memory estimate. Untouched values stay omitted from the saved setup and the llama.cpp command. Host and port are still sent. An already-saved profile that stored those keys is left as saved. The estimate stays advisory and does not block Download.
 
