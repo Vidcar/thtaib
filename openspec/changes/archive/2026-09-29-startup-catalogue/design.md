@@ -2,7 +2,7 @@
 
 ## Context
 
-Project and chat catalogue reads are already small and independent. Finished chats use saved transcripts and snapshots, while live turns retain their raw events until terminal display publication. Startup token maintenance waits for a catalogue request. The remaining gap is in `WorkbenchSidebar`: after thirty failed reads it marks a list loaded, so empty-list copy and ready status can appear without a successful request.
+Project and chat catalogue reads are already small and independent. Finished chats use saved transcripts and snapshots, while live turns retain their raw events until terminal display publication. Startup token maintenance waits for a catalogue request. At the start of this change, `WorkbenchSidebar` marked a list loaded after thirty failed reads, so empty-list copy and ready status could appear without a successful request.
 
 ## Goals / Non-Goals
 
@@ -11,6 +11,7 @@ Finish truthful initial-list recovery while retaining the delivered fast catalog
 ## Decisions
 
 - Each list owns its first-success state. Failure keeps it unresolved, retries with bounded backoff, and remains visible through the existing status/error treatment. A success for the other list must not erase the unresolved list's failure.
+- The existing sidebar owns each selection's read generation; retries back off from one second to an eight-second cap. Chat refreshes bypass the existing shared in-flight request so a replacement history revision cannot adopt an obsolete response. Other callers retain request sharing. Successful user actions clear their action error without clearing catalogue failures.
 - A successful empty response is the only initial condition that permits empty-list copy. Unmount or a new list selection disposes the old retry owner; late results cannot mark the replacement ready.
 - Saved turn compaction retains ordered final messages, tools, lifecycle, namespace and partial outcomes. It starts only after terminal projection is durable and preserves active subscribers and prepared reconnect seeds. Archive and remove-project remain non-destructive.
 - The previous warming proposal was explicitly removed by the delivered model-residency change. Explicit selection, an authorized submitted turn or recovery of previously accepted queued work may load a model under their existing admission rules; passive launch cannot.

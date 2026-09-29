@@ -1407,22 +1407,38 @@ async function testLateMemorySelectionBelongsToConversation(vite) {
     harness.state.conversations.conv_a.memory_version_refs = ["memory-old", "memory-other"];
     const renderer = await renderChat(vite, harness);
     const dock = () => renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatDock")[0];
+    const interaction = () => renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatInteractionStream")[0];
     const additions = () => pickerFor(renderer).props.configuration.memory_entry_ids;
     let selection;
     try {
       await waitFor(() => button(renderer, "Conversation A"), "memory chats listed");
       await act(async () => button(renderer, "Conversation A").props.onClick());
-      await waitFor(() => assert.deepEqual(additions(), []), "original memory selection restored");
+      await waitFor(() => {
+        assert.equal(dock()?.props.conversationId, "conv_a");
+        assert.equal(interaction()?.props.threadId, "thread_a");
+        assert.equal(textarea(renderer).props.disabled, false);
+        assert.deepEqual(additions(), []);
+      }, "original memory selection restored and bound");
+      const initialGeneration = interaction().props.selectionGeneration;
       await act(async () => { selection = dock().props.onUseMemoryVersion("memory-new"); });
       await waitFor(() => assert.equal(versionRequested, true), "selected-version lookup held after the first owner check");
       if (destination !== "same") {
         await act(async () => button(renderer, "Conversation B").props.onClick());
-        await waitFor(() => assert.equal(dock()?.props.conversationId, "conv_b"), "other chat selected during memory lookup");
-        await waitFor(() => assert.deepEqual(additions(), []), "other chat keeps its memory selection");
+        await waitFor(() => {
+          assert.equal(dock()?.props.conversationId, "conv_b");
+          assert.equal(interaction()?.props.threadId, "thread_b");
+          assert.equal(textarea(renderer).props.disabled, false);
+          assert.deepEqual(additions(), []);
+        }, "other chat bound with its own memory selection");
         if (destination === "revisited") {
           await act(async () => button(renderer, "Conversation A").props.onClick());
-          await waitFor(() => assert.equal(dock()?.props.conversationId, "conv_a"), "original chat selected in a new generation");
-          await waitFor(() => assert.deepEqual(additions(), []), "revisited selection restored");
+          await waitFor(() => {
+            assert.equal(dock()?.props.conversationId, "conv_a");
+            assert.equal(interaction()?.props.threadId, "thread_a");
+            assert.ok(interaction().props.selectionGeneration > initialGeneration);
+            assert.equal(textarea(renderer).props.disabled, false);
+            assert.deepEqual(additions(), []);
+          }, "revisited selection restored and bound in a new generation");
         }
       }
       await act(async () => { heldVersion.resolve(); await selection; });

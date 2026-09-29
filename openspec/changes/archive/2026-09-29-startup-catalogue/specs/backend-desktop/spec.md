@@ -8,6 +8,19 @@ The lower-left status dot is the only startup status. Its hover is one short phr
 
 Opening a finished chat SHALL show its saved transcript and latest display snapshot. It MUST NOT scan that chat's token log. The chat list MUST NOT include transcripts, run bodies, or model-request logs.
 
+Each catalogue list SHALL retain its own loading and failure state. Only a successful response for the current list selection SHALL permit its empty-list state. Failed reads SHALL retry with capped backoff until first success or disposal; success for one list MUST NOT clear another list's failure. Unmounting or changing the relevant selection SHALL cancel obsolete retries, and late responses MUST NOT overwrite the replacement state.
+
+#### Scenario: Initial catalogue failure outlasts thirty reads
+
+- **WHEN** one or both initial catalogue reads fail more than thirty times
+- **THEN** each failed list remains unresolved with its own visible failure and continues retrying with capped backoff
+- **AND** a later success recovers that list without clearing another list's failure or presenting it as empty or ready.
+
+#### Scenario: A catalogue reader is replaced or unmounted
+
+- **WHEN** the relevant list selection changes or the sidebar unmounts while a read or retry is pending
+- **THEN** its obsolete retries are cancelled and its late success or failure cannot change the replacement list's content, error or readiness.
+
 #### Scenario: Desktop launch and model state
 
 - WHEN the launcher opens the application and a stopped deployment has an old probe
