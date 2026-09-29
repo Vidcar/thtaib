@@ -144,6 +144,29 @@ def checkpoint_history(path: Path, config: dict, *, limit: int | None = None) ->
     return run_checkpoint_task(path, read())
 
 
+class CheckpointReadError(Exception):
+    """The newest thread checkpoint could not be read, or it has no identity."""
+
+
+def checkpoint_head_id(path: Path, thread_id: str) -> str | None:
+    """Return the newest checkpoint id for a thread, or None when it has no history."""
+    try:
+        latest = next(iter(checkpoint_history(
+            path,
+            {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}},
+            limit=1,
+        )), None)
+    except Exception as exc:  # noqa: BLE001 - cannot safely attribute older thread history
+        raise CheckpointReadError(f"The conversation checkpoint could not be read: {exc}") from exc
+    if latest is None:
+        return None
+    configurable = latest.config.get("configurable") if isinstance(latest.config, dict) else None
+    checkpoint_id = configurable.get("checkpoint_id") if isinstance(configurable, dict) else None
+    if not isinstance(checkpoint_id, str) or not checkpoint_id:
+        raise CheckpointReadError("The conversation checkpoint has no identity.")
+    return checkpoint_id
+
+
 def close_sqlite_checkpointer(path: Path) -> None:
     """Close the cached saver for ``path``, if this process opened it."""
     resolved = path.expanduser().resolve()

@@ -67,7 +67,11 @@ from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.schemas import SettingsBags
 from workbench_backend.inference.user_content import user_message_content
 from workbench_backend.lab.store import LabStore
-from workbench_backend.state.checkpointer import conversation_state
+from workbench_backend.state.checkpointer import (
+    CheckpointReadError,
+    checkpoint_head_id,
+    conversation_state,
+)
 
 def start_admitted(
     service,
@@ -678,7 +682,10 @@ def _persist_admitted_run(service, admitted):
     # conversation thread so LangGraph resumes the same checkpointer state.
     run.thread_id = request.thread_id or run.id
     if request.thread_id:
-        run.pre_run_checkpoint_id = service._checkpoint_head(run.thread_id)
+        try:
+            run.pre_run_checkpoint_id = checkpoint_head_id(service.manager.paths.checkpoints_db, run.thread_id)
+        except CheckpointReadError as exc:
+            raise HarnessError(str(exc), code="checkpoint_linkage_failed", status_code=409) from exc
     with service._lock:
         cancel = service._start_cancel_guards.get((request.thread_id, input_message_id)) or threading.Event()
         if cancel.is_set():

@@ -1751,29 +1751,6 @@ class HarnessService:
                 run.structured_output = mark_structured_failure(run.structured_output, str(exc))
         self._collect_related_files(run)
 
-    def _checkpoint_head(self, thread_id: str) -> str | None:
-        try:
-            latest = next(iter(checkpoint_history(
-                self.manager.paths.checkpoints_db,
-                {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}},
-                limit=1,
-            )), None)
-        except Exception as exc:  # noqa: BLE001 - cannot safely attribute older thread history
-            raise HarnessError(
-                f"The conversation checkpoint could not be read: {exc}",
-                code="checkpoint_linkage_failed", status_code=409,
-            ) from exc
-        if latest is None:
-            return None
-        configurable = latest.config.get("configurable") if isinstance(latest.config, dict) else None
-        checkpoint_id = configurable.get("checkpoint_id") if isinstance(configurable, dict) else None
-        if not isinstance(checkpoint_id, str) or not checkpoint_id:
-            raise HarnessError(
-                "The conversation checkpoint has no identity.",
-                code="checkpoint_linkage_failed", status_code=409,
-            )
-        return checkpoint_id
-
     async def _alink_new_checkpoints(self, run: AgentRun, agent: object) -> None:
         anchor = run.checkpoint_ids[0] if run.checkpoint_ids else run.pre_run_checkpoint_id
         try:
