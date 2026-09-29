@@ -72,7 +72,7 @@ from workbench_backend.agents.host_shell import (
 from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
 from workbench_backend.agents.tool_disclosure import (
     FIND_TOOLS, ToolDisclosureMiddleware, DeferredToolCollection, CapabilitySetupBoundary,
-    LeanFilesystemMiddleware, LeanTodoListMiddleware, COMPACT_DESCRIPTIONS, deferred_tools, has_input_policy, discovery_context,
+    LeanFilesystemMiddleware, LeanTodoListMiddleware, COMPACT_DESCRIPTIONS, has_input_policy, discovery_context,
     always_skill_dependencies,
 )
 from workbench_backend.assets.capture_backend import CaptureBackend
@@ -126,7 +126,6 @@ from workbench_backend.inference.adapter import (
     RecordingTransport,
     chat_model_for_deployment,
 )
-from workbench_backend.inference.capabilities import capability_support
 from workbench_backend.inference.user_content import user_message_content
 from workbench_backend.inference.connection_errors import (
     clarify_connection_error,
@@ -363,41 +362,6 @@ class HarnessService:
     ) -> None:
         with self._lock:
             self._start_cancel_guards.pop((thread_id, input_message_id), None)
-
-    def _desktop_scope_snapshot(
-        self, request: AgentStartRequest, presented: list[str], *, essential_tools=(),
-    ) -> tuple[str, dict[str, int | float] | None]:
-        """Freeze the narrower live conversation grant at turn admission."""
-
-        from workbench_backend.desktop_automation.service import DESKTOP_TOOL_NAMES, DesktopAutomationError
-        from workbench_backend.desktop_automation.runtime import WinAppRuntimeError
-
-        if not set(presented).intersection(DESKTOP_TOOL_NAMES):
-            return "off", None
-        essential = set(essential_tools) | (set(request.input_policy.pinned_tools) if request.input_policy is not None else set())
-        desktop_essential = bool(essential.intersection(DESKTOP_TOOL_NAMES))
-        if (self.desktop_automation is None or request.source_surface != "chat"
-            or not request.thread_id or request.work_mode != "work"
-            or request.tool_mode is not ToolMode.live_tool):
-            if deferred_tools(request) and not desktop_essential and request.source_surface == "chat" and request.thread_id:
-                return request.desktop_access, None
-            raise HarnessError("Window tools need a live Work-mode Chat conversation.",
-                code="desktop_grant_required", status_code=409)
-        try:
-            if desktop_essential:
-                self.desktop_automation.runtime.command_path()
-            current, identity = self.desktop_automation.snapshot_grant(request.thread_id, request.desktop_access)
-        except (DesktopAutomationError, WinAppRuntimeError) as exc:
-            if deferred_tools(request) and not desktop_essential:
-                return str(request.desktop_access), None
-            raise HarnessError(str(exc), code=exc.code if isinstance(exc, DesktopAutomationError) else "desktop_runtime_unavailable", status_code=409) from exc
-        if identity is not None:
-            return "selected", {
-                "hwnd": identity.hwnd,
-                "process_id": identity.process_id,
-                "process_created_at": identity.process_created_at,
-            }
-        return "all", None
 
     def _project_blocker_locked(self, project_path: str) -> dict[str, Any] | None:
         for token, (path, owner_thread) in self._project_admissions.items():
@@ -1831,32 +1795,6 @@ class HarnessService:
                 detail={"code": "checkpoint_anchor_missing", "message": str(exc)}))
             raise HarnessError(str(exc), code="checkpoint_linkage_failed", status_code=409) from exc
         run.checkpoint_ids = list(dict.fromkeys([*added, *run.checkpoint_ids]))
-
-    def _validate_content_capabilities(
-        self,
-        deployment: Deployment,
-        request: AgentStartRequest,
-        per_request: Any,
-    ) -> None:
-        has_image = any(getattr(block, "type", None) == "image_url" for block in request.content_blocks or [])
-        if not has_image:
-            return
-        props = deployment.server_props
-        if props is not None and props.modalities.get("vision") is False:
-            raise HarnessError(
-                "This setup reports that image input is not supported.",
-                code="image_input_unavailable",
-                status_code=409,
-                details={"constraint": "server_props.modalities.vision=false"},
-            )
-        support = capability_support(deployment, "image", per_request)
-        if support != "passed":
-            raise HarnessError(
-                "Image input needs a passing image probe for this exact model setup. Text tasks remain available.",
-                code="image_input_unverified" if support in {"untested", "inconclusive"} else "image_input_unavailable",
-                status_code=409,
-                details={"probe_status": support},
-            )
 
     def _collect_related_files(self, run: AgentRun) -> None:
         files = list(_initial_related_files(run.project_path))

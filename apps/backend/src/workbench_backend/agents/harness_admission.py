@@ -57,7 +57,7 @@ from workbench_backend.agents.setup_service import (
     configuration_from_request,
 )
 from workbench_backend.agents.structured import response_format_for_run
-from workbench_backend.agents.tool_disclosure import discovery_context
+from workbench_backend.agents.tool_disclosure import deferred_tools, discovery_context
 from workbench_backend.agents.tools import (
     enabled_for_project,
     tools_for_names,
@@ -284,6 +284,65 @@ def _resolve_admitted_presentation(service, admitted, execution_snapshot):
     admitted.required_tools = required_tools
 
 
+def desktop_scope_snapshot(
+    desktop_automation, request: AgentStartRequest, presented: list[str], *, essential_tools=(),
+) -> tuple[str, dict[str, int | float] | None]:
+    """Freeze the narrower live conversation grant at turn admission."""
+
+    from workbench_backend.desktop_automation.service import DESKTOP_TOOL_NAMES, DesktopAutomationError
+    from workbench_backend.desktop_automation.runtime import WinAppRuntimeError
+
+    if not set(presented).intersection(DESKTOP_TOOL_NAMES):
+        return "off", None
+    essential = set(essential_tools) | (set(request.input_policy.pinned_tools) if request.input_policy is not None else set())
+    desktop_essential = bool(essential.intersection(DESKTOP_TOOL_NAMES))
+    if (desktop_automation is None or request.source_surface != "chat"
+        or not request.thread_id or request.work_mode != "work"
+        or request.tool_mode is not ToolMode.live_tool):
+        if deferred_tools(request) and not desktop_essential and request.source_surface == "chat" and request.thread_id:
+            return request.desktop_access, None
+        raise HarnessError("Window tools need a live Work-mode Chat conversation.",
+            code="desktop_grant_required", status_code=409)
+    try:
+        if desktop_essential:
+            desktop_automation.runtime.command_path()
+        _current, identity = desktop_automation.snapshot_grant(request.thread_id, request.desktop_access)
+    except (DesktopAutomationError, WinAppRuntimeError) as exc:
+        if deferred_tools(request) and not desktop_essential:
+            return str(request.desktop_access), None
+        raise HarnessError(str(exc), code=exc.code if isinstance(exc, DesktopAutomationError) else "desktop_runtime_unavailable", status_code=409) from exc
+    if identity is not None:
+        return "selected", {
+            "hwnd": identity.hwnd,
+            "process_id": identity.process_id,
+            "process_created_at": identity.process_created_at,
+        }
+    return "all", None
+
+
+def validate_content_capabilities(deployment, request: AgentStartRequest, per_request) -> None:
+    has_image = any(getattr(block, "type", None) == "image_url" for block in request.content_blocks or [])
+    if not has_image:
+        return
+    from workbench_backend.inference.capabilities import capability_support
+    props = deployment.server_props
+    if props is not None and props.modalities.get("vision") is False:
+        raise HarnessError(
+            "This setup reports that image input is not supported.",
+            code="image_input_unavailable",
+            status_code=409,
+            details={"constraint": "server_props.modalities.vision=false"},
+        )
+    support = capability_support(deployment, "image", per_request)
+    if support != "passed":
+        raise HarnessError(
+            "Image input needs a passing image probe for this exact model setup. Text tasks remain available.",
+            code="image_input_unverified" if support in {"untested", "inconclusive"} else "image_input_unavailable",
+            status_code=409,
+            details={"probe_status": support},
+        )
+
+
 def _compose_admitted_setup(service, admitted, execution_snapshot):
     import workbench_backend.agents.harness as harness_module
     request = admitted.request
@@ -308,7 +367,9 @@ def _compose_admitted_setup(service, admitted, execution_snapshot):
     framework_read_paths = admitted.framework_read_paths
     required_tools = admitted.required_tools
 
-    desktop_scope, desktop_window = service._desktop_scope_snapshot(request, presented, essential_tools=required_tools)
+    desktop_scope, desktop_window = desktop_scope_snapshot(
+        service.desktop_automation, request, presented, essential_tools=required_tools,
+    )
     require_setup_capabilities(selection.configuration,
         project_bound=project_path is not None, presented_tools=presented)
     if request.resume_checkpoint_id:
@@ -393,7 +454,7 @@ def _compose_admitted_setup(service, admitted, execution_snapshot):
     if guidance and guidance not in setup.system_prompt:
         setup.system_prompt += "\n\n" + guidance
     if request.content_blocks:
-        service._validate_content_capabilities(deployment, request, setup.bags.per_request)
+        validate_content_capabilities(deployment, request, setup.bags.per_request)
     _, structured_output = response_format_for_run(
         output_schema=request.output_schema,
         deployment=deployment,
