@@ -125,6 +125,7 @@ export function DeploymentsPanel({
   const [settingsPreview, setSettingsPreview] = useState<SettingsBags | null>(null);
   const [message, setMessage] = useState("");
   const [messageTone, setMessageTone] = useState<"info" | "error" | "ok">("info");
+  const [healthPollError, setHealthPollError] = useState("");
   const [loadError, setLoadError] = useState("");
   const [busy, setBusy] = useState("");
   const [busySelection, setBusySelection] = useState("");
@@ -297,8 +298,13 @@ export function DeploymentsPanel({
       if (inFlight) return;
       inFlight = true;
       void Promise.all(loading.map(d => api.healthOf(d.id))).then(updated => {
-        if (!cancelled) setDeployments(records => records.map(record => updated.find(item => item.id === record.id) ?? record));
-      }).catch(() => {}).finally(() => { inFlight = false; });
+        if (!cancelled) {
+          setHealthPollError("");
+          setDeployments(records => records.map(record => updated.find(item => item.id === record.id) ?? record));
+        }
+      }).catch((failure: unknown) => {
+        if (!cancelled) setHealthPollError(errorMessage(failure));
+      }).finally(() => { inFlight = false; });
     }, 3000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [deployments, active]);
@@ -382,8 +388,14 @@ export function DeploymentsPanel({
       publishDraftMarkers();
       setCreatingVariant(false); setVariantName("");
     }
-    await onBundlesChanged?.(); await refresh();
-    if (selectionOwner.current === owner) { setMessageTone("ok"); setMessage(asVariant ? "Copy saved." : "Saved."); }
+    const savedLabel = asVariant ? "Copy saved." : "Saved.";
+    try {
+      await onBundlesChanged?.();
+      await refresh();
+    } catch (error) {
+      throw new Error(`${savedLabel} The screen could not refresh. ${errorMessage(error)}`);
+    }
+    if (selectionOwner.current === owner) { setMessageTone("ok"); setMessage(savedLabel); }
     return saved;
   }
   async function saveConfiguration(asVariant = false) {
@@ -391,23 +403,40 @@ export function DeploymentsPanel({
     await preview(payload.startup, payload.per_request, owner);
     return persistConfiguration(payload, asVariant, owner);
   }
+  async function refreshAfterUserAction(failure: unknown): Promise<void> {
+    try {
+      await refresh();
+    } catch (error) {
+      const refreshError = `The model list could not refresh. ${errorMessage(error)}`;
+      throw failure ? new Error(`${errorMessage(failure)} ${refreshError}`) : new Error(refreshError);
+    }
+    if (failure) throw failure;
+  }
   async function loadSavedSetup() {
     if (!selectedProfile) throw new Error("Save this setup before loading it.");
     const owner = selectionOwner.current;
+    let failure: unknown;
     try {
       const result = await api.loadSavedModelSetup(owner.id, selectedProfile.id);
       if (result.status === "failed" || result.error) throw new Error(result.error ?? "Model could not load.");
       if (selectionOwner.current === owner) { setMessageTone("ok"); setMessage(result.health?.healthy ? "Saved setup loaded." : "Loading saved setup…"); }
-    } finally { await refresh(); }
+    } catch (error) {
+      failure = error;
+    }
+    await refreshAfterUserAction(failure);
   }
   async function reloadRunningModel() {
     if (!selectedActive) throw new Error("No running model to reload.");
     const owner = selectionOwner.current;
+    let failure: unknown;
     try {
       const result = await api.reload(selectedActive.id);
       if (result.status === "failed" || result.error) throw new Error(result.error ?? "Model could not reload.");
       if (selectionOwner.current === owner) { setMessageTone("ok"); setMessage(result.health?.healthy ? "Model reloaded." : "Reloading…"); }
-    } finally { await refresh(); }
+    } catch (error) {
+      failure = error;
+    }
+    await refreshAfterUserAction(failure);
   }
   const field = (key: string, label: string, help: string, options: Array<{ value: string; label: string }>, custom = false, min = 0, max?: number, inactive = false) => {
     const requested = settings[key];
@@ -515,7 +544,7 @@ export function DeploymentsPanel({
       }} />}
   </section>;
   else if (panelView === "files" && selected) panelContent = <><button type="button" disabled={Boolean(busy)} onClick={() => void action("metadata", async () => { applyConfiguration(await api.modelConfiguration(selectedBundleId, selectedRunning?.id, true, { configuration_id: selectedProfile?.id ?? null, startup: startup() })); })}>Refresh model details</button><ModelProjectorControls key={selected.id} bundleId={selected.id} active={bundleActive} disabled={Boolean(busy)} action={action} onSaved={async () => { await onBundlesChanged?.(); await refresh(); }} /></>;
-  const toolbarMessage = messageTone === "ok" && (dirty.current || creatingVariant) ? "" : message;
+  const toolbarMessage = messageTone === "ok" && creatingVariant ? "" : message;
   return <section className="model-configuration">
     {loadError ? <Notice tone="error">{loadError}<button type="button" onClick={() => void refresh().catch(error => setLoadError(errorMessage(error)))}>Try again</button></Notice> : null}
 
@@ -531,7 +560,7 @@ export function DeploymentsPanel({
         </MenuPopover>
         <div className="model-lifecycle-actions"><button type="button" disabled={Boolean(busy) || !profileId || !runtimeReady || !selected.disk_matches || Boolean(selectedActive && !selectedRunning)} title={dirty.current ? "Load the saved setup. Save edits first to use pending values." : "Load the saved setup using its loading settings."} onClick={() => void action("load", loadSavedSetup)}>{busy === "load" ? "Loading…" : dirty.current ? "Load saved" : "Load"}</button>{selectedActive ? <button type="button" disabled={Boolean(busy)} title="Stop this running model, restore it if a settings change failed, and start the same record." onClick={() => void action("reload", reloadRunningModel)}>{busy === "reload" ? "Reloading…" : "Reload"}</button> : null}</div>
         <button type="button" className="text-button model-setup-readiness" aria-label="Loaded model details" onClick={() => openPanel("runtime")}><StatusBadge {...(selectedCurrent.length ? stateOf(selectedCurrent[0]) : { label: "Not loaded", tone: "neutral" as const })} /></button>
-      <div className="model-toolbar-status" role="status" data-tone={messageTone}>{stagedStartupError || setupPreview.error || toolbarMessage || (!loaded ? "Checking local engine…" : !runtimeReady ? "Set up the local engine in Settings" : "\u00a0")}</div>
+      <div className="model-toolbar-status" role="status" data-tone={stagedStartupError || setupPreview.error || (healthPollError && !toolbarMessage) ? "error" : messageTone}>{stagedStartupError || setupPreview.error || toolbarMessage || healthPollError || (!loaded ? "Checking local engine…" : !runtimeReady ? "Set up the local engine in Settings" : "\u00a0")}</div>
       </header>
       {creatingVariant ? <CompactDialog title="Save a setup copy" labelledBy="setup-copy-title" busy={Boolean(busy)} onClose={() => setCreatingVariant(false)}><label htmlFor="model-variant-name">New setup name</label><input autoFocus id="model-variant-name" value={variantName} onChange={event => setVariantName(event.target.value)} /><button type="button" className="primary-button" disabled={Boolean(busy) || !variantName.trim()} onClick={() => void action("save", () => saveConfiguration(true))}>Save copy</button></CompactDialog> : null}
       <div className="model-settings-columns"><SettingSection title="Generation">

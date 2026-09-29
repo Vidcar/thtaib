@@ -8,6 +8,9 @@ from unittest.mock import patch
 
 from langchain_core.messages import AIMessage
 from workbench_backend.app import create_app
+from workbench_backend.chat.schemas import ChatQueueItem
+from workbench_backend.inference.ids import utc_now
+from workbench_backend.state.backup import BackupError
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.setup_service import SetupService
 from workbench_backend.assets.schemas import RetainedUploadRequest
@@ -79,6 +82,46 @@ class ChatSetupReadinessTests(unittest.TestCase):
         self.assertEqual(saved["embedding_deployment_id"], self.second.id)
         self.assertEqual(saved["setup_cleared_fields"], [])
         self.assertEqual(saved["transcript"], [])
+
+    def test_unverified_history_and_capabilities_stay_named_and_sendable(self):
+        history = self.app.state.chat._readiness_history_issues("history_unverified")
+        self.assertEqual(history[0].code, "history_unverified")
+        self.assertIn("could not be checked", history[0].message)
+        self.assertIn("still send", history[0].message)
+        capabilities = self.app.state.chat._readiness_history_issues("model_capabilities_unverified")
+        self.assertEqual(capabilities[0].code, "model_capabilities_unverified")
+        self.assertIn("not confirmed", capabilities[0].message)
+        self.assertIn("still send", capabilities[0].message)
+
+    def test_unexpected_dispatch_failure_pauses_that_queued_turn(self):
+        created = self.client.post("/v1/chat/conversations", json={"deployment_id": self.first.id})
+        self.assertEqual(created.status_code, 200, created.text)
+        chat_id = created.json()["id"]
+        now = utc_now()
+        stored = self.app.state.chat.store.get(chat_id)
+        stored.queue.append(ChatQueueItem(id="queue-1", task="hello", created_at=now, updated_at=now))
+        self.app.state.chat.store.put(stored)
+
+        def boom(_conversation):
+            raise RuntimeError("model admission exploded")
+
+        with patch.object(self.app.state.chat, "_dispatch_next_queued", boom):
+            self.app.state.chat.dispatch_idle_queued(chat_id)
+        saved = self.client.get(f"/v1/chat/conversations/{chat_id}").json()
+        self.assertEqual(saved["queue"][0]["status"], "paused")
+        self.assertEqual(saved["queue"][0]["pause_reason"], "failed")
+        self.assertEqual(saved["queue"][0]["pause_error_code"], "dispatch_failed")
+        self.assertIn("could not start", saved["queue"][0]["pause_error"])
+        self.assertIn("exploded", saved["queue"][0]["pause_error"])
+
+        def blocked(_conversation):
+            raise BackupError("store is copying", code="maintenance_active")
+
+        with patch.object(self.app.state.chat, "_dispatch_next_queued", blocked):
+            with self.assertRaises(BackupError):
+                self.app.state.chat.dispatch_idle_queued(chat_id)
+        still_paused = self.client.get(f"/v1/chat/conversations/{chat_id}").json()
+        self.assertEqual(still_paused["queue"][0]["pause_error_code"], "dispatch_failed")
 
     def test_unsupported_non_null_setup_preview_returns_structured_client_error(self):
         chat = self.client.post("/v1/chat/conversations", json={

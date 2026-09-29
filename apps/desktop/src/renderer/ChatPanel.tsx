@@ -646,6 +646,7 @@ interface ChatPanelProps {
   onHistoryChanged?: () => void;
   onActiveConversationId?: (id: string | null) => void;
   restoringSelection?: boolean;
+  restorationError?: string;
   onCreateProject?: () => void;
   projectRevision?: number;
   onModelPhase?: (phase: "starting" | "ready" | "none" | "failed") => void;
@@ -707,6 +708,9 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const [setupDefaultsLoading, setSetupDefaultsLoading] = useState(true);
   const [hasApplicationDefaults, setHasApplicationDefaults] = useState(false);
   const [setupError, setSetupError] = useState("");
+  const [deploymentRefreshError, setDeploymentRefreshError] = useState("");
+  const [shortcutError, setShortcutError] = useState("");
+  const [permissionsError, setPermissionsError] = useState("");
   const [readinessSnapshot, setReadinessSnapshot] = useState<{ key: string; value: ChatReadiness } | null>(null);
   const [readinessEpoch, setReadinessEpoch] = useState(0);
   const [, setInstructionLayers] = useState<ResolvedSetupSelection["instruction_layers"]>([]);
@@ -734,9 +738,10 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     setHasSavedPermissions(false);
     if (!toolMenuOpen) return;
     let cancelled = false;
+    setPermissionsError("");
     void packet03Api.grants().then(grants => {
       if (!cancelled) setHasSavedPermissions(grants.length > 0);
-    }).catch(() => { /* Permission management remains available in Settings. */ });
+    }).catch((failure: unknown) => { if (!cancelled) setPermissionsError(errorMessage(failure)); });
     return () => { cancelled = true; };
   }, [toolMenuOpen]);
 
@@ -921,9 +926,10 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     void api.deployments()
       .then((next) => {
         setDeployments(next);
+        setDeploymentRefreshError("");
       })
-      .catch(() => {
-        // Chat state remains authoritative for the run; a later refresh will update model status.
+      .catch((failure: unknown) => {
+        setDeploymentRefreshError(errorMessage(failure));
       });
   }, []);
   useEffect(() => {
@@ -1303,7 +1309,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   useEffect(() => {
     if (props.activeTab && props.activeTab !== "chat") return;
     let stale = false;
-    void workspaceApi.shortcuts().then(items => { if (!stale) setShortcuts(items); }).catch(() => {});
+    void workspaceApi.shortcuts().then(items => { if (!stale) { setShortcuts(items); setShortcutError(""); } }).catch((failure: unknown) => { if (!stale) setShortcutError(errorMessage(failure)); });
     return () => { stale = true; };
   }, [props.activeTab]);
   useEffect(() => {
@@ -1954,6 +1960,10 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             {deployHealthNotice.message}
           </Notice>
         ) : null}
+        {deploymentRefreshError ? <Notice tone="error">{deploymentRefreshError}</Notice> : null}
+        {shortcutError ? <Notice tone="error">{shortcutError}</Notice> : null}
+        {props.restorationError ? <Notice tone="error">{props.restorationError}</Notice> : null}
+        {conversation && !readinessBlocked && !runBusy && readiness?.status === "unverified" && readiness.issues[0]?.message ? <Notice tone="warn">{readiness.issues[0].message}</Notice> : null}
         {conversation && readinessBlocked && !runBusy ? <Notice tone={readiness?.status === "incompatible" ? "error" : "warn"} action={<button type="button" onClick={() => {
           const code = readiness?.issues[0]?.code ?? "";
           if (["deferred_reference_tools_off", "deferred_reference_reader_excluded", "skill_selection_required"].includes(code)) setShowInputs(true);
@@ -2089,6 +2099,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             <MenuPopover label="Approval mode" panelClassName="chat-access-panel" trigger={<><Icon name="shield" /><span>{approvalModeLabel(approvalMode)}</span></>} disabled={selectionBusy || sending} openRequest={toolMenuRequest} onOpenChange={setToolMenuOpen}>
                 <div className="chat-access-heading"><span>Access</span><HoverHelp title="When access changes">Changes apply to your next message. Running and queued messages keep their access. Plan stays read-only; disabled tools stay off.</HoverHelp></div>
                 <ApprovalModeControl value={approvalMode} disabled={selectionBusy || sending} onChange={mode => { markSetupEdited("approval_mode"); setApprovalMode(mode); }} />
+                {permissionsError ? <p className="hint">{permissionsError}</p> : null}
                 {hasSavedPermissions ? <button type="button" className="chat-tools-permissions" onClick={openPermissions}><Icon name="settings" size={14} /> Saved permissions</button> : null}
                 {toolMenuOpen ? <VisualTestingControls windowsOnly conversationId={conversation?.id ?? null} threadId={conversation?.thread_id ?? null} browserEnabled={browserEnabled} onBrowserEnabled={() => {}} desktopAccess={desktopAccess} workMode={workMode} focusSection="windows" focusNonce={toolMenuRequest} disabled={selectionBusy || sending} canPrepareConversation={hasModelChoice} onSettings={() => { try { sessionStorage.setItem("workbench.settings.category", "Connections"); } catch {} navigateAway("settings"); }} onReadinessChange={() => setReadinessEpoch(value => value + 1)} onPrepareConversation={async () => { const created = await persistBeforeLeaving() ?? await createDraftConversation(); cacheConversation(created); selectConversation(created); }} onDesktopAccess={scope => { setDesktopAccess(scope); markSetupEdited("desktop_access"); setReadinessEpoch(value => value + 1); }} /> : null}
             </MenuPopover>

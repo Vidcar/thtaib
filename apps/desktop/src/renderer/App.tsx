@@ -17,6 +17,7 @@ import { ModelsPanel } from "./ModelsPanel";
 import { SettingsPanel } from "./SettingsPanel";
 import { WorkbenchSidebar, type ChatLaunch, type ConversationListActions, type HistoryNotice } from "./WorkbenchSidebar";
 import { loadAppearance, setAppearanceTheme } from "./appearanceStore";
+import { Notice } from "./Notice";
 import type { PresentationSettings, WorkbenchSurface, WorkbenchTab } from "./types";
 
 const fallbackPresentation: PresentationSettings = {
@@ -36,6 +37,9 @@ export function App() {
   const conversationListRef = useRef<ConversationListActions | null>(null);
   const attentionRequest = useRef(0);
   const [backendStatus, setBackendStatus] = useState("Checking local services…");
+  const [appearanceNotice, setAppearanceNotice] = useState("");
+  const [presentationNotice, setPresentationNotice] = useState("");
+  const [restorationError, setRestorationError] = useState("");
   const [backendOk, setBackendOk] = useState<boolean | null>(null);
   const [listsReady, setListsReady] = useState(false);
   const [modelPhase, setModelPhase] = useState<"pending" | "starting" | "ready" | "none" | "failed">("pending");
@@ -97,11 +101,15 @@ export function App() {
         if (cancelled || pendingRestoration.current !== pending) return;
         pendingRestoration.current = null;
         const conversation = conversations.find(item => item.id === pending!.id);
+        setRestorationError("");
         if (conversation) setChatLaunch({ id: crypto.randomUUID(), kind: "open", conversationId: conversation.id, conversation });
         else rememberConversation(null);
-      } catch {
+      } catch (error) {
         // A service restart cannot turn a remembered chat into New chat.
-        if (!cancelled && pendingRestoration.current === pending) retry = setTimeout(() => void restore(), 1000);
+        if (!cancelled && pendingRestoration.current === pending) {
+          setRestorationError(`The last conversation could not be opened. ${errorMessage(error)}`);
+          retry = setTimeout(() => void restore(), 1000);
+        }
       }
     }
     void restore();
@@ -120,7 +128,11 @@ export function App() {
     setAppearanceTheme(presentation.theme);
   }, [presentation.theme]);
 
-  useEffect(() => { void loadAppearance(); }, []);
+  useEffect(() => {
+    void loadAppearance().catch((error: unknown) => {
+      setAppearanceNotice(`Saved appearance could not be loaded. Built-in appearance is showing. ${errorMessage(error)}`);
+    });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -158,9 +170,10 @@ export function App() {
           setPresentation(next);
         }
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (!cancelled) {
           setPresentation(fallbackPresentation);
+          setPresentationNotice(`Saved display settings could not be loaded. Built-in settings are showing. ${errorMessage(error)}`);
         }
       });
     return () => {
@@ -213,6 +226,7 @@ export function App() {
         return (
           <ChatPanel
             restoringSelection={restoringConversation}
+            restorationError={restorationError}
             workspaceLaunch={workspaceLaunch}
             onWorkspaceLaunchHandled={() => setWorkspaceLaunch(null)}
             chatLaunch={chatLaunch}
@@ -271,6 +285,8 @@ export function App() {
 
   return (
     <div className={`app${tab === "chat" ? " app-chat" : ""}${sidebarCollapsed ? " app-nav-collapsed" : ""}`} style={{ "--navigation-width": `${sidebarWidth}px` } as CSSProperties}>
+      {appearanceNotice ? <Notice tone="error">{appearanceNotice}</Notice> : null}
+      {presentationNotice ? <Notice tone="error">{presentationNotice}</Notice> : null}
       <CreateProjectDialog open={createProjectOpen} onClose={() => setCreateProjectOpen(false)} onCreated={() => setProjectRevision(value => value + 1)} />
       <WorkbenchSidebar
         tab={tab}

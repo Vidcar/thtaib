@@ -58,6 +58,8 @@ globalThis.fetch = async (url, init = {}) => {
 const managedCalls = () => calls.filter(call => call.path.endsWith("/v1/deployments/managed"));
 let models;
 let chat;
+let failedRefresh;
+let attention;
 try {
   const { DeploymentsPanel } = await vite.ssrLoadModule("/src/renderer/DeploymentsPanel.tsx");
   const { ChatModelControls } = await vite.ssrLoadModule("/src/renderer/ChatModelControls.tsx");
@@ -87,6 +89,7 @@ try {
   const savedLoad = managedCalls().at(-1);
   assert.deepEqual(savedLoad.body.startup, {}, "Load saved ignores unsaved edits");
   assert.equal(savedLoad.body.profile_id, "config");
+  assert.match(text(models.root), /Saved setup loaded\./, "a Load saved success stays visible while unsaved edits remain");
 
   await act(async () => { button(models, "Reload").props.onClick(); await tick(); });
   const reload = calls.find(call => call.path.endsWith("/v1/deployments/running-1/reload"));
@@ -132,10 +135,45 @@ try {
   assert.equal(applied.body.auto_start, true);
   assert.equal(applied.body.startup.ctx_size, 12288, "chat apply posts that chat's startup overrides");
   assert.equal(calls.filter(call => call.path.includes("/reload")).length, 1, "chat apply does not call reload");
+
+  failManaged = false;
+  await act(async () => {
+    failedRefresh = create(React.createElement(ChatModelControls, {
+      bundles: [bundle], deployments: [chatDeployment], profiles: [chatProfile], selectedDeploymentId: "running-1", selectedConfigurationId: "config",
+      configuration: { model_configuration_id: "config", deployment_id: "running-1", startup_overrides: { ctx_size: 8192 } },
+      conversationId: "chat-2", onApply: async () => {}, onReloaded: async () => { throw new Error("Model status could not refresh"); }, onManageAgent: () => {},
+    }));
+    await tick();
+  });
+  const failedTune = failedRefresh.root.findAll(node => node.type === "button" && node.props["aria-label"] === "Tune model")[0];
+  await act(async () => { if (!failedTune.props["aria-expanded"]) failedTune.props.onClick(); await tick(); });
+  await act(async () => ownerControl(failedRefresh.root.findAllByType("input").find(node => node.props["aria-label"] === "Chat context"), "ContextSlider").props.onChange(16384));
+  for (let attempt = 0; attempt < 8 && button(failedRefresh, "Apply this chat's settings")?.props.disabled; attempt += 1) await act(async () => { await tick(); });
+  await act(async () => { button(failedRefresh, "Apply this chat's settings").props.onClick(); await tick(); });
+  assert.match(text(failedRefresh.root), /Model status could not refresh/, "a failed model refresh stays visible after chat settings are applied");
+  let attentionFailed = false;
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith("/v1/desktop/attention")) {
+      if (attentionFailed) throw new Error("Attention list unavailable");
+      return jsonResponse([]);
+    }
+    throw new Error(`Unexpected attention endpoint ${url}`);
+  };
+  const { AttentionButton } = await vite.ssrLoadModule("/src/renderer/AttentionPanel.tsx");
+  await act(async () => { attention = create(React.createElement(AttentionButton, {})); await tick(); });
+  assert.equal(attention.root.findByType("button").props["aria-label"], "Attention, 0 items");
+  attentionFailed = true;
+  await act(async () => { attention.root.findByType("button").props.onClick?.(); globalThis.window.dispatchEvent(new Event("workbench-attention")); await tick(); });
+  const attentionButton = attention.root.findByType("button");
+  assert.match(attentionButton.props["aria-label"], /Attention could not load/);
+  assert.match(attentionButton.props["aria-label"], /Attention list unavailable/);
+  assert.equal(text(attentionButton).includes("!"), true, "a failed attention load is not shown as zero items");
   console.log("Screen controls call the endpoints their labels name.");
 } finally {
   if (models) await act(async () => models.unmount());
   if (chat) await act(async () => chat.unmount());
+  if (failedRefresh) await act(async () => failedRefresh.unmount());
+  if (attention) await act(async () => attention.unmount());
   globalThis.window = originalWindow;
   await vite.close();
 }
