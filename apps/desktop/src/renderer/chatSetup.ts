@@ -1,3 +1,6 @@
+import type { AgentInputPolicy } from "./agentInputPolicy";
+import type { ApprovalMode } from "./ApprovalModeControl";
+import type { DesktopAccess, KnowledgeEntry } from "./types";
 import type { SetupConfiguration } from "./workspaceApi";
 
 export interface ChatWorkspaceLaunch { id: string; projectId?: string | null; agentSetupVersionId?: string | null }
@@ -53,4 +56,101 @@ export function sparseChatSetup(values: Record<string, unknown>, edited: Readonl
 
 export function setupOverrides(values: Record<string, unknown>): SetupConfiguration {
   return Object.fromEntries(Object.entries(values).filter(([key]) => (chatSetupFields as readonly string[]).includes(key) && key !== "knowledge_version_refs")) as SetupConfiguration;
+}
+
+function knowledgePayload(entries: Pick<KnowledgeEntry, "id" | "kind" | "current_version_id">[], selectedVersionIds: string[]) {
+  const selected = entries.filter((entry) => selectedVersionIds.includes(entry.current_version_id));
+  const memoryVersionRefs = selected
+    .filter((entry) => entry.kind === "memory")
+    .map((entry) => entry.current_version_id);
+  const skillVersionRefs = selected
+    .filter((entry) => entry.kind === "skill")
+    .map((entry) => entry.current_version_id);
+  const protectedInstructionVersionRefs = selected
+    .filter((entry) => entry.kind === "protected_instruction")
+    .map((entry) => entry.current_version_id);
+  return {
+    // The backend resolves kinds for earlier explicit versions too. Omitting
+    // them here would silently replace a selected memory when Knowledge updates.
+    knowledge_version_refs: [...selectedVersionIds],
+    memory_version_refs: memoryVersionRefs,
+    skill_version_refs: skillVersionRefs,
+    protected_instruction_version_refs: protectedInstructionVersionRefs,
+  };
+}
+
+export interface ChatConfigurationInput {
+  hasApplicationDefaults: boolean;
+  projectId: string | null;
+  agentSetupVersionId: string | null;
+  agentSetupId: string | null;
+  conversationAgentSetupVersionId?: string | null;
+  conversationProjectId?: string | null;
+  conversationWorkspaceId?: string | null;
+  knowledgeEntries: Pick<KnowledgeEntry, "id" | "kind" | "current_version_id">[];
+  selectedKnowledgeIds: string[];
+  editedFields: ReadonlySet<string>;
+  deploymentId: string;
+  profileId: string;
+  startupOverrides: Record<string, unknown>;
+  embeddingDeploymentId: string;
+  selectedTools: string[] | null;
+  desktopAccess: DesktopAccess;
+  approvalMode: ApprovalMode;
+  perRequestOverrides: Record<string, unknown>;
+  workMode: "work" | "plan";
+  helperAgentIds: string[];
+  review: { enabled: boolean; criteria: string; max_revisions: 2 };
+  inputPolicy: AgentInputPolicy | null;
+  localInstructions: string | null;
+  modelOverrides: NonNullable<SetupConfiguration["model_overrides"]>;
+  inheritedModelConfiguration: SetupConfiguration | null;
+  contextEntryIds: string[];
+  contextKinds: Record<string, "memory" | "instruction">;
+  messageSkillIds: string[];
+  shortcutIds: string[];
+  projectFileRefs: string[];
+  documentAssetIds: string[] | null;
+  projectPath: string;
+}
+
+export function buildChatConfiguration(input: ChatConfigurationInput): Record<string, unknown> {
+  const layered = Boolean(input.hasApplicationDefaults || input.projectId || input.agentSetupVersionId || input.conversationAgentSetupVersionId || input.conversationProjectId);
+  const selectedKnowledge = knowledgePayload(input.knowledgeEntries, input.selectedKnowledgeIds);
+  const values = sparseChatSetup({
+    deployment_id: input.deploymentId,
+    model_configuration_id: input.profileId || null,
+    startup_overrides: input.startupOverrides,
+    embedding_deployment_id: input.embeddingDeploymentId || null,
+    ...(input.editedFields.has("presented_tools") ? { presented_tools: input.selectedTools } : {}),
+    ...(input.editedFields.has("desktop_access") ? { desktop_access: input.desktopAccess } : {}),
+    ...(input.editedFields.has("approval_mode") ? { approval_mode: input.approvalMode } : {}),
+    per_request_overrides: input.perRequestOverrides,
+    work_mode: input.workMode,
+    helper_agent_ids: input.helperAgentIds,
+    review: input.review,
+    ...(input.inputPolicy ? { input_policy: input.inputPolicy } : {}),
+    ...(input.localInstructions !== null ? { instructions: input.localInstructions } : {}),
+    ...selectedKnowledge,
+  }, input.editedFields, layered);
+  // Editable intent names records; backend admission owns the exact versions.
+  delete values.knowledge_version_refs; delete values.memory_version_refs; delete values.skill_version_refs; delete values.protected_instruction_version_refs;
+  return { ...values, model_overrides: input.modelOverrides, inherited_model_configuration: input.inheritedModelConfiguration,
+    memory_entry_ids: input.contextEntryIds.filter(id => input.contextKinds[id] !== "instruction" && !input.knowledgeEntries.some(item => item.id === id && item.kind === "protected_instruction")),
+    protected_instruction_entry_ids: input.contextEntryIds.filter(id => input.contextKinds[id] === "instruction" || input.knowledgeEntries.some(item => item.id === id && item.kind === "protected_instruction")),
+    skill_entry_ids: input.messageSkillIds, shortcut_ids: input.shortcutIds, project_file_refs: input.projectFileRefs,
+    ...(input.documentAssetIds !== null ? { document_asset_ids: input.documentAssetIds } : {}), ...(input.projectId ? { project_id: input.projectId } : {}),
+    ...(input.agentSetupId ? { agent_setup_id: input.agentSetupId } : input.agentSetupVersionId ? { agent_setup_version_id: input.agentSetupVersionId } : { agent_setup_id: null }),
+    ...(!input.projectId ? { project_path: input.projectPath.trim() || null } : {}),
+    ...(!input.projectId || input.conversationWorkspaceId ? { workspace_id: input.conversationWorkspaceId ?? null } : {}) };
+}
+
+export function executionConfiguration(configuration: Record<string, unknown>): Record<string, unknown> {
+  const { model_overrides: _models, inherited_model_configuration: _inherited, ...selection } = configuration;
+  return selection;
+}
+
+export function creationConfiguration(configuration: Record<string, unknown>): Record<string, unknown> {
+  const { shortcut_ids: _shortcuts, project_file_refs: _files, document_asset_ids: _documents, ...selection } = executionConfiguration(configuration);
+  return selection;
 }
