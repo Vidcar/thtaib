@@ -8,7 +8,7 @@ does not start inference.
 from __future__ import annotations
 
 import hashlib
-from typing import Any
+from typing import Any, NamedTuple
 
 from pydantic import BaseModel, Field
 
@@ -198,6 +198,154 @@ def effective_setting_values(manager, configuration, provenance: dict) -> dict:
     return result
 
 
+class _ResolvedSetupBags(NamedTuple):
+    inherited: bool
+    agent: SettingsBag
+    mismatches: list[StartupMismatch]
+    bags: SettingsBags
+    unsupported: dict[str, list[str]]
+    overridden: dict[str, list[dict[str, Any]]]
+    retired: dict[str, list[dict[str, Any]]]
+
+
+class _RetrievalEmbeddingFacts(NamedTuple):
+    gaps: list[str]
+    selected_embedding_deployment_id: str | None
+    loaded_embedding_deployment_id: str | None
+    loaded_embedding_endpoint: str | None
+
+
+def _require_endpoint_and_knowledge(
+    *,
+    deployment: Deployment,
+    knowledge_refs: KnowledgeRefs,
+    knowledge_versions: list[KnowledgeVersion],
+) -> None:
+    if not (deployment.endpoint or "").strip():
+        raise HarnessError(
+            "Deployment has no endpoint. The adapter does not start inference.",
+            code="no_endpoint",
+            status_code=409,
+        )
+    missing = _missing_versions(knowledge_refs, knowledge_versions)
+    if missing:
+        raise HarnessError(
+            "Unknown knowledge version",
+            code="knowledge_version_missing",
+            status_code=404,
+            details={"missing_version_ids": missing},
+        )
+
+
+def _resolve_setup_bags(
+    *,
+    deployment: Deployment,
+    profile: RunProfile | None,
+    per_request_overrides: dict[str, Any] | None,
+    startup_overrides: dict[str, Any] | None,
+    inherit_deployment_settings: bool,
+) -> _ResolvedSetupBags:
+    # A saved setup is a snapshot. Only an explicitly selected profile resolves
+    # its current values; opting out clears both response and agent preset bags.
+    startup_overrides, per_request_overrides = split_response_startup(startup_overrides or {}, per_request_overrides or {})
+    inherited = profile is None and inherit_deployment_settings
+    per_request = _resolve_per_request(profile, deployment, per_request_overrides, inherit_deployment_settings)
+    validate_model_reasoning(deployment, per_request)
+    agent = deployment.settings.agent if inherited else _resolve_agent(profile)
+    startup_selected = deployment.settings.startup if inherited else _resolve_startup(profile)
+    if startup_overrides:
+        startup_requested = {**startup_selected.requested, **startup_overrides}
+        startup_selected = resolve_bags(startup={
+            key: value for key, value in startup_requested.items() if value is not None
+        }, startup_defaults={key: value for key, value in startup_selected.applied.items()
+            if key not in startup_selected.requested}).startup
+    mismatches = _startup_mismatches(startup_selected, deployment.applied_startup)
+    bags = SettingsBags(
+        startup=startup_selected,
+        per_request=per_request,
+        agent=agent,
+        accepted_loading_identity=deployment.settings.accepted_loading_identity if inherited else None,
+    )
+    return _ResolvedSetupBags(
+        inherited=inherited,
+        agent=agent,
+        mismatches=mismatches,
+        bags=bags,
+        unsupported={
+            "startup": list(startup_selected.unsupported),
+            "per_request": list(per_request.unsupported),
+            "agent": list(agent.unsupported),
+        },
+        overridden={
+            "startup": [item.model_dump(mode="json") for item in startup_selected.overridden],
+            "per_request": [item.model_dump(mode="json") for item in per_request.overridden],
+            "agent": [item.model_dump(mode="json") for item in agent.overridden],
+        },
+        retired={
+            "startup": [item.model_dump(mode="json") for item in startup_selected.retired],
+        },
+    )
+
+
+def _compose_effective_system_prompt(
+    *,
+    surface_system_prompt: str | None,
+    agent: SettingsBag,
+    default_system_prompt: str,
+    versions: list[KnowledgeVersion],
+    retrieval_instructions: str | None,
+    instruction_layers: list[InstructionLayer] | None,
+    input_policy: AgentInputPolicy | None,
+    selected_agent_setup_version_id: str | None,
+) -> str:
+    return compose_system_prompt(
+        surface_system_prompt=surface_system_prompt,
+        profile_system_prompt=(agent.applied.get("system_prompt") if isinstance(agent.applied.get("system_prompt"), str) else None),
+        default_system_prompt=default_system_prompt,
+        versions=versions,
+        retrieval_instructions=retrieval_instructions,
+        instruction_layers=instruction_layers,
+        input_policy=input_policy,
+        selected_agent=bool(selected_agent_setup_version_id),
+    )
+
+
+def _retrieval_embedding_facts(
+    *,
+    knowledge_refs: KnowledgeRefs,
+    embedding_deployment: Deployment | None,
+    selected_embedding_deployment_id: str | None,
+    retrieval_requested: bool,
+    retrieval_presented: bool,
+) -> _RetrievalEmbeddingFacts:
+    gaps: list[str] = []
+    if retrieval_presented:
+        pass
+    elif retrieval_requested:
+        gaps.append(RECORDED_RETRIEVAL_GAP)
+    else:
+        gaps.append(NO_RETRIEVAL_GAP)
+    if not knowledge_refs.memory_version_refs:
+        gaps.append(MEMORY_GAP)
+    else:
+        gaps.append(MEMORY_EDIT_GAP)
+    if not knowledge_refs.skill_version_refs:
+        gaps.append(SKILL_GAP)
+    return _RetrievalEmbeddingFacts(
+        gaps=gaps,
+        selected_embedding_deployment_id=(
+            selected_embedding_deployment_id
+            or (embedding_deployment.id if embedding_deployment is not None else None)
+        ),
+        loaded_embedding_deployment_id=(
+            embedding_deployment.id if embedding_deployment is not None else None
+        ),
+        loaded_embedding_endpoint=(
+            embedding_deployment.endpoint if embedding_deployment is not None else None
+        ),
+    )
+
+
 def resolve_effective_setup(
     *,
     deployment: Deployment,
@@ -226,64 +374,35 @@ def resolve_effective_setup(
 ) -> EffectiveSetup:
     """Resolve bags, startup mismatch and knowledge content before execution."""
 
-    if not (deployment.endpoint or "").strip():
-        raise HarnessError(
-            "Deployment has no endpoint. The adapter does not start inference.",
-            code="no_endpoint",
-            status_code=409,
-        )
-    missing = _missing_versions(knowledge_refs, knowledge_versions)
-    if missing:
-        raise HarnessError(
-            "Unknown knowledge version",
-            code="knowledge_version_missing",
-            status_code=404,
-            details={"missing_version_ids": missing},
-        )
-    # A saved setup is a snapshot. Only an explicitly selected profile resolves
-    # its current values; opting out clears both response and agent preset bags.
-    startup_overrides, per_request_overrides = split_response_startup(startup_overrides or {}, per_request_overrides or {})
-    inherited = profile is None and inherit_deployment_settings
-    per_request = _resolve_per_request(profile, deployment, per_request_overrides, inherit_deployment_settings)
-    validate_model_reasoning(deployment, per_request)
-    agent = deployment.settings.agent if inherited else _resolve_agent(profile)
-    startup_selected = deployment.settings.startup if inherited else _resolve_startup(profile)
-    if startup_overrides:
-        startup_requested = {**startup_selected.requested, **startup_overrides}
-        startup_selected = resolve_bags(startup={
-            key: value for key, value in startup_requested.items() if value is not None
-        }, startup_defaults={key: value for key, value in startup_selected.applied.items()
-            if key not in startup_selected.requested}).startup
-    mismatches = _startup_mismatches(startup_selected, deployment.applied_startup)
+    _require_endpoint_and_knowledge(
+        deployment=deployment,
+        knowledge_refs=knowledge_refs,
+        knowledge_versions=knowledge_versions,
+    )
+    resolved = _resolve_setup_bags(
+        deployment=deployment,
+        profile=profile,
+        per_request_overrides=per_request_overrides,
+        startup_overrides=startup_overrides,
+        inherit_deployment_settings=inherit_deployment_settings,
+    )
     loaded = [_loaded_fact(version) for version in knowledge_versions]
-    system_prompt = compose_system_prompt(
+    system_prompt = _compose_effective_system_prompt(
         surface_system_prompt=surface_system_prompt,
-        profile_system_prompt=(agent.applied.get("system_prompt") if isinstance(agent.applied.get("system_prompt"), str) else None),
+        agent=resolved.agent,
         default_system_prompt=default_system_prompt,
         versions=knowledge_versions,
         retrieval_instructions=retrieval_instructions,
         instruction_layers=instruction_layers,
         input_policy=input_policy,
-        selected_agent=bool(selected_agent_setup_version_id),
+        selected_agent_setup_version_id=selected_agent_setup_version_id,
     )
-    gaps: list[str] = []
-    if retrieval_presented:
-        pass
-    elif retrieval_requested:
-        gaps.append(RECORDED_RETRIEVAL_GAP)
-    else:
-        gaps.append(NO_RETRIEVAL_GAP)
-    if not knowledge_refs.memory_version_refs:
-        gaps.append(MEMORY_GAP)
-    else:
-        gaps.append(MEMORY_EDIT_GAP)
-    if not knowledge_refs.skill_version_refs:
-        gaps.append(SKILL_GAP)
-    bags = SettingsBags(
-        startup=startup_selected,
-        per_request=per_request,
-        agent=agent,
-        accepted_loading_identity=deployment.settings.accepted_loading_identity if inherited else None,
+    retrieval = _retrieval_embedding_facts(
+        knowledge_refs=knowledge_refs,
+        embedding_deployment=embedding_deployment,
+        selected_embedding_deployment_id=selected_embedding_deployment_id,
+        retrieval_requested=retrieval_requested,
+        retrieval_presented=retrieval_presented,
     )
     return EffectiveSetup(
         selected_project_id=selected_project_id,
@@ -296,47 +415,30 @@ def resolve_effective_setup(
             policy=input_policy, instruction_layers=instruction_layers, knowledge_versions=knowledge_versions,
             profile=profile, deployment=deployment, selected_agent=bool(selected_agent_setup_version_id),
             surface_text=surface_system_prompt, project_id=selected_project_id),
-        selected_profile_id=profile.id if profile is not None else deployment.profile_id if inherited else None,
+        selected_profile_id=profile.id if profile is not None else deployment.profile_id if resolved.inherited else None,
         selected_deployment_id=deployment.id,
-        selected_embedding_deployment_id=(
-            selected_embedding_deployment_id
-            or (embedding_deployment.id if embedding_deployment is not None else None)
-        ),
+        selected_embedding_deployment_id=retrieval.selected_embedding_deployment_id,
         selected_memory_version_ids=list(knowledge_refs.memory_version_refs),
         selected_skill_version_ids=list(knowledge_refs.skill_version_refs),
         selected_protected_instruction_version_ids=list(
             knowledge_refs.protected_instruction_version_refs
         ),
         loaded_deployment_id=deployment.id,
-        loaded_embedding_deployment_id=(
-            embedding_deployment.id if embedding_deployment is not None else None
-        ),
-        loaded_embedding_endpoint=(
-            embedding_deployment.endpoint if embedding_deployment is not None else None
-        ),
+        loaded_embedding_deployment_id=retrieval.loaded_embedding_deployment_id,
+        loaded_embedding_endpoint=retrieval.loaded_embedding_endpoint,
         loaded_startup=dict(deployment.applied_startup),
         loaded_knowledge=loaded,
         materialized_knowledge=list(materialized_knowledge or []),
         retrieval_requested=retrieval_requested,
         retrieval_presented=retrieval_presented,
         retrieval_corpus_documents=retrieval_corpus_documents,
-        bags=bags,
-        startup_mismatches=mismatches,
-        unsupported={
-            "startup": list(startup_selected.unsupported),
-            "per_request": list(per_request.unsupported),
-            "agent": list(agent.unsupported),
-        },
-        overridden={
-            "startup": [item.model_dump(mode="json") for item in startup_selected.overridden],
-            "per_request": [item.model_dump(mode="json") for item in per_request.overridden],
-            "agent": [item.model_dump(mode="json") for item in agent.overridden],
-        },
-        retired={
-            "startup": [item.model_dump(mode="json") for item in startup_selected.retired],
-        },
+        bags=resolved.bags,
+        startup_mismatches=resolved.mismatches,
+        unsupported=resolved.unsupported,
+        overridden=resolved.overridden,
+        retired=resolved.retired,
         system_prompt=system_prompt,
-        gaps=gaps,
+        gaps=retrieval.gaps,
         knowledge_binding=knowledge_refs.binding(),
     )
 

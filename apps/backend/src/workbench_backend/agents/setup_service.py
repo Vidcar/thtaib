@@ -682,25 +682,50 @@ class SetupService:
         execution continues to use the loaded snapshot. In particular, looking
         up that destination must not apply a subsequently edited model default.
         """
+        deployment, profile, bundle, name, loaded = self._model_selection_identity(configuration)
+        result = {}
+        if name:
+            result["model_selection"] = self._model_selection_setting(facts, profile, name, loaded)
+        if loaded:
+            result["loaded_model"] = ResolvedSetting(value=deployment.id, source=name or deployment.display_name,
+                source_id=deployment.id, inherited=True)
+        result["model_configuration_target"] = self._model_configuration_target_setting(bundle, profile, deployment)
+        return result
+
+    def _model_selection_identity(self, configuration: SetupConfiguration):
         deployment = self.manager.store.get_deployment(configuration.deployment_id or "")
         profile = self.manager.store.get_profile(configuration.model_configuration_id or configuration.profile_id or "")
         bundle_id = profile.bundle_id if profile and profile.bundle_id else deployment.bundle_id if deployment else configuration.bundle_id
         bundle = self.manager.store.get_bundle(bundle_id or "")
         name = bundle.display_name if bundle else deployment.display_name.removeprefix("managed:").removeprefix("connected:") if deployment else None
-        loaded = bool(deployment and deployment.status.value == "running" and deployment.health and deployment.health.healthy
+        return deployment, profile, bundle, name, self._deployment_counts_as_loaded(deployment)
+
+    @staticmethod
+    def _deployment_counts_as_loaded(deployment) -> bool:
+        return bool(deployment and deployment.status.value == "running" and deployment.health and deployment.health.healthy
             and (deployment.scope.value == "connected" or deployment.process_identity is not None))
-        result = {}
-        if name:
-            selected_source = facts.get("model_configuration_id") or facts.get("profile_id") or facts.get("deployment_id")
-            source = selected_source.source if selected_source else "Selected model"
-            if profile is None and source in {"Turn overrides", "Loaded model", "Selected model"}:
-                source = "Loaded model" if loaded else "Selected model"
-            result["model_selection"] = ResolvedSetting(value=f"{name} · {profile.display_name}" if profile else name,
-                source=source, source_id=selected_source.source_id if selected_source else None,
-                inherited=selected_source.inherited if selected_source else True)
-        if loaded:
-            result["loaded_model"] = ResolvedSetting(value=deployment.id, source=name or deployment.display_name,
-                source_id=deployment.id, inherited=True)
+
+    def _model_selection_setting(self, facts: dict, profile, name, loaded: bool) -> ResolvedSetting:
+        selected_source = facts.get("model_configuration_id") or facts.get("profile_id") or facts.get("deployment_id")
+        source = selected_source.source if selected_source else "Selected model"
+        return ResolvedSetting(value=f"{name} · {profile.display_name}" if profile else name,
+            source=self._model_selection_source(source, profile, loaded), source_id=selected_source.source_id if selected_source else None,
+            inherited=selected_source.inherited if selected_source else True)
+
+    @staticmethod
+    def _model_selection_source(source: str, profile, loaded: bool) -> str:
+        if profile is None and source in {"Turn overrides", "Loaded model", "Selected model"}:
+            return "Loaded model" if loaded else "Selected model"
+        return source
+
+    def _model_configuration_target_setting(self, bundle, profile, deployment) -> ResolvedSetting:
+        target = self._model_configuration_target(bundle, profile, deployment)
+        return ResolvedSetting(value=target.id if target else None,
+            source=f"{bundle.display_name} · {target.display_name}" if target and bundle else "No saved model configuration",
+            source_id=target.id if target else None, inherited=True, supported=bool(target),
+            unavailable_reason=None if target else "Connected models are configured by their external server." if deployment and deployment.scope.value == "connected" else "Choose a saved model configuration first.")
+
+    def _model_configuration_target(self, bundle, profile, deployment):
         target = None
         if bundle:
             configurations = [item for item in self.manager.store.list_profiles() if item.bundle_id == bundle.id]
@@ -710,11 +735,7 @@ class SetupService:
                 bound = self.manager.store.get_profile(deployment.profile_id)
                 if bound and bound.bundle_id == bundle.id:
                     target = next((item for item in configurations if item.id == bound.id), None)
-        result["model_configuration_target"] = ResolvedSetting(value=target.id if target else None,
-            source=f"{bundle.display_name} · {target.display_name}" if target and bundle else "No saved model configuration",
-            source_id=target.id if target else None, inherited=True, supported=bool(target),
-            unavailable_reason=None if target else "Connected models are configured by their external server." if deployment and deployment.scope.value == "connected" else "Choose a saved model configuration first.")
-        return result
+        return target
 
     def _resolve_model_selector_layer(self, values: dict, effective: dict, explicit: dict) -> None:
         """A higher model choice cannot be replaced by a lower incompatible one."""

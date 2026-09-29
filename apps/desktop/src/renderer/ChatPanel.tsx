@@ -31,8 +31,11 @@ import type { AgentInputPolicy, CapabilitySetupRequest } from "./agentInputPolic
 import { ChatRetainedFiles, useChatRetainedAssets } from "./ChatRetainedFiles";
 import { copyRetainedAsset } from "./retainedFiles";
 import { ChatDraftWriter, sameDraftValue } from "./chatDraftWriter";
-import { notifyAttentionChanged } from "./AttentionPanel";
 import { ChatHistoryActions } from "./ChatHistoryActions";
+import { applyExecutionPreferences as applyExecutionPreferencesAction, type ExecutionPreferences } from "./chatPanelExecution";
+import { applyConversationUpdate as applyConversationUpdateAction, chooseConversation as chooseConversationAction, reconcileHistory as reconcileHistoryAction, removeConversation as removeConversationAction, selectConversation as selectConversationAction } from "./chatPanelConversation";
+import { recoverRun as recoverRunAction, stopCurrentWork as stopCurrentWorkAction } from "./chatPanelRunControls";
+import { configureCapability as configureCapabilityAction, createDraftConversation as createDraftConversationAction, editInputs as editInputsAction } from "./chatPanelComposerActions";
 import { ChatQueuePanel } from "./ChatQueuePanel";
 import { AgentMessageFeed, helperKey } from "./AgentMessageFeed";
 import { RunActivitySummary, helperApprovalOwner } from "./RunActivitySummary";
@@ -96,8 +99,6 @@ interface PendingChatSubmit {
   helper_agent_ids?: string[];
   review?: { enabled: boolean; criteria: string; max_revisions: 2 };
 }
-
-type ExecutionPreferences = { work_mode?: "work" | "plan"; desktop_access?: DesktopAccess; helper_agent_ids?: string[]; review?: { enabled?: boolean; criteria?: string; max_revisions?: number } };
 
 const nonBlockingReadinessIssues = new Set(["chat_turn_active", "model_load_required", "readiness_unavailable"]);
 
@@ -1072,10 +1073,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }
 
   function applyExecutionPreferences(config: ExecutionPreferences) {
-    setWorkMode(config.work_mode === "plan" ? "plan" : "work");
-    setDesktopAccess(config.desktop_access ?? "off");
-    setHelperAgentIds(config.helper_agent_ids ?? []);
-    setReview({ enabled: config.review?.enabled === true, criteria: config.review?.criteria ?? "", max_revisions: 2 });
+    applyExecutionPreferencesAction(config, { setWorkMode, setDesktopAccess, setHelperAgentIds, setReview });
   }
 
   async function chooseSetup(nextProjectId: string | null, nextVersionId: string | null, overrides: SetupConfiguration = {}, preserveWorkspace = false, rejectOnFailure = false) {
@@ -1358,217 +1356,44 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }
 
   function chooseConversation(item: ChatConversation): void {
-    void persistBeforeLeaving().then(() => selectConversation(item)).catch(fail);
+    chooseConversationAction(item, { persistBeforeLeaving, selectConversation, fail });
   }
 
   function selectConversation(item: ChatConversation): void {
-    if (historyMutations.current.get(item.id) === "deleted") return;
-    setShowInputs(false);
-    const requestId = selectionRequest.current + 1;
-    selectionRequest.current = requestId;
-    setupRequest.current += 1;
-    activeOwner.current = { conversationId: null, threadId: null, generation: requestId };
-    setBoundGeneration(requestId);
-    setConversation(null);
-    setInteractionThreadId(null);
-    setSelectionLoading(item);
-    setSelectionFailure(null);
-    setMessage("");
-    setPendingSubmit(null);
-    setPendingStop(null);
-    setSending(false);
-    void api
-      .chatConversation(item.id)
-      .then(async (next) => {
-        if (selectionRequest.current !== requestId || historyMutations.current.get(item.id) === "deleted") {
-          return;
-        }
-        cacheConversation(next);
-        const draftConfig = next.draft?.intended_config ?? {};
-        setModelOverrides((draftConfig.model_overrides ?? {}) as NonNullable<SetupConfiguration["model_overrides"]>);
-        setInheritedModelConfiguration((draftConfig.inherited_model_configuration ?? null) as SetupConfiguration | null);
-        setContextEntryIds([...(draftConfig.memory_entry_ids as string[] ?? []), ...(draftConfig.protected_instruction_entry_ids as string[] ?? [])]);
-        setContextKinds(Object.fromEntries([...(draftConfig.memory_entry_ids as string[] ?? []).map(id => [id, "memory"]), ...(draftConfig.protected_instruction_entry_ids as string[] ?? []).map(id => [id, "instruction"])]));
-        setMessageSkillIds((draftConfig.skill_entry_ids as string[]) ?? []); setShortcutIds((draftConfig.shortcut_ids as string[]) ?? []);
-        setProjectFileRefs((draftConfig.project_file_refs as string[]) ?? []); setPicker(null);
-        const restoredAgentId = Object.hasOwn(draftConfig, "agent_setup_id") ? typeof draftConfig.agent_setup_id === "string" ? draftConfig.agent_setup_id : null : next.agent_setup_id ?? null;
-        setAgentSetupId(restoredAgentId);
-        const nextProjectId = typeof draftConfig.project_id === "string" ? draftConfig.project_id : next.project_id ?? null;
-        const nextVersionId = Object.hasOwn(draftConfig, "agent_setup_id") ? agentSetups.find(item => item.id === restoredAgentId)?.current_version_id ?? null : Object.hasOwn(draftConfig, "agent_setup_version_id") ? typeof draftConfig.agent_setup_version_id === "string" ? draftConfig.agent_setup_version_id : null : next.agent_setup_version_id ?? null;
-        const draftSelectsConfiguration = Object.hasOwn(draftConfig, "model_configuration_id") || Object.hasOwn(draftConfig, "profile_id");
-        const nextConfigurationId = draftSelectsConfiguration
-          ? typeof draftConfig.model_configuration_id === "string" ? draftConfig.model_configuration_id
-            : typeof draftConfig.profile_id === "string" ? draftConfig.profile_id : ""
-          : next.setup_overrides?.model_configuration_id ?? next.profile_id ?? "";
-        const boundDraftDeploymentId = boundDeploymentForModelIntent(next, nextConfigurationId, draftConfig.startup_overrides);
-        const nextDeploymentId = Object.hasOwn(draftConfig, "deployment_id")
-          ? typeof draftConfig.deployment_id === "string" && draftConfig.deployment_id ? draftConfig.deployment_id : boundDraftDeploymentId
-          : draftSelectsConfiguration ? boundDraftDeploymentId : next.deployment_id;
-        // Selecting another saved agent resets the previous agent's overrides,
-        // just as dispatch does. A restored draft keeps only its own new edits.
-        const priorOverrides = nextVersionId === (next.agent_setup_version_id ?? null) ? next.setup_overrides ?? {} : {};
-        const overrides = setupOverrides({ ...priorOverrides, ...draftConfig,
-          deployment_id: nextDeploymentId || null, model_configuration_id: nextConfigurationId || null });
-        // The fetched chat and draft can be shown while thread registration
-        // and setup resolution finish. Selection ownership still prevents a
-        // late response from rebinding a different chat.
-        setConversation(next);
-        setProjectId(nextProjectId); setAgentSetupVersionId(nextVersionId);
-        setDeploymentId(nextDeploymentId);
-        profileIdRef.current = nextConfigurationId;
-        setProfileId(nextConfigurationId);
-        setTask(next.draft?.content ?? "");
-        setAttachmentIds(next.draft?.attachment_ids ?? []);
-        setDocumentAssetIds(Array.isArray(draftConfig.document_asset_ids) ? draftConfig.document_asset_ids as string[] : null);
-        setSetupResolving(true);
-        const registration = api.registerAgentInteractionThread({ source_surface: "chat", conversation_id: next.id });
-        let resolutionFailure = "";
-        const resolution = nextProjectId || nextVersionId || hasApplicationDefaults || (nextConfigurationId && !nextDeploymentId)
-          ? workspaceApi.resolveSetup(nextProjectId, nextVersionId, overrides).catch(error => { resolutionFailure = errorMessage(error); return null; })
-          : Promise.resolve(null);
-        const [registered, resolved] = await Promise.all([registration, resolution]);
-        if (selectionRequest.current !== requestId || historyMutations.current.get(item.id) === "deleted") return;
-        setupRequest.current += 1;
-        setSetupResolving(false); setSetupError(resolutionFailure);
-        setupEditedFields.current = new Set(Object.keys(overrides));
-        if (overrides.approval_mode == null) setupEditedFields.current.delete("approval_mode");
-        activeOwner.current = { conversationId: next.id, threadId: registered.thread_id, generation: requestId };
-        setBoundGeneration(requestId);
-        setInteractionThreadId(registered.thread_id);
-        setSelectionLoading(null);
-        setEmbeddingDeploymentId(typeof draftConfig.embedding_deployment_id === "string" ? draftConfig.embedding_deployment_id : next.embedding_deployment_id ?? "");
-        setStartupOverrides(overrides.startup_overrides ?? {});
-        setApprovalMode(approvalModeOf(overrides.approval_mode ?? (resolved ? resolved.configuration.approval_mode : next.approval_mode)));
-        setPerRequestOverrides(draftConfig.per_request_overrides && typeof draftConfig.per_request_overrides === "object" ? draftConfig.per_request_overrides as Record<string, unknown> : {});
-        setSelectedTools(overrides.presented_tools ?? null);
-        setInputPolicy(overrides.input_policy ?? null);
-        setLocalInstructions(overrides.instructions ?? null);
-        applyExecutionPreferences({ ...(next as ExecutionPreferences), ...draftConfig } as ExecutionPreferences);
-        setProjectPath(next.project_path ?? "");
-        setSelectedKnowledgeIds([
-          ...((draftConfig.knowledge_version_refs as string[] | undefined) ?? [
-            ...(next.memory_version_refs ?? []), ...(next.skill_version_refs ?? []), ...(next.protected_instruction_version_refs ?? []),
-          ]),
-        ]);
-        if (resolved) {
-          applyResolvedSetup(resolved, next.memory_version_refs ?? []);
-          if (Array.isArray(draftConfig.knowledge_version_refs)) setSelectedKnowledgeIds(draftConfig.knowledge_version_refs as string[]);
-        }
-        else setInstructionLayers([]);
-        const resolvedDeploymentId = nextConfigurationId && resolved?.configuration.model_configuration_id === nextConfigurationId
-          ? resolved.configuration.deployment_id || nextDeploymentId : nextDeploymentId;
-        setDeploymentId(resolvedDeploymentId);
-        profileIdRef.current = nextConfigurationId;
-        setProfileId(nextConfigurationId);
-        serverDraftRevision.current = next.draft?.revision ?? 0;
-        draftRevision.current += 1;
-        setMessage("");
-      })
-      .catch((error: unknown) => {
-        if (selectionRequest.current === requestId) {
-          if (error instanceof ApiError && error.status === 404 && error.code === "chat_missing") {
-            historyMutations.current.set(item.id, "deleted");
-            setConversations(current => current.filter(value => value.id !== item.id));
-            props.conversationListRef?.current?.forget(item.id);
-            startFresh();
-            setMessage("That conversation is no longer available. You can start a new chat.");
-            return;
-          }
-          setSetupResolving(false);
-          // Keep the fetched transcript visible, but do not enable Send until
-          // a retry establishes the interaction thread and selection owner.
-          setSelectionFailure({ id: item.id, message: `Could not open this chat: ${errorMessage(error)}` });
-        }
-      });
-  }
-
-  function applyConversationUpdate(next: ChatConversation): void {
-    if (historyMutations.current.get(next.id) === "deleted") return;
-    cacheConversation(next);
-    setConversation(current => current?.id === next.id ? next : current);
-  }
-
-  function reconcileHistory(items: ChatConversation[]): ChatConversation[] {
-    return items.filter(item => historyMutations.current.get(item.id) !== "deleted").map(item => {
-      const archived = historyMutations.current.get(item.id);
-      return typeof archived === "boolean" ? { ...item, archived } : item;
+    selectConversationAction(item, {
+      historyMutations, setShowInputs, selectionRequest, setupRequest, activeOwner, setBoundGeneration, setConversation,
+      setInteractionThreadId, setSelectionLoading, setSelectionFailure, setMessage, setPendingSubmit, setPendingStop, setSending,
+      cacheConversation, setModelOverrides, setInheritedModelConfiguration, setContextEntryIds, setContextKinds, setMessageSkillIds,
+      setShortcutIds, setProjectFileRefs, setPicker, setAgentSetupId, agentSetups, setProjectId, setAgentSetupVersionId,
+      boundDeploymentForModelIntent, setDeploymentId, profileIdRef, setProfileId, setTask, setAttachmentIds, setDocumentAssetIds,
+      setSetupResolving, hasApplicationDefaults, setSetupError, setupEditedFields, setEmbeddingDeploymentId, setStartupOverrides,
+      setApprovalMode, setPerRequestOverrides, setSelectedTools, setInputPolicy, setLocalInstructions, applyExecutionPreferences,
+      setProjectPath, setSelectedKnowledgeIds, applyResolvedSetup, setInstructionLayers, serverDraftRevision, draftRevision,
+      setConversations, props, startFresh,
     });
   }
 
+  function applyConversationUpdate(next: ChatConversation): void {
+    applyConversationUpdateAction(next, { historyMutations, cacheConversation, setConversation });
+  }
+
+  function reconcileHistory(items: ChatConversation[]): ChatConversation[] {
+    return reconcileHistoryAction(items, { historyMutations });
+  }
+
   function removeConversation(id: string): void {
-    historyMutations.current.set(id, "deleted");
-    notifyAttentionChanged();
-    setConversations(current => current.filter(item => item.id !== id));
-    if (activeOwner.current.conversationId === id || selectionLoading?.id === id || conversation?.id === id) startFresh();
+    removeConversationAction(id, { historyMutations, setConversations, activeOwner, selectionLoading, conversation, startFresh });
   }
 
   function stopCurrentWork(): void {
-    if (!conversation || !interactionThreadId) {
-      return;
-    }
-    const owner = {
-      conversationId: conversation.id,
-      threadId: interactionThreadId,
-      generation: boundGeneration,
-    };
-    if (pendingSubmissionActive && pendingSubmit) {
-      const stopRequest = {
-        id: pendingSubmit.id,
-        conversation_id: pendingSubmit.conversation_id,
-        thread_id: pendingSubmit.thread_id,
-        selection_generation: pendingSubmit.selection_generation,
-      };
-      setPendingStop(stopRequest);
-      void api.cancelChat(conversation.id, pendingSubmit.id)
-        .then((next) => {
-          if (!isCurrentOwner(owner)) {
-            cacheConversation(next);
-            return;
-          }
-          cacheConversation(next);
-          setConversation(next);
-          // This response acknowledges the stop claim. The submission owner
-          // still resolves acceptance or failure while model loading unwinds.
-        })
-        .catch((error: unknown) => {
-          if (isCurrentOwner(owner)) {
-            setPendingStop((current) => (current?.id === stopRequest.id ? null : current));
-            fail(error);
-          }
-        });
-      return;
-    }
-    if (conversation.current_run?.finalization_phase === "saving_changes") {
-      return;
-    }
-    if (!conversation.current_run) {
-      return;
-    }
-    const cancelledRunId = conversation.current_run.id;
-    void api.cancelAgentRun(cancelledRunId)
-      .then((next) => {
-        updateConversationForRun({ ...conversation, current_run: next, current_run_id: next.id }, owner, cancelledRunId);
-      })
-      .catch((error: unknown) => {
-        if (isCurrentOwner(owner)) {
-          fail(error);
-        }
-      });
+    stopCurrentWorkAction({
+      conversation, interactionThreadId, boundGeneration, pendingSubmissionActive, pendingSubmit, setPendingStop,
+      isCurrentOwner, cacheConversation, setConversation, fail, updateConversationForRun,
+    });
   }
 
   function recoverRun(run: AgentRun) {
-    const action = run.failure?.recovery_action;
-    if (action === "inspect_effects" || action === "ask") {
-      setRecoveryRun(run);
-      openRail("files");
-    } else if (action === "change_limit") {
-      navigateAway("models");
-    } else if (action === "correct_setup") {
-      navigateAway("agents");
-    } else {
-      if (!task.trim()) updateTask("Continue from the confirmed results. Inspect existing work before repeating any action.");
-      document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.focus();
-    }
+    recoverRunAction(run, { setRecoveryRun, openRail, navigateAway, task, updateTask });
   }
 
   async function acknowledgeEffects() {
@@ -1708,14 +1533,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }
 
   function createDraftConversation(): Promise<ChatConversation> {
-    const generation = selectionRequest.current;
-    if (conversationCreation.current?.generation === generation) return conversationCreation.current.promise;
-    const promise = api.createChatConversation(chatCreationConfiguration()).catch(error => {
-      if (conversationCreation.current?.promise === promise) conversationCreation.current = null;
-      throw error;
-    });
-    conversationCreation.current = { generation, promise };
-    return promise;
+    return createDraftConversationAction({ selectionRequest, conversationCreation, chatCreationConfiguration });
   }
 
   async function persistBeforeLeaving(): Promise<ChatConversation | null> {
@@ -1738,14 +1556,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }
 
   function editInputs(configuration: SetupConfiguration): void {
-    draftRevision.current += 1;
-    markSetupEdited("input_policy");
-    setInputPolicy(configuration.input_policy ?? null);
-    if (Object.hasOwn(configuration, "instructions")) {
-      markSetupEdited("instructions");
-      setLocalInstructions(configuration.instructions ?? "");
-    }
-    setReadinessEpoch(value => value + 1);
+    editInputsAction(configuration, { draftRevision, markSetupEdited, setInputPolicy, setLocalInstructions, setReadinessEpoch });
   }
 
   async function saveInputsToAgent(name?: string): Promise<void> {
@@ -1817,13 +1628,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }
 
   function configureCapability(setup: CapabilitySetupRequest): void {
-    if (setup.target === "browser") { openRail("browser"); return; }
-    if (setup.target === "windows") { setToolMenuRequest(value => value + 1); return; }
-    if (setup.target === "context") { setShowInputs(true); return; }
-    if (setup.target === "settings") {
-      try { sessionStorage.setItem("workbench.settings.category", "Connections"); } catch { /* Settings still opens. */ }
-      navigateAway("settings", setup.target_id ?? undefined);
-    } else navigateAway(setup.target === "agent" ? "agents" : setup.target === "project" ? "projects" : "knowledge", setup.target_id ?? (setup.target === "agent" ? selectedAgent?.id : setup.target === "project" ? projectId ?? undefined : undefined));
+    configureCapabilityAction(setup, { openRail, setToolMenuRequest, setShowInputs, navigateAway, selectedAgent, projectId });
   }
 
   function openPermissions(): void {

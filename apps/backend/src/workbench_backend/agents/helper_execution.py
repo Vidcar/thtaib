@@ -184,6 +184,54 @@ def _child_run(owner, parent, snapshot, call_id, payload):
     return _child_run_record(parent, snapshot, config, payload, child_id, deployment, input_policy, presented, selected_tools, approval, work_mode, desktop_access, setup, refs, selected_connections, connection_snapshots)
 
 
+def _open_child_activity(owner, parent, snapshot, call_id, namespace, child_id):
+    with owner._lock:
+        activity = next((item for item in parent.child_runs if item.tool_call_id == call_id), None)
+        if activity is None:
+            activity = ChildRunActivity(run_id=child_id, agent_id=snapshot.agent_id,
+                version_id=snapshot.version_id, name=snapshot.name, namespace=namespace, tool_call_id=call_id)
+            parent.child_runs.append(activity)
+        activity.status = "waiting for model"
+        activity.error = None
+        owner._persist_and_notify(parent)
+    return activity
+
+
+def _relative_child_namespace(child_namespace, activity_namespace):
+    return (child_namespace[len(activity_namespace):]
+        if child_namespace[:len(activity_namespace)] == activity_namespace else
+        child_namespace[1:] if child_namespace[:1] == ["tools"] else child_namespace)
+
+
+async def _apply_helper_stream_event(owner, parent, child, activity, event, seen_messages, message_nodes, result):
+    params = event.get("params") if isinstance(event, dict) else None
+    if not isinstance(params, dict):
+        return result
+    child_namespace = list(params.get("namespace") or [])
+    # The child graph may report its root with the
+    # checkpoint namespace. Rebase only this task's
+    # prefix; older nested streams used plain "tools".
+    relative_namespace = _relative_child_namespace(child_namespace, activity.namespace)
+    local = {**event, "params": {**params, "namespace": relative_namespace}}
+    scoped = {**event, "params": {**params, "namespace": [*activity.namespace, *relative_namespace]}}
+    try:
+        await asyncio.to_thread(owner._observe_interaction, parent, scoped)
+    except Exception as exc:  # noqa: BLE001 - live output must be durable
+        raise owner._interaction_persistence_failure(parent, exc) from exc
+    await asyncio.to_thread(owner._ingest_native_event, child, local, seen_messages, message_nodes)
+    if params.get("interrupts"):
+        from workbench_backend.agents.harness import _pending_from_native_event
+        child.pending_interrupt = _pending_from_native_event(scoped)
+        raise GraphInterrupt(params["interrupts"])
+    if event.get("method") == "values" and not relative_namespace:
+        values = params.get("data")
+        if isinstance(values, tuple):
+            values = values[0]
+        if isinstance(values, dict):
+            result = values
+    return result
+
+
 def compiled_helpers(owner, parent, control, *, inspection_only=False):
     specs = []
     for snapshot in parent.helper_snapshots:
@@ -195,15 +243,7 @@ def compiled_helpers(owner, parent, control, *, inspection_only=False):
             if not namespace:
                 namespace = [f"tools:{call_id}"]
             child_id = _child_run_id(parent, snapshot, call_id)
-            with owner._lock:
-                activity = next((item for item in parent.child_runs if item.tool_call_id == call_id), None)
-                if activity is None:
-                    activity = ChildRunActivity(run_id=child_id, agent_id=snapshot.agent_id,
-                        version_id=snapshot.version_id, name=snapshot.name, namespace=namespace, tool_call_id=call_id)
-                    parent.child_runs.append(activity)
-                activity.status = "waiting for model"
-                activity.error = None
-                owner._persist_and_notify(parent)
+            activity = _open_child_activity(owner, parent, snapshot, call_id, namespace, child_id)
 
             child = None
             def admit():
@@ -237,33 +277,7 @@ def compiled_helpers(owner, parent, control, *, inspection_only=False):
                     try:
                         stream = await graph.astream_events(payload, config=config, version="v3")
                         async for event in stream:
-                            params = event.get("params") if isinstance(event, dict) else None
-                            if not isinstance(params, dict):
-                                continue
-                            child_namespace = list(params.get("namespace") or [])
-                            # The child graph may report its root with the
-                            # checkpoint namespace. Rebase only this task's
-                            # prefix; older nested streams used plain "tools".
-                            relative_namespace = (child_namespace[len(activity.namespace):]
-                                if child_namespace[:len(activity.namespace)] == activity.namespace else
-                                child_namespace[1:] if child_namespace[:1] == ["tools"] else child_namespace)
-                            local = {**event, "params": {**params, "namespace": relative_namespace}}
-                            scoped = {**event, "params": {**params, "namespace": [*activity.namespace, *relative_namespace]}}
-                            try:
-                                await asyncio.to_thread(owner._observe_interaction, parent, scoped)
-                            except Exception as exc:  # noqa: BLE001 - live output must be durable
-                                raise owner._interaction_persistence_failure(parent, exc) from exc
-                            await asyncio.to_thread(owner._ingest_native_event, child, local, seen_messages, message_nodes)
-                            if params.get("interrupts"):
-                                from workbench_backend.agents.harness import _pending_from_native_event
-                                child.pending_interrupt = _pending_from_native_event(scoped)
-                                raise GraphInterrupt(params["interrupts"])
-                            if event.get("method") == "values" and not relative_namespace:
-                                values = params.get("data")
-                                if isinstance(values, tuple):
-                                    values = values[0]
-                                if isinstance(values, dict):
-                                    result = values
+                            result = await _apply_helper_stream_event(owner, parent, child, activity, event, seen_messages, message_nodes, result)
                     finally:
                         await owner._close_native_stream(stream)
                     if result is None:

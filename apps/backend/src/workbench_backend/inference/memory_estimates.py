@@ -831,6 +831,34 @@ class MemoryEstimator:
                 result.assumptions.append("Context marker assumes all eligible layers on this GPU and excludes unknown overhead; it does not verify a fit.")
 
     def _native_prediction(self, bundle, request, result):
+        manifest, executable, bags, selected, projector, identities = self._prepare_native_planner(bundle, request)
+        key = json.dumps([manifest.executable, manifest.sha256, manifest.memory_planner_sha256,
+                          manifest.memory_planner_native_fingerprint, identities, selected], sort_keys=True)
+        with self._lock:
+            cached = self._native.get(key)
+        if cached and not request.refresh and time.monotonic() - cached[0] < 30:
+            prediction = cached[1]
+        else:
+            if not self._worker.acquire(timeout=0.1):
+                raise ValueError("Native memory prediction is busy; retry shortly.")
+            try:
+                if not bundle.primary_path:
+                    raise ValueError("The model's primary GGUF is unavailable; its allocation is unknown.")
+                arguments = [str(executable), "-m", bundle.primary_path, *startup_cli_args(selected)]
+                if projector:
+                    arguments.extend(["--mmproj", projector.path])
+                prediction = self._validate_native(json.loads(_bounded_native(arguments)), manifest)
+                prediction["evaluated_startup"] = {**selected, **prediction["evaluated_startup"]}
+                prediction["estimated_at"] = utc_now()
+                with self._lock:
+                    self._native[key] = time.monotonic(), prediction
+                    while len(self._native) > 32:
+                        self._native.popitem(last=False)
+            finally:
+                self._worker.release()
+        self._apply_native_prediction(result, prediction, manifest, bundle, bags, selected)
+
+    def _prepare_native_planner(self, bundle, request):
         manifest = self.manager.runtime.current()
         executable = require_planner(manifest)
         bags = resolve_bags(startup=request.startup)
@@ -858,30 +886,10 @@ class MemoryEstimator:
                 raise ValueError("The selected draft model is unavailable; its allocation is unknown.")
             stat = path.stat()
             identities.append(_cache_key(path))
-        key = json.dumps([manifest.executable, manifest.sha256, manifest.memory_planner_sha256,
-                          manifest.memory_planner_native_fingerprint, identities, selected], sort_keys=True)
-        with self._lock:
-            cached = self._native.get(key)
-        if cached and not request.refresh and time.monotonic() - cached[0] < 30:
-            prediction = cached[1]
-        else:
-            if not self._worker.acquire(timeout=0.1):
-                raise ValueError("Native memory prediction is busy; retry shortly.")
-            try:
-                if not bundle.primary_path:
-                    raise ValueError("The model's primary GGUF is unavailable; its allocation is unknown.")
-                arguments = [str(executable), "-m", bundle.primary_path, *startup_cli_args(selected)]
-                if projector:
-                    arguments.extend(["--mmproj", projector.path])
-                prediction = self._validate_native(json.loads(_bounded_native(arguments)), manifest)
-                prediction["evaluated_startup"] = {**selected, **prediction["evaluated_startup"]}
-                prediction["estimated_at"] = utc_now()
-                with self._lock:
-                    self._native[key] = time.monotonic(), prediction
-                    while len(self._native) > 32:
-                        self._native.popitem(last=False)
-            finally:
-                self._worker.release()
+        return manifest, executable, bags, selected, projector, identities
+
+    @staticmethod
+    def _apply_native_prediction(result, prediction, manifest, bundle, bags, selected):
         result.source = "native_prediction"
         result.estimated_at = prediction["estimated_at"]
         result.evaluated_startup = prediction["evaluated_startup"]
@@ -918,19 +926,49 @@ class MemoryEstimator:
 
     @staticmethod
     def _validate_native(payload, manifest):
+        MemoryEstimator._validate_native_protocol(payload, manifest)
+        rows = MemoryEstimator._validate_native_host_row(payload)
+        components = MemoryEstimator._validate_native_component_status(payload)
+        MemoryEstimator._validate_native_device_rows(rows, components)
+        for key in ("effective_context", "effective_context_per_slot", "effective_parallel", "context_maximum"):
+            if type(payload.get(key)) is not int or not 0 < payload[key] < 2**32:
+                raise ValueError("The native context capacity is invalid.")
+        if type(payload.get("kv_unified")) is not bool:
+            raise ValueError("The native context policy is invalid.")
+        if payload["effective_context_per_slot"] > min(payload["effective_context"], payload["context_maximum"]):
+            raise ValueError("The native per-chat capacity exceeds the available context pool.")
+        if payload["completeness"] == "complete" and "unavailable" in components.values():
+            raise ValueError("The native allocation result incorrectly marks unknown memory as complete.")
+        if not isinstance(payload.get("unknown_reasons"), list) or any(not isinstance(reason, str) for reason in payload["unknown_reasons"]):
+            raise ValueError("The native allocation diagnostics are invalid.")
+        return payload
+
+    @staticmethod
+    def _validate_native_protocol(payload, manifest):
         if (not isinstance(payload, dict) or payload.get("protocol") != PROTOCOL
                 or payload.get("native_build") != 11045 or payload.get("native_commit") != COMMIT
                 or payload.get("native_fingerprint") != manifest.memory_planner_native_fingerprint
                 or payload.get("completeness") not in {"complete", "partial"}):
             raise ValueError("The native allocation result does not match the selected runtime.")
+
+    @staticmethod
+    def _validate_native_host_row(payload):
         rows = payload.get("devices")
         if not isinstance(rows, list) or not rows or not any(row.get("id") == "Host" for row in rows if isinstance(row, dict)):
             raise ValueError("The native allocation result contains no usable device breakdown.")
+        return rows
+
+    @staticmethod
+    def _validate_native_component_status(payload):
         components = payload.get("components")
         if (not isinstance(payload.get("evaluated_startup"), dict) or not isinstance(components, dict)
                 or components.get("target") != "measured" or any(components.get(key) not in
                     {"measured", "not_selected", "unavailable"} for key in ("projector", "speculation"))):
             raise ValueError("The native component allocation status is invalid.")
+        return components
+
+    @staticmethod
+    def _validate_native_device_rows(rows, components):
         for row in rows:
             if not isinstance(row, dict) or not isinstance(row.get("id"), str):
                 raise ValueError("The native allocation device breakdown is invalid.")
@@ -946,15 +984,3 @@ class MemoryEstimator:
                     raise ValueError("The native allocation device breakdown is invalid.")
             if row["total_bytes"] is not None and row["total_bytes"] != sum(row[key] for key in ("weights_bytes", "kv_bytes", "runtime_overhead_bytes", "projector_bytes")):
                 raise ValueError("The native allocation totals are inconsistent.")
-        for key in ("effective_context", "effective_context_per_slot", "effective_parallel", "context_maximum"):
-            if type(payload.get(key)) is not int or not 0 < payload[key] < 2**32:
-                raise ValueError("The native context capacity is invalid.")
-        if type(payload.get("kv_unified")) is not bool:
-            raise ValueError("The native context policy is invalid.")
-        if payload["effective_context_per_slot"] > min(payload["effective_context"], payload["context_maximum"]):
-            raise ValueError("The native per-chat capacity exceeds the available context pool.")
-        if payload["completeness"] == "complete" and "unavailable" in components.values():
-            raise ValueError("The native allocation result incorrectly marks unknown memory as complete.")
-        if not isinstance(payload.get("unknown_reasons"), list) or any(not isinstance(reason, str) for reason in payload["unknown_reasons"]):
-            raise ValueError("The native allocation diagnostics are invalid.")
-        return payload
