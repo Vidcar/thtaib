@@ -482,8 +482,9 @@ def _validate_admitted_history(service, admitted):
             output_schema=request.output_schema,
             structured_output=structured_output,
         )
+        from workbench_backend.agents.harness_compile import graph_checkpoint_snapshot
         validation_agent = service._create_compiled_agent(validation_run, [], None, inspection_only=True)
-        snapshot = harness_module._graph_checkpoint_snapshot(
+        snapshot = graph_checkpoint_snapshot(
             validation_agent,
             request.thread_id,
             request.resume_checkpoint_id,

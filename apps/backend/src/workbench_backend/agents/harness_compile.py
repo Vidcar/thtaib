@@ -6,7 +6,9 @@ from typing import Any
 from deepagents import create_deep_agent
 from deepagents.backends import StateBackend
 from langchain.agents.middleware import HumanInTheLoopMiddleware, TodoListMiddleware
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
+from langchain_core.outputs import ChatResult
 
 from workbench_backend.agents.context import (
     ContextObservation,
@@ -113,7 +115,7 @@ def _bind_compiled_model(service, parts, run, http_sink, *, inspection_only):
     execution_control = parts.execution_control
     knowledge_plan = parts.knowledge_plan
 
-    model = harness_module._CheckpointInspectionModel() if inspection_only else service._model_factory(run, http_sink)
+    model = _CheckpointInspectionModel() if inspection_only else service._model_factory(run, http_sink)
     media_profile = dict(model.profile) if isinstance(model.profile, dict) else {}
     agent_kwargs: dict[str, Any] = {}
     capture_backend = None
@@ -399,3 +401,114 @@ def _compile_deep_agent(service, parts, run, http_sink, fixture_bank, *, inspect
         checkpointer=open_sqlite_checkpointer(service.manager.paths.checkpoints_db),
         **agent_kwargs,
     )
+
+
+def graph_checkpoint_snapshot(agent: Any, thread_id: str | None, checkpoint_id: str | None) -> Any:
+    if not thread_id or not checkpoint_id:
+        raise HarnessError(
+            "The requested checkpoint identity is incomplete.",
+            code="checkpoint_resume_missing",
+            status_code=409,
+        )
+    try:
+        snapshot = agent.get_state(
+            {
+                "configurable": {
+                    "thread_id": thread_id,
+                    "checkpoint_ns": "",
+                    "checkpoint_id": checkpoint_id,
+                }
+            }
+        )
+    except Exception as exc:
+        raise HarnessError(
+            "The requested checkpoint could not be reconstructed by the agent graph.",
+            code="checkpoint_resume_invalid",
+            status_code=409,
+        ) from exc
+    if snapshot is None:
+        raise HarnessError(
+            "The requested checkpoint is unavailable.",
+            code="checkpoint_resume_missing",
+            status_code=409,
+        )
+    if getattr(snapshot, "values", None) is None:
+        raise HarnessError(
+            "The requested checkpoint has no reconstructed graph state.",
+            code="checkpoint_resume_invalid",
+            status_code=409,
+        )
+    return snapshot
+
+
+class _CheckpointInspectionModel(BaseChatModel):
+    """Inert model used only to compile Deep Agents for checkpoint reads."""
+
+    @property
+    def _llm_type(self) -> str:
+        return "checkpoint-inspection"
+
+    def bind_tools(self, _tools: list[Any], **_kwargs: Any) -> "_CheckpointInspectionModel":
+        return self
+
+    def _generate(
+        self,
+        _messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **_kwargs: Any,
+    ) -> ChatResult:
+        raise RuntimeError("Checkpoint inspection graph must not execute inference.")
+
+    async def _agenerate(
+        self,
+        _messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **_kwargs: Any,
+    ) -> ChatResult:
+        raise RuntimeError("Checkpoint inspection graph must not execute inference.")
+
+
+class _CheckpointInspectionVectorStore:
+    def similarity_search(self, *_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("Checkpoint inspection graph must not execute retrieval.")
+
+
+def screenshot_reading_available(manager, run: AgentRun) -> bool:
+    """Read existing setup evidence without dispatching a capability probe.
+
+    Handoff refresh happens while the whole graph is paused. Its optional
+    image observation must not start model work behind that barrier.
+    """
+
+    from workbench_backend.inference.adapter import image_model_profile
+    try:
+        per_request = run.effective_setup.bags.per_request if run.effective_setup else None
+        return bool(image_model_profile(manager.get_deployment(run.deployment_id), per_request).get("image_tool_message"))
+    except Exception:
+        return False
+
+
+def prepare_screenshot_reading(manager, run: AgentRun, *, model: BaseChatModel | None = None) -> bool:
+    """Prove screenshot delivery once for this loaded setup, then remember it."""
+
+    from workbench_backend.inference.adapter import image_model_profile
+    from workbench_backend.inference.probes import ensure_tool_image_support
+    from workbench_backend.inference.telemetry import request_purpose
+
+    per_request = run.effective_setup.bags.per_request if run.effective_setup is not None else None
+    try:
+        with request_purpose("probe"):
+            ready = ensure_tool_image_support(manager, run.deployment_id, per_request)
+        if model is not None:
+            # The compiled agent predates this evidence. Refresh its actual
+            # model before upstream filtering, preserving the context budget.
+            model.profile = {**(model.profile or {}), **image_model_profile(
+                manager.get_deployment(run.deployment_id), per_request,
+            )}
+        return ready
+    except Exception:
+        if model is not None:
+            model.profile = {**(model.profile or {}), "image_inputs": False, "image_tool_message": False}
+        return False
