@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { ModelPresetPanel } from "./ModelPresetPanel";
 import { ModelDeletion } from "./ModelDeletion";
 import type { ModelInspectorConnection, ModelInspectorView } from "./ModelInspector";
-import { api } from "./api";
+import { api, ApiError } from "./api";
 import { formatBytes } from "./display";
 import { errorMessage } from "./errors";
 import { ChoiceControl, ContextSlider, numberChoices, tokenLabel } from "./ModelControls";
@@ -34,8 +34,12 @@ const switches = [{ value: "on", label: "On" }, { value: "off", label: "Off" }];
 const initialSettings: Record<string, string> = { ctx_size: "", n_gpu_layers: "", flash_attn: "", fit: "", cache_type_k: "", cache_type_v: "", kv_offload: "", kv_unified: "", op_offload: "", mmproj_use_gpu: "", spec_draft_ngl: "", threads: "", threads_batch: "", load_mode: "", parallel: "", port: "", batch_size: "", ubatch_size: "", reasoning: "", reasoning_effort: "", reasoning_preserve: "", reasoning_format: "", reasoning_budget: "", embedding: "", pooling: "", spec_type: "", spec_draft_n_max: "", spec_draft_n_min: "", spec_draft_p_min: "", spec_draft_p_split: "", spec_draft_threads: "", spec_draft_threads_batch: "", spec_draft_cache_type_k: "", spec_draft_cache_type_v: "" };
 const EMPTY_BUNDLES: ModelBundle[] = [];
 const EMPTY_PROFILES: RunProfile[] = [];
-type ModelDraft = { settings: Record<string, string>; response: Record<string, unknown>; agent: Record<string, unknown>; origin: ResponseRecipeOrigin | null; name: string; advanced: string; changed: string[]; presetApplied: boolean };
+type ModelDraft = { baseProfile: RunProfile | undefined; settings: Record<string, string>; response: Record<string, unknown>; agent: Record<string, unknown>; origin: ResponseRecipeOrigin | null; name: string; advanced: string; changed: string[]; presetApplied: boolean };
 const draftKey = (bundle: string, profile: string) => `${bundle}:${profile || "default"}`;
+const settingOverrides = (saved: Record<string, unknown>, candidate: Record<string, unknown>) => Object.fromEntries(
+  [...new Set([...Object.keys(saved), ...Object.keys(candidate)])]
+    .filter(key => JSON.stringify(saved[key]) !== JSON.stringify(candidate[key]))
+    .map(key => [key, candidate[key] ?? null]));
 
 function startupValueLabel(key: string, value: unknown): string {
   if (key === "ctx_size" && typeof value === "number") return value === 0 ? "Full model capacity" : `${value.toLocaleString()} tokens`;
@@ -85,6 +89,8 @@ export function DeploymentsPanel({
 
   const hydrated = useRef({ bundle: "", deployment: "", profile: "", revision: 0 });
   const dirty = useRef(false);
+  // Keep the authoring base through refreshes; only revert or confirmed Save replaces it.
+  const draftProfile = useRef<RunProfile | undefined>(undefined);
   const drafts = useRef(new Map<string, ModelDraft>());
   const activeDraftKey = useRef("");
   const actionPending = useRef(false);
@@ -132,10 +138,8 @@ export function DeploymentsPanel({
   const bundles = initialBundles;
   const profiles = initialProfiles;
   const selectedProfile = profiles.find(item => item.id === profileId);
-  const savedResponses = selectedProfile?.bags.per_request.requested ?? {};
-  const responseChanges = Object.fromEntries([...new Set([...Object.keys(savedResponses), ...Object.keys(response)])]
-    .filter(key => JSON.stringify(savedResponses[key]) !== JSON.stringify(response[key]))
-    .map(key => [key, response[key] ?? null]));
+  const editorProfile = draftProfile.current?.id === profileId ? draftProfile.current : selectedProfile;
+  const responseChanges = settingOverrides(selectedProfile?.bags.per_request.requested ?? {}, response);
   const selected = bundles.find(b => b.id === selectedBundleId);
   const current = deployments.filter(d => d.status !== "stopped");
   const extraConnections = current.filter(d => d.scope === "connected" && current.some(other => other.scope === "managed" && other.endpoint === d.endpoint && other.health?.healthy));
@@ -164,36 +168,38 @@ export function DeploymentsPanel({
   let stagedStartup: Record<string, unknown> | null = null;
   let stagedStartupError = "";
   try { stagedStartup = startup(); } catch (error) { stagedStartupError = errorMessage(error); }
+  const candidateStartup = draftStartup(stagedStartup ?? {});
+  const startupChanges = settingOverrides(selectedProfile?.bags.startup.requested ?? {}, candidateStartup);
   const optionsProfile = selectedProfile ?? profiles.find(item => item.id === selected?.default_configuration_id) ?? profiles.find(item => item.bundle_id === selectedBundleId);
-  const optionsSelection = JSON.stringify({ configuration_id: optionsProfile?.id ?? null, startup: stagedStartup ?? {} });
+  const optionsSelection = JSON.stringify({ configuration_id: optionsProfile?.id ?? null, startup: settingOverrides(optionsProfile?.bags.startup.requested ?? {}, candidateStartup) });
   const canonical = (values: Record<string, unknown>) => JSON.stringify(Object.fromEntries(Object.keys(values).sort().map(key => [key, values[key]])));
-  if (hydrated.current.bundle === selectedBundleId && hydrated.current.profile === profileId && selectedProfile) {
-    dirty.current = presetApplied.current || Boolean(stagedStartupError) || canonical(mergedStartup(selectedProfile.bags.startup.requested, stagedStartup ?? {})) !== canonical(selectedProfile.bags.startup.requested)
-      || canonical(response) !== canonical(savedResponses) || canonical(agentSettings) !== canonical(selectedProfile.bags.agent.requested) || JSON.stringify(recipeOrigin) !== JSON.stringify(selectedProfile.recipe_origin ?? null) || configurationName.trim() !== selectedProfile.display_name;
+  if (hydrated.current.bundle === selectedBundleId && hydrated.current.profile === profileId && draftProfile.current?.id === profileId) {
+    dirty.current = presetApplied.current || Boolean(stagedStartupError) || canonical(mergedStartup(draftProfile.current.bags.startup.requested, stagedStartup ?? {})) !== canonical(draftProfile.current.bags.startup.requested)
+      || canonical(response) !== canonical(draftProfile.current.bags.per_request.requested) || canonical(agentSettings) !== canonical(draftProfile.current.bags.agent.requested) || JSON.stringify(recipeOrigin) !== JSON.stringify(draftProfile.current.recipe_origin ?? null) || configurationName.trim() !== draftProfile.current.display_name;
     if (!dirty.current) drafts.current.delete(activeDraftKey.current);
   }
-  // The editor previews a replacement model configuration. Only changed keys
-  // are overrides; omission continues to mean inheritance at submission.
+  // Resolve the retained draft against the current saved record. Differences
+  // include external changes and removals; the draft still owns its authoring base.
   const setupPreview = useSetupPreview({ bundle_id: selectedBundleId || null, model_configuration_id: profileId || null,
-    startup_overrides: stagedStartup ?? {}, per_request_overrides: responseChanges }, null, null, "conversation",
+    startup_overrides: startupChanges, per_request_overrides: responseChanges }, null, null, "conversation",
     `${bundlesVersion}:${selectedProfile?.revision ?? 0}:${selectedRunning?.updated_at ?? ""}:${configurationRevision}`, Boolean(active && selectedBundleId && stagedStartup));
   const modelFacts = Object.fromEntries(Object.entries(setupPreview.data?.effective_values ?? {})
     .map(([key, fact]) => [key, fact.source === "Turn overrides" && key.startsWith("per_request.") && Object.hasOwn(responseChanges, key.slice(12))
       ? { ...fact, source: "Unsaved changes" }
-      : fact.source === "Turn overrides" && key.startsWith("startup.") && Object.hasOwn(stagedStartup ?? {}, key.slice(8))
+      : fact.source === "Turn overrides" && key.startsWith("startup.") && Object.hasOwn(startupChanges, key.slice(8))
         ? { ...fact, source: "This editor" } : fact]));
   const responseFacts = modelFacts;
   const presentationSelection = `${selectedBundleId}:${profileId}`;
   if (setupPreview.data) presentation.current = { selection: presentationSelection, facts: modelFacts };
   const presentationFacts = presentation.current.selection === presentationSelection ? presentation.current.facts : {};
-  const candidateKey = JSON.stringify([selectedBundleId, profileId, canonical(mergedStartup(selectedProfile?.bags.startup.requested ?? {}, stagedStartup ?? {})), canonical(response), configurationName.trim(), recipeOrigin, canonical(agentSettings)]);
+  const candidateKey = JSON.stringify([selectedBundleId, profileId, canonical(candidateStartup), canonical(response), configurationName.trim(), recipeOrigin, canonical(agentSettings)]);
   const checkedHere = checkedSelection === presentationSelection;
   const startupReadout = (key: string) => {
     const fact = modelFacts[`startup.${key}`];
     const display = stagedStartupError ? { value: "Check settings", source: stagedStartupError } : effectiveSettingDisplay(fact, setupPreview.loading);
     if (fact?.known && fact.supported !== false && !stagedStartupError && !setupPreview.loading) display.value = startupValueLabel(key, fact.value);
     const edited = stagedStartup && Object.hasOwn(stagedStartup, key);
-    const saved = Object.hasOwn(selectedProfile?.bags.startup.requested ?? {}, key);
+    const saved = Object.hasOwn(editorProfile?.bags.startup.requested ?? {}, key);
     const state = edited && stagedStartup?.[key] !== null ? "Unsaved change" : "";
     return <span className="model-effective-readout" data-state={saved || edited ? "set" : "following"}><strong>{display.value}</strong>{[display.source, !setupPreview.loading && !stagedStartupError ? state : ""].filter(Boolean).map(part => ` · ${part}`).join("")}</span>;
   };
@@ -204,7 +210,7 @@ export function DeploymentsPanel({
     return descriptor?.applied ?? descriptor?.default_value ?? null;
   };
   const canResetStartup = (key: string) => (Object.hasOwn(stagedStartup ?? {}, key) && stagedStartup?.[key] !== null)
-    || (Object.hasOwn(selectedProfile?.bags.startup.requested ?? {}, key) && stagedStartup?.[key] !== null);
+    || (Object.hasOwn(editorProfile?.bags.startup.requested ?? {}, key) && stagedStartup?.[key] !== null);
   const startupReset = (key: string) => { const target = defaultSettingDisplay(modelFacts[`startup.${key}`], "model", key); return { resetLabel: "Reset", resetTitle: target.title }; };
 
   function publishDraftMarkers() {
@@ -214,13 +220,14 @@ export function DeploymentsPanel({
   }
   function stashDraft() {
     if (!activeDraftKey.current || !dirty.current) return;
-    drafts.current.set(activeDraftKey.current, { settings: { ...settings }, response: { ...response }, agent: { ...agentSettings }, origin: recipeOrigin, name: configurationName, advanced: advancedStartup, changed: [...changedStartup.current], presetApplied: presetApplied.current });
+    drafts.current.set(activeDraftKey.current, { baseProfile: draftProfile.current, settings: { ...settings }, response: { ...response }, agent: { ...agentSettings }, origin: recipeOrigin, name: configurationName, advanced: advancedStartup, changed: [...changedStartup.current], presetApplied: presetApplied.current });
     publishDraftMarkers();
   }
   function restoreDraft(key: string): boolean {
     const draft = drafts.current.get(key);
     if (!draft) return false;
     activeDraftKey.current = key;
+    draftProfile.current = draft.baseProfile;
     dirty.current = true;
     presetApplied.current = draft.presetApplied;
     changedStartup.current = new Set(draft.changed);
@@ -256,6 +263,7 @@ export function DeploymentsPanel({
     if (changedModel) { setConfiguration(null); setMaximumContext(null); setLayers(null); setModelInfo("Loading model details…"); }
     if (shouldHydrate) {
     hydrated.current = { bundle: selectedBundleId, deployment: selectedRunning?.id ?? "", profile: saved?.id ?? "", revision: saved?.revision ?? 0 };
+    draftProfile.current = saved;
     const nextProfileId = saved?.id ?? "";
     const nextKey = draftKey(selectedBundleId, nextProfileId);
     setProfileId(nextProfileId);
@@ -319,6 +327,7 @@ export function DeploymentsPanel({
     const key = draftKey(selectedBundleId, id);
     const profile = profiles.find(item => item.id === id);
     hydrated.current = { ...hydrated.current, profile: id, revision: profile?.revision ?? 0 };
+    draftProfile.current = profile;
     activeDraftKey.current = key;
     dirty.current = false;
     presetApplied.current = false;
@@ -348,7 +357,7 @@ export function DeploymentsPanel({
     try { await operation(); } catch (error) { if (selectionOwner.current === owner) { setMessage(errorMessage(error)); setMessageTone("error"); } } finally { actionPending.current = false; setBusy(""); }
   }
   function startup(): Record<string, unknown> {
-    const saved = profiles.find(profile => profile.id === profileId)?.bags.startup.requested ?? {};
+    const saved = editorProfile?.bags.startup.requested ?? {};
     const values = startupPayload(settings, advancedStartup, saved, changedStartup.current);
     for (const [key, value] of Object.entries(values)) {
       if (value === null ? !Object.hasOwn(saved, key) : JSON.stringify(value) === JSON.stringify(saved[key])) delete values[key];
@@ -360,7 +369,10 @@ export function DeploymentsPanel({
     }
     return values;
   }
-  async function preview(startupValues = mergedStartup(selectedProfile?.bags.startup.requested ?? {}, startup()), responseValues = response, owner = selectionOwner.current) {
+  function draftStartup(overrides = startup()): Record<string, unknown> {
+    return mergedStartup(editorProfile?.bags.startup.requested ?? {}, overrides);
+  }
+  async function preview(startupValues = draftStartup(), responseValues = response, owner = selectionOwner.current) {
     const checkedKey = JSON.stringify([owner.id, owner.profile, canonical(startupValues), canonical(responseValues), configurationName.trim(), recipeOrigin, canonical(agentSettings)]);
     const report = await api.previewSettings(startupValues, responseValues, agentSettings);
     const result = { ...report, per_request: { ...report.per_request,
@@ -374,16 +386,22 @@ export function DeploymentsPanel({
     if (!name) throw new Error("Enter a configuration name.");
     return {
       display_name: name,
-      startup: mergedStartup(selectedProfile?.bags.startup.requested ?? {}, startup()), per_request: response, agent: agentSettings,
+      startup: draftStartup(), per_request: response, agent: agentSettings,
       recipe_origin: recipeOrigin,
-      ...(asVariant ? {} : { configuration_id: profileId || undefined, expected_revision: selectedProfile?.revision }),
+      ...(asVariant ? {} : { configuration_id: profileId || undefined, expected_revision: draftProfile.current?.revision }),
     };
   }
   async function persistConfiguration(payload: ReturnType<typeof configurationPayload>, asVariant: boolean, owner: typeof selectionOwner.current) {
-    const saved = await api.saveModelConfiguration(owner.id, payload);
+    const saved = await api.saveModelConfiguration(owner.id, payload).catch(failure => {
+      if (failure instanceof ApiError && failure.code === "configuration_revision_conflict") {
+        throw new Error("This setup changed elsewhere. Revert edits to use its latest saved values, or Save a copy to keep your draft.");
+      }
+      throw failure;
+    });
     if (selectionOwner.current === owner) {
       drafts.current.delete(activeDraftKey.current);
       activeDraftKey.current = draftKey(owner.id, saved.id);
+      draftProfile.current = saved;
       setProfileId(saved.id); setConfigurationName(saved.display_name); changedStartup.current.clear(); dirty.current = false; presetApplied.current = false;
       publishDraftMarkers();
       setCreatingVariant(false); setVariantName("");
@@ -543,7 +561,7 @@ export function DeploymentsPanel({
         hydrated.current = { ...hydrated.current, profile: "", revision: 0 }; setProfileId(""); inspector?.close(); setLocalInspector(null); await onBundlesChanged?.();
       }} />}
   </section>;
-  else if (panelView === "files" && selected) panelContent = <><button type="button" disabled={Boolean(busy)} onClick={() => void action("metadata", async () => { applyConfiguration(await api.modelConfiguration(selectedBundleId, selectedRunning?.id, true, { configuration_id: selectedProfile?.id ?? null, startup: startup() })); })}>Refresh model details</button><ModelProjectorControls key={selected.id} bundleId={selected.id} active={bundleActive} disabled={Boolean(busy)} action={action} onSaved={async () => { await onBundlesChanged?.(); await refresh(); }} /></>;
+  else if (panelView === "files" && selected) panelContent = <><button type="button" disabled={Boolean(busy)} onClick={() => void action("metadata", async () => { applyConfiguration(await api.modelConfiguration(selectedBundleId, selectedRunning?.id, true, { configuration_id: selectedProfile?.id ?? null, startup: settingOverrides(selectedProfile?.bags.startup.requested ?? {}, draftStartup()) })); })}>Refresh model details</button><ModelProjectorControls key={selected.id} bundleId={selected.id} active={bundleActive} disabled={Boolean(busy)} action={action} onSaved={async () => { await onBundlesChanged?.(); await refresh(); }} /></>;
   const toolbarMessage = messageTone === "ok" && creatingVariant ? "" : message;
   return <section className="model-configuration">
     {loadError ? <Notice tone="error">{loadError}<button type="button" onClick={() => void refresh().catch(error => setLoadError(errorMessage(error)))}>Try again</button></Notice> : null}
@@ -590,7 +608,7 @@ export function DeploymentsPanel({
           {field("parallel", "Parallel requests", "Auto uses four native slots with a shared context pool. Choose an explicit count to use a divided pool.", [{ value: "-1", label: "Auto" }, ...numberChoices([1, 2, 4, 8])], true, -1)}
           {field("kv_unified", "Shared context pool", "Unified KV shares cache storage across slots. Off divides the pool when Parallel requests has an explicit count; native Auto always shares it.", [{ value: "true", label: "On" }, { value: "false", label: "Off" }])}
         </div></details>
-        <ModelHardwareEstimate compact onDetails={() => openPanel("memory")} detailsTarget={panelView === "memory" ? inspector?.target : null} active={active} selection={{ bundle_id: selectedBundleId, startup: mergedStartup(selectedProfile?.bags.startup.requested ?? {}, stagedStartup ?? {}) }} />
+        <ModelHardwareEstimate compact onDetails={() => openPanel("memory")} detailsTarget={panelView === "memory" ? inspector?.target : null} active={active} selection={{ bundle_id: selectedBundleId, startup: candidateStartup }} />
       <details className="settings-group technical-settings"><summary>Advanced loading settings</summary>
       <SettingSection title="Memory &amp; processing">
         <SettingRow layout="models" label="Context mode" help={<>A fixed Context uses the slider value. Auto allows native fitting; Full requests the model metadata maximum.<code>{configuration?.context_size.flag ?? "--ctx-size"}</code></>} provenance={startupReadout("ctx_size")} onReset={canResetStartup("ctx_size") && !busy ? () => change("ctx_size", "") : undefined} {...startupReset("ctx_size")}><select aria-label="Advanced context mode" value={settings.ctx_size === "0" ? "full" : contextAuto ? "auto" : "fixed"} disabled={Boolean(busy)} onChange={event => change("ctx_size", event.target.value === "auto" ? "auto" : event.target.value === "full" ? "0" : String(contextShown ?? 32768))}><option value="fixed">Fixed</option><option value="auto">Auto</option><option value="full" disabled={!maximumContext}>Full</option></select></SettingRow>

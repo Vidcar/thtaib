@@ -129,7 +129,8 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   const selectedBundleId = selectedProfile?.bundle_id ?? selectedDeployment?.bundle_id;
   const selectedBundle = availableBundles.find(item => item.id === selectedBundleId);
   const selectedName = selectedBundle ? modelLabel(selectedBundle, availableBundles) : selectedDeployment?.display_name.replace(/^(managed|connected):/, "") ?? "Choose model";
-  const runtimeRevision = JSON.stringify(deployments.map(item => [item.id, item.profile_id, item.status, item.health?.healthy, item.settings?.startup?.requested]));
+  const savedRevision = `${selectedProfile?.id ?? ""}:${selectedProfile?.revision ?? 0}`;
+  const runtimeRevision = JSON.stringify([savedRevision, deployments.map(item => [item.id, item.profile_id, item.status, item.health?.healthy, item.settings?.startup?.requested])]);
   const residency = useSetupPreview(configuration, projectId, agentSetupVersionId, "conversation", runtimeRevision, Boolean(selectedProfile || selectedDeployment));
   function observed(profile: RunProfile | null, connected: Deployment | null) {
     const selected = profile ? profile.id === selectedProfile?.id : connected?.id === selectedDeployment?.id;
@@ -146,7 +147,7 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   }
   const selectedState = observed(selectedProfile ?? null, selectedDeployment?.scope === "connected" ? selectedDeployment : null);
   const previewConfiguration = chatTuningCandidate(configuration, thinking, context);
-  const preview = useSetupPreview(previewConfiguration, projectId, agentSetupVersionId, "conversation", "", tuningOpen);
+  const preview = useSetupPreview(previewConfiguration, projectId, agentSetupVersionId, "conversation", savedRevision, tuningOpen);
   const facts = preview.data?.effective_values ?? {};
   const optionStartup = JSON.stringify(previewConfiguration.startup_overrides ?? {});
   const optionOwnerKey = JSON.stringify([selectedBundleId, selectedProfile?.id, selectedProfile?.revision, selectedDeployment?.id]);
@@ -203,8 +204,11 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
       if (loaded && (!loaded.health?.healthy || loaded.status !== "running")) throw new Error(loaded.error ?? "Model did not become ready.");
       if (owner.current.generation !== currentGeneration) return;
       await latest.current.onApply({ ...candidate, deployment_id: loaded?.id ?? connected?.id ?? (latest.current.runtimeBusy ? null : exactDeployment?.id ?? null) });
+      // Acceptance may publish the chosen profile before this callback returns.
+      // Close for that one expected transition, never for later navigation.
+      const acceptedOwnerKey = [conversationId, projectId, agentSetupVersionId, candidate.model_configuration_id ?? selectedConfigurationId].join(":");
+      if (owner.current.generation === currentGeneration || (owner.current.key === acceptedOwnerKey && owner.current.generation === currentGeneration + 1)) close();
       if (loadAttempted) await latest.current.onReloaded();
-      if (owner.current.generation === currentGeneration) close();
     } catch (failure) {
       const parts = [errorMessage(failure)];
       if (owner.current.generation === currentGeneration && loadAttempted) {

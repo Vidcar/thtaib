@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { act, create } from "react-test-renderer";
 import { createServer as createViteServer } from "vite";
 
@@ -31,6 +32,7 @@ try {
   await checkModelsRenderBeforeDeferredRuntimeAndConfiguration(ModelsPanel);
   await checkRefreshFailureKeepsModelDraft(ModelsPanel);
   await checkSavedLoadingRetainsRunningModel(DeploymentsPanel);
+  await checkDraftRevisionConflicts(DeploymentsPanel);
   await checkExistingBundleRecipes((await vite.ssrLoadModule("/src/renderer/ModelResponseRecipes.tsx")).ModelResponseRecipes);
   await checkPinnedCardViewer((await vite.ssrLoadModule("/src/renderer/ModelResponseRecipes.tsx")).ModelResponseRecipes);
   await checkModelPresetDraftAndVisibility(ModelPresetPanel);
@@ -1085,4 +1087,144 @@ function textOf(node) {
   if (!node) return "";
   const children = node.children ?? [];
   return children.map(textOf).join("");
+}
+
+async function checkDraftRevisionConflicts(Panel) {
+  const originalFetch = globalThis.fetch;
+  const bag = requested => ({ requested, applied: requested, unsupported: [], retired: [], overridden: [], unverified: [] });
+  const model = { ...bundle("revision-model", "Revision model"), default_configuration_id: "original" };
+  const makeProfile = (id, name) => ({ id, bundle_id: model.id, display_name: name, revision: 1, bags: { startup: bag({ ctx_size: 8192, cache_type_k: "q8_0" }), per_request: bag({ temperature: 1 }), agent: bag({}) } });
+  let profiles = [makeProfile("original", "Original"), makeProfile("other", "Other")];
+  let renderer, refreshFails = false;
+  const writes = [], validations = [], resolutions = [], descriptors = [];
+  const panel = () => React.createElement(Panel, { selectedBundleId: model.id, initialBundles: [model], initialProfiles: profiles, onBundlesChanged: async () => { if (refreshFails) throw new Error("Catalogue refresh unavailable"); renderer.update(panel()); } });
+  globalThis.fetch = async (url, init = {}) => {
+    const address = String(url), body = init.body ? JSON.parse(init.body) : null;
+    if (address.endsWith("/v1/runtime")) return jsonResponse(runtimeReady());
+    if (address.endsWith("/v1/deployments")) return jsonResponse([]);
+    if (address.endsWith("/v1/setup-resolution")) {
+      const selected = profiles.find(item => item.id === body.overrides.model_configuration_id) ?? profiles[0];
+      resolutions.push(body.overrides);
+      const facts = {};
+      for (const [name, defaults] of [["startup", { ctx_size: 4096, cache_type_k: "f16", cache_type_v: "f16" }], ["per_request", { temperature: 1, top_p: 0.95 }]]) {
+        const overrides = body.overrides[`${name}_overrides`] ?? {}, requested = { ...selected.bags[name].requested, ...overrides };
+        for (const key of new Set([...Object.keys(defaults), ...Object.keys(requested)])) {
+          const value = requested[key] ?? defaults[key];
+          facts[`${name}.${key}`] = { value, known: value != null, source: Object.hasOwn(overrides, key) && overrides[key] !== null ? "Turn overrides" : requested[key] == null ? "Model default" : "Configuration: " + selected.display_name, default_value: defaults[key], default_source: "Model default" };
+        }
+      }
+      return jsonResponse({ configuration: body.overrides, effective_values: facts, instruction_layers: [] });
+    }
+    if (address.includes("/configuration-options")) { descriptors.push(body); return jsonResponse({ ...configurationOptions(), bundle_id: model.id }); }
+    if (address.endsWith("/v1/settings/preview")) { validations.push(body); return jsonResponse({ startup: bag(body.startup), per_request: bag(body.per_request), agent: bag(body.agent ?? {}) }); }
+    if (address.endsWith("/configurations")) {
+      writes.push(body);
+      const existing = profiles.find(item => item.id === body.configuration_id);
+      if (existing && body.expected_revision !== existing.revision) return { ok: false, status: 409, json: async () => ({ error: "This configuration changed elsewhere. Refresh before saving.", code: "configuration_revision_conflict" }) };
+      const saved = { ...(existing ?? makeProfile(profiles.some(item => item.id === "copy") ? "copy-2" : "copy", body.display_name)), display_name: body.display_name, revision: existing ? existing.revision + 1 : 1, bags: { startup: bag(body.startup), per_request: bag(body.per_request), agent: bag(body.agent ?? {}) }, recipe_origin: body.recipe_origin ?? null };
+      profiles = [...profiles.filter(item => item.id !== saved.id), saved];
+      return jsonResponse(saved);
+    }
+    if (address.endsWith("/v1/hardware/estimate")) return jsonResponse({ completeness: "unavailable", reasons: [], unknown_costs: [], gpu: {}, ram: {}, components: [], devices: [] });
+    throw new Error(`Unexpected revision request ${address}`);
+  };
+  const getOriginal = () => profiles.find(item => item.id === "original");
+  const button = label => { const found = renderer.root.findAllByType("button").find(node => textOf(node) === label); assert.ok(found, label); return found; };
+  const temperature = () => renderer.root.findAllByType("input").find(node => node.props.id === "model-response-temperature");
+  const status = () => textOf(renderer.root.findByProps({ className: "model-toolbar-status" }));
+  const startupReadout = label => renderToStaticMarkup(renderer.root.findAll(node => node.type?.name === "SettingRow" && node.props.label === label)[0].props.provenance);
+  const estimateStartup = () => renderer.root.findAll(node => node.type?.name === "ModelHardwareEstimate")[0].props.selection.startup;
+  const validate = async () => act(async () => { button("Validate draft").props.onClick(); await tick(); });
+  const editTemperature = async value => act(async () => { temperature().props.onChange({ target: { value: String(value) } }); await tick(); });
+  const choose = async id => act(async () => { renderer.root.findByProps({ id: "model-configuration" }).props.onChange({ target: { value: id } }); await tick(); });
+  const save = async () => act(async () => { renderer.root.findByProps({ id: "model-settings-form" }).props.onSubmit({ preventDefault() {} }); await tick(); });
+  const externalSave = async value => {
+    profiles = profiles.map(item => item.id === "original" ? { ...item, revision: item.revision + 1, bags: { ...item.bags, per_request: bag({ temperature: value }) } } : item);
+    await act(async () => { renderer.update(panel()); await tick(); });
+  };
+  try {
+    await act(async () => { renderer = create(panel(), { createNodeMock: element => element.type === "form" ? { reportValidity: () => true } : null }); await tick(); });
+    await externalSave(0.2);
+    assert.equal(temperature().props.value, 0.2, "a clean editor follows a refreshed saved revision");
+    assert.equal(renderer.root.findByProps({ className: "model-edit-state" }).props["data-dirty"], false);
+    await act(async () => { changeContext(renderer, 16384); await tick(); });
+    await externalSave(0.8);
+    await save();
+    assert.equal(writes.at(-1).expected_revision, 2, "active edits retain the actual authoring revision");
+    assert.match(status(), /changed elsewhere.*Revert edits.*Save a copy/, "conflict recovery names the available draft-preserving choices");
+    assert.equal(getOriginal().bags.per_request.requested.temperature, 0.8, "a conflicting save cannot overwrite the other saved response");
+    assert.equal(contextInput(renderer).props["data-token-value"], 16384, "conflict retains the local startup edit");
+    await choose("other"); await choose("original");
+    await save();
+    assert.equal(writes.at(-1).expected_revision, 2, "stashing and restoring cannot advance a dirty draft's revision");
+    assert.match(status(), /changed elsewhere/);
+    await act(async () => button("Revert edits").props.onClick()); await tick();
+    assert.equal(temperature().props.value, 0.8, "explicit revert adopts the latest saved response");
+    await act(async () => { changeContext(renderer, 24576); await tick(); });
+    refreshFails = true;
+    await save();
+    assert.equal(writes.at(-1).expected_revision, 3);
+    assert.match(status(), /Saved\. The screen could not refresh/);
+    assert.equal(getOriginal().bags.startup.requested.ctx_size, 24576);
+    assert.equal(estimateStartup().ctx_size, 24576, "failed observation keeps estimates on the confirmed saved draft");
+    await validate();
+    assert.equal(validations.at(-1).startup.ctx_size, 24576, "validation keeps the confirmed save even while parent records are stale");
+    refreshFails = false;
+    await save();
+    assert.equal(writes.at(-1).expected_revision, 4, "successful save adopts its returned revision even if observation fails");
+    assert.equal(writes.at(-1).startup.ctx_size, 24576, "retry after failed observation cannot restore stale startup values");
+    assert.equal(writes.at(-1).per_request.temperature, 0.8);
+    assert.equal(status(), "Saved.");
+    await act(async () => { changeContext(renderer, 32768); await tick(); });
+    await act(async () => button("Save a copy").props.onClick());
+    await act(async () => { button("Save copy").props.onClick(); await tick(); });
+    assert.equal(Object.hasOwn(writes.at(-1), "expected_revision"), false, "a new copy has no existing revision to compare");
+    assert.equal(profiles.find(item => item.id === "copy").bags.startup.requested.ctx_size, 32768);
+    assert.equal(getOriginal().bags.startup.requested.ctx_size, 24576, "copy creation preserves its source setup");
+
+    await editTemperature(0.4);
+    await validate();
+    const retained = { ctx_size: 32768, cache_type_k: "q8_0" };
+    assert.deepEqual(validations.at(-1).startup, retained);
+    profiles = profiles.map(item => item.id === "copy" ? { ...item, revision: item.revision + 1, bags: { ...item.bags, startup: bag({ ctx_size: 65536, cache_type_v: "q4_0" }), per_request: bag({ temperature: 0.1, top_p: 0.3 }) } } : item);
+    await act(async () => { renderer.update(panel()); await tick(); });
+    assert.equal(contextInput(renderer).props["data-token-value"], 32768, "a response-only draft retains its authored startup values after an external save");
+    assert.match(startupReadout("Context"), /32,768 tokens/, "resolved context describes the retained draft, not the latest saved record");
+    assert.match(startupReadout("K cache precision"), /q8_0/, "an externally removed setting remains in the draft preview");
+    assert.match(startupReadout("V cache precision"), /f16/, "an externally added setting does not enter the draft preview");
+    assert.deepEqual(estimateStartup(), retained, "memory estimates use exactly the retained draft startup");
+    const editorResolution = resolutions.findLast(item => Object.hasOwn(item, "startup_overrides"));
+    assert.deepEqual(editorResolution.startup_overrides, { ctx_size: 32768, cache_type_v: null, cache_type_k: "q8_0" });
+    assert.deepEqual(editorResolution.per_request_overrides, { temperature: 0.4, top_p: null }, "response preview also removes newly saved settings outside the retained draft");
+    assert.deepEqual(descriptors.at(-1).startup, editorResolution.startup_overrides, "control descriptors resolve the same draft additions and removals");
+    assert.equal(textOf(renderer.root).includes("Out of date"), false, "an external save cannot invalidate an unchanged checked draft");
+    await validate();
+    assert.deepEqual(validations.at(-1).startup, retained, "Validate draft checks the values retained for Save a copy");
+    await choose("other"); await choose("copy");
+    assert.deepEqual(estimateStartup(), retained, "stashed drafts restore their original estimate inputs");
+    await validate();
+    assert.deepEqual(validations.at(-1).startup, retained, "stashed drafts restore the same validation inputs");
+    await act(async () => { changeContext(renderer, 40960); await tick(); });
+    assert.equal(textOf(renderer.root).includes("Out of date"), true, "a local startup edit invalidates the previous check");
+    await act(async () => { changeContext(renderer, 32768); await tick(); });
+    assert.equal(textOf(renderer.root).includes("Out of date"), false, "returning to the checked draft restores matching check identity");
+    await act(async () => button("Save a copy").props.onClick());
+    await act(async () => { button("Save copy").props.onClick(); await tick(); });
+    assert.deepEqual(writes.at(-1).startup, retained, "copy submission agrees with the displayed, checked and estimated startup");
+    assert.equal(writes.at(-1).per_request.temperature, 0.4);
+    assert.equal(profiles.find(item => item.id === "copy").bags.startup.requested.ctx_size, 65536, "a new copy preserves the externally saved source");
+    await choose("copy-2");
+    await editTemperature(0.6);
+    profiles = profiles.map(item => item.id === "copy-2" ? { ...item, revision: item.revision + 1, bags: { ...item.bags, startup: bag({ ctx_size: 65536, cache_type_v: "q4_0" }) } } : item);
+    await act(async () => { renderer.update(panel()); await tick(); });
+    await act(async () => { button("Revert edits").props.onClick(); await tick(); });
+    assert.equal(contextInput(renderer).props["data-token-value"], 65536, "explicit revert adopts the latest startup values");
+    assert.deepEqual(estimateStartup(), { ctx_size: 65536, cache_type_v: "q4_0" }, "explicit revert adopts latest estimate inputs including removals");
+    assert.match(startupReadout("K cache precision"), /f16/);
+    await validate();
+    assert.deepEqual(validations.at(-1).startup, estimateStartup(), "reverted validation and estimates remain aligned");
+  } finally {
+    if (renderer) await act(async () => renderer.unmount());
+    globalThis.fetch = originalFetch;
+  }
 }
