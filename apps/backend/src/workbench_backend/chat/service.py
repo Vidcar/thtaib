@@ -1419,6 +1419,26 @@ class ChatService:
                 status_code=409,
                 details={"deployment_id": conversation.deployment_id},
             ) from exc
+        connection_snapshots = self._preflight_connection_readiness(
+            conversation, frozen_connections, defer_optional=defer_optional,
+            pinned=pinned, required_connections=required_connections)
+        _presented = self._preflight_presented_tools(
+            conversation, request, connection_snapshots, defer_optional=defer_optional, pinned=pinned)
+        self._preflight_frozen_setup_requirements(conversation, frozen_configuration, _presented)
+        self._preflight_browser_and_desktop(
+            conversation, _presented, defer_optional=defer_optional, pinned=pinned, required_tools=required_tools)
+        self._preflight_helper_availability(conversation, _presented, frozen_helpers=frozen_helpers)
+        return self._retained_history_preflight(conversation, deployment)
+
+    def _preflight_connection_readiness(
+        self,
+        conversation: ChatConversation,
+        frozen_connections: list[ConnectionSnapshot] | None,
+        *,
+        defer_optional: bool,
+        pinned: set[str] | None,
+        required_connections: set[str],
+    ) -> list[ConnectionSnapshot]:
         # Accepted connection schemas define this input's catalogue. Live
         # readiness and identity are checked before disclosure/use; refreshing
         # the catalogue here would silently change a queued selection.
@@ -1431,6 +1451,17 @@ class ChatService:
                 self.harness.connections.validate_snapshot(item)
         if ready_connections:
             self.harness.connections.snapshot(sorted(ready_connections))
+        return connection_snapshots
+
+    def _preflight_presented_tools(
+        self,
+        conversation: ChatConversation,
+        request: ChatStartRequest,
+        connection_snapshots: list[ConnectionSnapshot],
+        *,
+        defer_optional: bool,
+        pinned: set[str] | None,
+    ) -> list[str]:
         capture_routes = (
             any(name in {"browser_take_screenshot", "desktop_screenshot"} for name in (conversation.presented_tools or []))
             or "read_file" in (conversation.presented_tools or []) and bool(self.assets.list_assets(RetainedAssetListFilters(
@@ -1470,6 +1501,14 @@ class ChatService:
                 status_code=400,
                 details={"tools": shell_blocked},
             )
+        return _presented
+
+    def _preflight_frozen_setup_requirements(
+        self,
+        conversation: ChatConversation,
+        frozen_configuration: SetupConfiguration | None,
+        _presented: list[str],
+    ) -> None:
         if frozen_configuration is not None:
             if frozen_configuration.requires_project and not conversation.project_path:
                 raise ChatError("This agent requires a project folder. Start a chat in a project.",
@@ -1479,6 +1518,16 @@ class ChatService:
             ):
                 raise ChatError("This agent requires Shell enabled in a project in Work mode.",
                     code="setup_shell_required", status_code=409)
+
+    def _preflight_browser_and_desktop(
+        self,
+        conversation: ChatConversation,
+        _presented: list[str],
+        *,
+        defer_optional: bool,
+        pinned: set[str] | None,
+        required_tools: set[str],
+    ) -> None:
         if conversation.work_mode == "work":
             from workbench_backend.browser.service import BROWSER_TOOL_NAMES
 
@@ -1509,6 +1558,14 @@ class ChatService:
                             raise ChatError(str(exc), code="desktop_runtime_unavailable", status_code=409) from exc
                 except DesktopAutomationError as exc:
                     raise ChatError(str(exc), code=exc.code, status_code=409) from exc
+
+    def _preflight_helper_availability(
+        self,
+        conversation: ChatConversation,
+        _presented: list[str],
+        *,
+        frozen_helpers: list | None,
+    ) -> None:
         if conversation.helper_agent_ids:
             setups = self._setups()
             for helper_id in conversation.helper_agent_ids:
@@ -1544,7 +1601,6 @@ class ChatService:
                 ):
                     raise ChatError(f"Helper {helper.name} requires Shell enabled in a project.",
                         code="helper_shell_required", status_code=409)
-        return self._retained_history_preflight(conversation, deployment)
 
     def _retained_history_preflight(self, conversation: ChatConversation, deployment) -> str | None:
         """Reject known history incompatibility before Chat records a new turn."""
@@ -1763,6 +1819,29 @@ class ChatService:
         # New submissions resolve the lean defaults. Only already admitted
         # snapshots with no policy retain the historical eager path.
         self._apply_local_input_policy(conversation, request)
+        request = self._alias_start_version_refs(request)
+        request = self._bind_start_agent_setup(conversation, request)
+        for key in ("memory_entry_ids", "skill_entry_ids", "protected_instruction_entry_ids"):
+            if key in request.model_fields_set:
+                setattr(conversation, key, getattr(request, key))
+        fields_set = request.model_fields_set
+        if request.profile_id:
+            self._bind_profile(request.profile_id)
+        if not request.deployment_id and not request.model_configuration_id and "agent_setup_version_id" not in fields_set and self.manager.store.get_deployment(conversation.deployment_id) is None:
+            raise ChatError("The Chat conversation's model setup is no longer available. Select a model to continue.", code="deploy_missing", status_code=409, details={"deployment_id": conversation.deployment_id})
+        has_layered_setup = bool(conversation.project_id or conversation.agent_setup_version_id or "agent_setup_version_id" in fields_set or request.model_configuration_id or conversation.model_configuration_id or self.app_store.get_setup_defaults().model_dump(exclude_none=True))
+        self._apply_unlayered_start_overrides(conversation, request, fields_set, has_layered_setup)
+        if has_layered_setup:
+            selection = self._resolve_layered_start_setup(
+                conversation, request, fields_set,
+                prepare_model=prepare_model, read_only=read_only, validate_setup=validate_setup)
+            resolved_selection = selection
+            request = self._copy_resolved_start_configuration(conversation, request, selection)
+            fields_set = request.model_fields_set
+        self._apply_shared_start_fields(conversation, request, fields_set, resolved_selection)
+        return resolved_selection
+
+    def _alias_start_version_refs(self, request: ChatStartRequest) -> ChatStartRequest:
         # Existing editable version selections are record selections now. An
         # explicitly empty list must clear the old Chat additions as well.
         aliases = {}
@@ -1771,6 +1850,9 @@ class ChatService:
                 aliases[entry_field] = list(dict.fromkeys(self.knowledge.get_version(ref).entry_id for ref in getattr(request, version_field)))
         if aliases:
             request = request.model_copy(update=aliases)
+        return request
+
+    def _bind_start_agent_setup(self, conversation: ChatConversation, request: ChatStartRequest) -> ChatStartRequest:
         if "agent_setup_id" in request.model_fields_set:
             conversation.agent_setup_id = request.agent_setup_id
             if request.agent_setup_id is None:
@@ -1782,15 +1864,15 @@ class ChatService:
             if record is None or not record.active:
                 raise ChatError("This agent was removed. Choose another agent.", code="agent_setup_inactive", status_code=409)
             request = request.model_copy(update={"agent_setup_version_id": record.current_version_id})
-        for key in ("memory_entry_ids", "skill_entry_ids", "protected_instruction_entry_ids"):
-            if key in request.model_fields_set:
-                setattr(conversation, key, getattr(request, key))
-        fields_set = request.model_fields_set
-        if request.profile_id:
-            self._bind_profile(request.profile_id)
-        if not request.deployment_id and not request.model_configuration_id and "agent_setup_version_id" not in fields_set and self.manager.store.get_deployment(conversation.deployment_id) is None:
-            raise ChatError("The Chat conversation's model setup is no longer available. Select a model to continue.", code="deploy_missing", status_code=409, details={"deployment_id": conversation.deployment_id})
-        has_layered_setup = bool(conversation.project_id or conversation.agent_setup_version_id or "agent_setup_version_id" in fields_set or request.model_configuration_id or conversation.model_configuration_id or self.app_store.get_setup_defaults().model_dump(exclude_none=True))
+        return request
+
+    def _apply_unlayered_start_overrides(
+        self,
+        conversation: ChatConversation,
+        request: ChatStartRequest,
+        fields_set: set[str],
+        has_layered_setup: bool,
+    ) -> None:
         if not has_layered_setup and "instructions" in fields_set:
             conversation.setup_overrides = conversation.setup_overrides.model_copy(update={"instructions": request.instructions})
         if not has_layered_setup and "approval_mode" in fields_set and request.approval_mode:
@@ -1806,70 +1888,93 @@ class ChatService:
             for key in resets:
                 if key in defaults:
                     setattr(conversation, key, defaults[key])
-        if has_layered_setup:
-            if "agent_setup_version_id" in fields_set and request.agent_setup_version_id != conversation.agent_setup_version_id:
-                conversation.agent_setup_version_id = request.agent_setup_version_id
-                # The agent provides behaviour. Preserve this conversation's
-                # explicitly chosen model and access when changing that role.
-                pinned = conversation.setup_overrides.model_dump(exclude_none=True)
-                pinned.update(deployment_id=conversation.deployment_id,
-                    model_configuration_id=conversation.model_configuration_id,
-                    profile_id=conversation.profile_id,
-                    approval_mode=conversation.approval_mode,
-                    work_mode=conversation.work_mode,
-                    desktop_access=conversation.desktop_access)
-                conversation.setup_overrides = SetupConfiguration.model_validate(pinned)
-            explicit = configuration_from_request(request).model_dump(exclude_none=True)
-            if "input_policy" in explicit:
-                explicit["input_policy"] = conversation.setup_overrides.input_policy.model_dump(exclude_unset=True)
-            overrides = conversation.setup_overrides.model_dump(exclude_none=True) | explicit
-            if request.model_configuration_id and "model_configuration_id" in fields_set and "deployment_id" not in fields_set:
-                overrides.pop("deployment_id", None)
-                overrides.pop("profile_id", None)
-            elif "model_configuration_id" in fields_set and request.model_configuration_id is None and "profile_id" not in fields_set:
-                overrides.pop("profile_id", None)
-            elif request.deployment_id and "deployment_id" in fields_set and "model_configuration_id" not in fields_set:
-                overrides.pop("model_configuration_id", None)
-                overrides.pop("profile_id", None)
-            for key in fields_set:
-                if key in SetupConfiguration.model_fields and getattr(request, key) is None:
-                    overrides.pop(key, None)
-            if "profile_id" in fields_set and request.profile_id is None:
-                overrides.pop("profile_id", None)
-            conversation.setup_overrides = SetupConfiguration.model_validate(overrides)
-            for key in ("profile_id", "embedding_deployment_id"):
-                if key in fields_set:
-                    conversation.setup_cleared_fields = [field for field in conversation.setup_cleared_fields if field != key]
-                    if getattr(request, key) is None:
-                        conversation.setup_cleared_fields.append(key)
-            selection = self._setups().resolve(project_id=conversation.project_id, agent_setup_version_id=conversation.agent_setup_version_id, agent_setup_id=conversation.agent_setup_id, overrides=conversation.setup_overrides, override_cleared_fields=conversation.setup_cleared_fields, prepare_model=prepare_model, read_only=read_only, validate=validate_setup, latest_knowledge=True)
-            resolved_selection = selection
-            conversation.agent_setup_id = selection.agent_setup_id
-            conversation.agent_setup_version_id = selection.agent_setup_version_id
-            if selection.configuration.model_configuration_id and not selection.configuration.deployment_id:
-                conversation.deployment_id = ""
-            values = selection.configuration.model_dump(exclude_none=True)
-            values.update({field: None for field in conversation.setup_cleared_fields})
-            for key in ("memory_entry_ids", "skill_entry_ids", "protected_instruction_entry_ids"):
-                values.setdefault(key, None)
-            for key in ("memory_version_refs", "skill_version_refs", "protected_instruction_version_refs"):
-                values.setdefault(key, [])
-            values.setdefault("profile_id", None)
-            values.setdefault("model_configuration_id", None)
-            values.setdefault("startup_overrides", None)
-            values.setdefault("presented_tools", None)
-            # An inherited empty mode means Ask, including when leaving a
-            # Full access setup. Never carry the old setup's authority forward.
-            values.setdefault("approval_mode", "ask")
-            values.setdefault("connection_ids", None)
-            values.setdefault("per_request_overrides", None)
-            values.setdefault("work_mode", "work")
-            values.setdefault("desktop_access", "off")
-            values.setdefault("helper_agent_ids", [])
-            values["review"] = selection.configuration.review or ReviewConfiguration()
-            values["input_policy"] = selection.configuration.input_policy
-            request = request.model_copy(update={key: value for key, value in values.items() if key in type(request).model_fields})
-            fields_set = request.model_fields_set
+
+    def _resolve_layered_start_setup(
+        self,
+        conversation: ChatConversation,
+        request: ChatStartRequest,
+        fields_set: set[str],
+        *,
+        prepare_model: bool,
+        read_only: bool,
+        validate_setup: bool,
+    ) -> ResolvedSetupSelection:
+        if "agent_setup_version_id" in fields_set and request.agent_setup_version_id != conversation.agent_setup_version_id:
+            conversation.agent_setup_version_id = request.agent_setup_version_id
+            # The agent provides behaviour. Preserve this conversation's
+            # explicitly chosen model and access when changing that role.
+            pinned = conversation.setup_overrides.model_dump(exclude_none=True)
+            pinned.update(deployment_id=conversation.deployment_id,
+                model_configuration_id=conversation.model_configuration_id,
+                profile_id=conversation.profile_id,
+                approval_mode=conversation.approval_mode,
+                work_mode=conversation.work_mode,
+                desktop_access=conversation.desktop_access)
+            conversation.setup_overrides = SetupConfiguration.model_validate(pinned)
+        explicit = configuration_from_request(request).model_dump(exclude_none=True)
+        if "input_policy" in explicit:
+            explicit["input_policy"] = conversation.setup_overrides.input_policy.model_dump(exclude_unset=True)
+        overrides = conversation.setup_overrides.model_dump(exclude_none=True) | explicit
+        if request.model_configuration_id and "model_configuration_id" in fields_set and "deployment_id" not in fields_set:
+            overrides.pop("deployment_id", None)
+            overrides.pop("profile_id", None)
+        elif "model_configuration_id" in fields_set and request.model_configuration_id is None and "profile_id" not in fields_set:
+            overrides.pop("profile_id", None)
+        elif request.deployment_id and "deployment_id" in fields_set and "model_configuration_id" not in fields_set:
+            overrides.pop("model_configuration_id", None)
+            overrides.pop("profile_id", None)
+        for key in fields_set:
+            if key in SetupConfiguration.model_fields and getattr(request, key) is None:
+                overrides.pop(key, None)
+        if "profile_id" in fields_set and request.profile_id is None:
+            overrides.pop("profile_id", None)
+        conversation.setup_overrides = SetupConfiguration.model_validate(overrides)
+        for key in ("profile_id", "embedding_deployment_id"):
+            if key in fields_set:
+                conversation.setup_cleared_fields = [field for field in conversation.setup_cleared_fields if field != key]
+                if getattr(request, key) is None:
+                    conversation.setup_cleared_fields.append(key)
+        return self._setups().resolve(project_id=conversation.project_id, agent_setup_version_id=conversation.agent_setup_version_id, agent_setup_id=conversation.agent_setup_id, overrides=conversation.setup_overrides, override_cleared_fields=conversation.setup_cleared_fields, prepare_model=prepare_model, read_only=read_only, validate=validate_setup, latest_knowledge=True)
+
+    def _copy_resolved_start_configuration(
+        self,
+        conversation: ChatConversation,
+        request: ChatStartRequest,
+        selection: ResolvedSetupSelection,
+    ) -> ChatStartRequest:
+        conversation.agent_setup_id = selection.agent_setup_id
+        conversation.agent_setup_version_id = selection.agent_setup_version_id
+        if selection.configuration.model_configuration_id and not selection.configuration.deployment_id:
+            conversation.deployment_id = ""
+        values = selection.configuration.model_dump(exclude_none=True)
+        values.update({field: None for field in conversation.setup_cleared_fields})
+        for key in ("memory_entry_ids", "skill_entry_ids", "protected_instruction_entry_ids"):
+            values.setdefault(key, None)
+        for key in ("memory_version_refs", "skill_version_refs", "protected_instruction_version_refs"):
+            values.setdefault(key, [])
+        values.setdefault("profile_id", None)
+        values.setdefault("model_configuration_id", None)
+        values.setdefault("startup_overrides", None)
+        values.setdefault("presented_tools", None)
+        # An inherited empty mode means Ask, including when leaving a
+        # Full access setup. Never carry the old setup's authority forward.
+        values.setdefault("approval_mode", "ask")
+        values.setdefault("connection_ids", None)
+        values.setdefault("per_request_overrides", None)
+        values.setdefault("work_mode", "work")
+        values.setdefault("desktop_access", "off")
+        values.setdefault("helper_agent_ids", [])
+        values["review"] = selection.configuration.review or ReviewConfiguration()
+        values["input_policy"] = selection.configuration.input_policy
+        return request.model_copy(update={key: value for key, value in values.items() if key in type(request).model_fields})
+
+    def _apply_shared_start_fields(
+        self,
+        conversation: ChatConversation,
+        request: ChatStartRequest,
+        fields_set: set[str],
+        resolved_selection: ResolvedSetupSelection | None,
+    ) -> None:
         if "presented_tools" in fields_set:
             conversation.presented_tools = request.presented_tools
         if "approval_mode" in fields_set and request.approval_mode:
@@ -1921,7 +2026,6 @@ class ChatService:
         if "retrieval_project_paths" in fields_set:
             conversation.retrieval_project_paths = list(request.retrieval_project_paths or [])
         conversation.document_asset_ids = self._selected_document_ids(conversation, request)
-        return resolved_selection
 
     def _reject_session_area_change(
         self,

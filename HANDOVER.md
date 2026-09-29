@@ -1,13 +1,11 @@
 # Current handover
 
-Updated 2026-09-29. **Add models Review keeps a fresh import on llama.cpp's own defaults until a loading control is set**, delivered in [PR 194](https://github.com/Vidcar/thtaib/pull/194), implementation `05f2c4e`. This follows the archived Models native-defaults delivery (`d6c99f2`, PR 192) on `D:\CodeProjects\thtaib`.
+Updated 2026-09-29. The largest backend start and estimate functions are split into smaller helpers with the same control flow. Chat, setup resolution, dependency preview, memory placement, input-source rows, and managed reconfigure keep their public behavior. Deep Agents `create_deep_agent` is still how a run is compiled.
 
-Find still accepts a Hugging Face link. Choose is quantization, an explicit projector or text-only choice, and the publisher generation recipe. Review is where context, GPU layers, K cache, V cache, cache location, flash attention, and MTP are set, beside the memory estimate. Untouched values stay omitted from the saved setup and the llama.cpp command. Host and port are still sent. An already-saved profile that stored those keys is left as saved. The estimate stays advisory and does not block Download.
+Live check on the restarted backend: Chat on ANIMATIONTEST loaded Qwen3.8 27B Unsloth (IQ4_XS) and answered a one-word ping. My models still shows that setup as Ready. No model was downloaded or deleted.
 
-MTP appears only when a real draft head exists: a main-file tensor ending in `nextn.eh_proj.weight`, or a separate file whose own header contains a NextN tensor. Filename alone is not enough. MTP off skips those tensors in the GPU estimate. MTP on prices the head. Turning context to Automatic on an already-matching launch records that request without restarting the process.
+Checks: backend default suite (1232 tests, one optional skip) and integration (213 tests, three optional skips). No desktop, generated-contract, or OpenSpec change, so those checks were not re-run.
 
-Capability checks are one icon row on Review and on the installed model. Detail and Retest sit in the hover. Before download, the row uses the file and header only. The first healthy load runs the existing probes once, and only for advertised kinds.
-
-Checks passed: desktop `pnpm run build`, backend default suite (1232 tests, one optional skip), integration (213 tests, three optional skips), generated-contract `--check`, and `openspec validate --all` (12 passed). Read-only Review of `prithivMLmods/Qwen3.5-0.8B-MTP-GGUF` (`Qwen3.5-0.8B.Q4_K_M.gguf`, text only) offered Built-in draft head, priced speculation only after MTP was on (weights 494.3 MB to 506.3 MB, speculation 512.0 MB), and a context slider at 43,008 tokens changed only the context pool while K cache, V cache, cache location, and MTP stayed Engine default or Off. No download was started and the installed Qwen was not loaded. The open Review was put back to Engine default and MTP Off.
+Left dense on purpose: admitted tool presentation, and chat dispatch after a request is accepted. Browser tool binding was not part of this pass.
 
 Still open: importing a model file from this computer. The Thinking hover retests reasoning only; the preserve-reasoning probe still runs automatically when that template capability is advertised. Quant names like `Qwen3.5-0.8B.Q4_K_M.gguf` still display as Unknown. Downloads was not rebuilt.

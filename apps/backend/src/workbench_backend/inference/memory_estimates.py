@@ -263,119 +263,9 @@ class MemoryEstimator:
         projector_fields: GgufFields | None = None
         draft_fields: GgufFields | None = None
         if request.bundle_id:
-            bundle = self.manager.store.get_bundle(request.bundle_id)
-            if bundle is None:
-                raise ManagerError("Unknown bundle", code="bundle_missing", status_code=404)
-            primaries = [item for item in bundle.files if item.name.lower().endswith(".gguf")
-                and item.role.value in {"primary_weights", "shard"}]
-            result.model_disk_bytes = sum(item.size_bytes for item in primaries)
-            projector = mmproj_companion(bundle)
-            result.projector_disk_bytes = projector.size_bytes if projector else 0
-            try:
-                for index, primary in enumerate(primaries):
-                    if Path(primary.path).stat().st_size != primary.size_bytes:
-                        raise ValueError("Model files changed; known disk totals may be out of date. Verify the model in Files.")
-                    shard_fields, _ = self._local_directory(Path(primary.path), refresh=request.refresh)
-                    if index == 0:
-                        fields = shard_fields
-                    else:
-                        fields.tensors += shard_fields.tensors
-                result.weights_bytes = self._weight_bytes(fields, bags.startup.applied)
-                result.architecture = fields.get("general.architecture")
-                maximum = fields.get(f"{result.architecture}.context_length")
-                result.context_maximum = maximum if isinstance(maximum, int) and 0 < maximum < 2**32 else None
-            except (OSError, ValueError, ManagerError) as exc:
-                result.unknown_reasons.append(str(exc) if not isinstance(exc, ManagerError) else exc.message)
-            if projector:
-                try:
-                    projector_fields, result.projector_bytes = self._local_directory(Path(projector.path), refresh=request.refresh)
-                except (OSError, ValueError, ManagerError) as exc:
-                    result.unknown_reasons.append(f"Projector metadata is unavailable: {getattr(exc, 'message', str(exc))}")
-            else:
-                result.projector_bytes = 0
-            draft_path = bags.startup.applied.get("spec_draft_model")
-            if draft_path and self._spec_modes(bags.startup.applied) - {"none"}:
-                try:
-                    draft_fields, _ = self._local_directory(Path(draft_path), refresh=request.refresh)
-                except (OSError, ValueError, ManagerError) as exc:
-                    result.unknown_reasons.append(f"Draft metadata is unavailable: {getattr(exc, 'message', str(exc))}")
-            if request.method == "native":
-                # A metadata-reader failure cannot disable an explicit native check.
-                try:
-                    self._native_prediction(bundle, request, result)
-                except (OSError, ValueError, ManagerError) as exc:
-                    result.completeness = "unavailable"
-                    result.unknown_reasons.append(str(exc) if not isinstance(exc, ManagerError) else exc.message)
-            # A different setup, slot policy or cache on the same weights is
-            # not an observation of this candidate. Response choices are absent
-            # from the canonical native residency identity.
-            plan_identity = loaded_model_identity(self.manager.runtime.current(), bundle, bags, hash_external=False)
-            result.plan_identity = plan_identity
-            try:
-                verification = json.loads(self.manager.store.get_setting(f"model-verification:{bundle.id}") or "null")
-                observed_files_match = (isinstance(verification, dict) and verification.get("matches") is True
-                                        and verification.get("identity") == bundle_identity(bundle))
-            except (OSError, ValueError):
-                observed_files_match = False
-            live = next((item for item in self.manager.store.list_deployments() if plan_identity is not None
-                and observed_files_match
-                and item.bundle_id == bundle.id
-                and item.status.value == "running" and item.health and item.health.healthy
-                and item.loaded_model_identity == plan_identity), None)
-            if live:
-                usage = live.resource_usage
-                if live.router_preset_id is not None:
-                    # Routed deployments own the shared parent process. Its RSS
-                    # does not measure this model's unrecorded native child.
-                    usage = ResourceUsage(available=False,
-                        reason="Model process RAM is unavailable; the recorded process usage belongs to the shared router.")
-                result.observed_runtime = {"deployment_id": live.id, "observed_at": live.updated_at,
-                    "plan_identity": plan_identity, "kind": "observed",
-                    "startup": live.applied_startup, "resource_usage": usage.model_dump(mode="json") if usage else None}
+            fields, projector_fields, draft_fields = self._estimate_installed_bundle(request, bags, result)
         elif request.repo_id:
-            repository_key = f"{request.repo_id}@{request.revision}"
-            with self._lock:
-                listing = self._repositories.get(repository_key) if re.fullmatch(r"[a-fA-F0-9]{40}", request.revision) else None
-            if listing is None or request.refresh:
-                listing = self.manager.bundles.hf.inspect(repo_id=request.repo_id, revision=request.revision)
-                with self._lock:
-                    self._repositories[f"{listing.repo_id}@{listing.resolved_revision}"] = listing
-                    while len(self._repositories) > 32:
-                        self._repositories.popitem(last=False)
-            variant = next((item for item in listing.variants if set(item.files) == set(request.primary_files) and item.complete), None)
-            projector = next((item for item in listing.projectors if set(item.files) == set(request.projector_files) and item.complete), None)
-            if not variant or (request.projector_files and projector is None):
-                raise ManagerError("Choose one complete model and at most one complete projector.", code="estimate_selection", status_code=400)
-            result.source_identity = f"{listing.repo_id}@{listing.resolved_revision}:{','.join(variant.files)}"
-            result.model_disk_bytes = variant.size_bytes
-            result.projector_disk_bytes = projector.size_bytes if projector else 0
-            try:
-                fields, weights = self._remote_directories(listing.repo_id, listing.resolved_revision, variant.files, request.refresh)
-                result.weights_bytes = weights
-            except (ValueError, OSError, httpx.HTTPError) as exc:
-                reason = str(exc) if isinstance(exc, ValueError) else "Bounded remote GGUF metadata is unavailable."
-                result.unknown_reasons.append(reason)
-                with self._lock:
-                    self._metadata_failures[result.source_identity] = reason
-                    while len(self._metadata_failures) > 32:
-                        self._metadata_failures.popitem(last=False)
-            if projector:
-                try:
-                    projector_fields, result.projector_bytes = self._remote_directories(listing.repo_id,
-                        listing.resolved_revision, projector.files, request.refresh)
-                except (ValueError, OSError, httpx.HTTPError) as exc:
-                    result.unknown_reasons.append("Bounded projector metadata is unavailable.")
-                result.unknown_reasons.append("Vision runtime/compute allocation is unknown before loading.")
-            else:
-                result.projector_bytes = 0
-            verified, draft_by_name = self._verified_mtp_files(listing, request.refresh)
-            result.mtp_draft_files = verified
-            selected_draft = str(bags.startup.applied.get("spec_draft_model") or "")
-            if selected_draft in draft_by_name:
-                draft_fields = draft_by_name[selected_draft]
-            result.weights_bytes = self._weight_bytes(fields, bags.startup.applied) if fields.tensors else result.weights_bytes
-            if request.method == "native":
-                result.unknown_reasons.append("Native checking is available after the selected model is installed.")
+            fields, projector_fields, draft_fields = self._estimate_repository_files(request, bags, result)
         else:
             raise ManagerError("Choose an installed model or exact repository files.", code="estimate_selection", status_code=400)
         result.builtin_mtp = self._builtin_mtp(fields)
@@ -387,6 +277,168 @@ class MemoryEstimator:
         result.unknown_reasons = list(dict.fromkeys(result.unknown_reasons))
         result.calculation_ms = round((time.perf_counter() - started) * 1000, 3)
         return result
+
+    def _estimate_installed_bundle(self, request, bags, result):
+        bundle = self.manager.store.get_bundle(request.bundle_id)
+        if bundle is None:
+            raise ManagerError("Unknown bundle", code="bundle_missing", status_code=404)
+        primaries = [item for item in bundle.files if item.name.lower().endswith(".gguf")
+            and item.role.value in {"primary_weights", "shard"}]
+        result.model_disk_bytes = sum(item.size_bytes for item in primaries)
+        projector = mmproj_companion(bundle)
+        result.projector_disk_bytes = projector.size_bytes if projector else 0
+        fields = self._installed_primary_fields(primaries, request, bags, result)
+        projector_fields = self._installed_projector_fields(projector, request, result)
+        draft_fields = self._installed_draft_fields(bags, request, result)
+        self._apply_explicit_native_check(bundle, request, result)
+        self._attach_observed_runtime(bundle, bags, result)
+        return fields, projector_fields, draft_fields
+
+    def _installed_primary_fields(self, primaries, request, bags, result):
+        fields = GgufFields()
+        try:
+            for index, primary in enumerate(primaries):
+                if Path(primary.path).stat().st_size != primary.size_bytes:
+                    raise ValueError("Model files changed; known disk totals may be out of date. Verify the model in Files.")
+                shard_fields, _ = self._local_directory(Path(primary.path), refresh=request.refresh)
+                if index == 0:
+                    fields = shard_fields
+                else:
+                    fields.tensors += shard_fields.tensors
+            result.weights_bytes = self._weight_bytes(fields, bags.startup.applied)
+            result.architecture = fields.get("general.architecture")
+            maximum = fields.get(f"{result.architecture}.context_length")
+            result.context_maximum = maximum if isinstance(maximum, int) and 0 < maximum < 2**32 else None
+        except (OSError, ValueError, ManagerError) as exc:
+            result.unknown_reasons.append(str(exc) if not isinstance(exc, ManagerError) else exc.message)
+        return fields
+
+    def _installed_projector_fields(self, projector, request, result):
+        if projector:
+            try:
+                projector_fields, result.projector_bytes = self._local_directory(Path(projector.path), refresh=request.refresh)
+                return projector_fields
+            except (OSError, ValueError, ManagerError) as exc:
+                result.unknown_reasons.append(f"Projector metadata is unavailable: {getattr(exc, 'message', str(exc))}")
+                return None
+        result.projector_bytes = 0
+        return None
+
+    def _installed_draft_fields(self, bags, request, result):
+        draft_fields = None
+        draft_path = bags.startup.applied.get("spec_draft_model")
+        if draft_path and self._spec_modes(bags.startup.applied) - {"none"}:
+            try:
+                draft_fields, _ = self._local_directory(Path(draft_path), refresh=request.refresh)
+            except (OSError, ValueError, ManagerError) as exc:
+                result.unknown_reasons.append(f"Draft metadata is unavailable: {getattr(exc, 'message', str(exc))}")
+        return draft_fields
+
+    def _apply_explicit_native_check(self, bundle, request, result):
+        if request.method == "native":
+            # A metadata-reader failure cannot disable an explicit native check.
+            try:
+                self._native_prediction(bundle, request, result)
+            except (OSError, ValueError, ManagerError) as exc:
+                result.completeness = "unavailable"
+                result.unknown_reasons.append(str(exc) if not isinstance(exc, ManagerError) else exc.message)
+
+    def _attach_observed_runtime(self, bundle, bags, result):
+        # A different setup, slot policy or cache on the same weights is
+        # not an observation of this candidate. Response choices are absent
+        # from the canonical native residency identity.
+        plan_identity = loaded_model_identity(self.manager.runtime.current(), bundle, bags, hash_external=False)
+        result.plan_identity = plan_identity
+        try:
+            verification = json.loads(self.manager.store.get_setting(f"model-verification:{bundle.id}") or "null")
+            observed_files_match = (isinstance(verification, dict) and verification.get("matches") is True
+                                    and verification.get("identity") == bundle_identity(bundle))
+        except (OSError, ValueError):
+            observed_files_match = False
+        live = next((item for item in self.manager.store.list_deployments() if plan_identity is not None
+            and observed_files_match
+            and item.bundle_id == bundle.id
+            and item.status.value == "running" and item.health and item.health.healthy
+            and item.loaded_model_identity == plan_identity), None)
+        if live:
+            usage = live.resource_usage
+            if live.router_preset_id is not None:
+                # Routed deployments own the shared parent process. Its RSS
+                # does not measure this model's unrecorded native child.
+                usage = ResourceUsage(available=False,
+                    reason="Model process RAM is unavailable; the recorded process usage belongs to the shared router.")
+            result.observed_runtime = {"deployment_id": live.id, "observed_at": live.updated_at,
+                "plan_identity": plan_identity, "kind": "observed",
+                "startup": live.applied_startup, "resource_usage": usage.model_dump(mode="json") if usage else None}
+
+    def _estimate_repository_files(self, request, bags, result):
+        listing = self._repository_listing(request)
+        variant, projector = self._selected_repository_variant(listing, request, result)
+        fields = self._remote_weight_fields(listing, variant, request, result)
+        projector_fields = self._remote_projector_fields(listing, projector, request, result)
+        draft_fields = self._apply_remote_draft_weights(listing, bags, request, result, fields)
+        return fields, projector_fields, draft_fields
+
+    def _repository_listing(self, request):
+        repository_key = f"{request.repo_id}@{request.revision}"
+        with self._lock:
+            listing = self._repositories.get(repository_key) if re.fullmatch(r"[a-fA-F0-9]{40}", request.revision) else None
+        if listing is None or request.refresh:
+            listing = self.manager.bundles.hf.inspect(repo_id=request.repo_id, revision=request.revision)
+            with self._lock:
+                self._repositories[f"{listing.repo_id}@{listing.resolved_revision}"] = listing
+                while len(self._repositories) > 32:
+                    self._repositories.popitem(last=False)
+        return listing
+
+    def _selected_repository_variant(self, listing, request, result):
+        variant = next((item for item in listing.variants if set(item.files) == set(request.primary_files) and item.complete), None)
+        projector = next((item for item in listing.projectors if set(item.files) == set(request.projector_files) and item.complete), None)
+        if not variant or (request.projector_files and projector is None):
+            raise ManagerError("Choose one complete model and at most one complete projector.", code="estimate_selection", status_code=400)
+        result.source_identity = f"{listing.repo_id}@{listing.resolved_revision}:{','.join(variant.files)}"
+        result.model_disk_bytes = variant.size_bytes
+        result.projector_disk_bytes = projector.size_bytes if projector else 0
+        return variant, projector
+
+    def _remote_weight_fields(self, listing, variant, request, result):
+        fields = GgufFields()
+        try:
+            fields, weights = self._remote_directories(listing.repo_id, listing.resolved_revision, variant.files, request.refresh)
+            result.weights_bytes = weights
+        except (ValueError, OSError, httpx.HTTPError) as exc:
+            reason = str(exc) if isinstance(exc, ValueError) else "Bounded remote GGUF metadata is unavailable."
+            result.unknown_reasons.append(reason)
+            with self._lock:
+                self._metadata_failures[result.source_identity] = reason
+                while len(self._metadata_failures) > 32:
+                    self._metadata_failures.popitem(last=False)
+        return fields
+
+    def _remote_projector_fields(self, listing, projector, request, result):
+        projector_fields = None
+        if projector:
+            try:
+                projector_fields, result.projector_bytes = self._remote_directories(listing.repo_id,
+                    listing.resolved_revision, projector.files, request.refresh)
+            except (ValueError, OSError, httpx.HTTPError) as exc:
+                result.unknown_reasons.append("Bounded projector metadata is unavailable.")
+            result.unknown_reasons.append("Vision runtime/compute allocation is unknown before loading.")
+            return projector_fields
+        result.projector_bytes = 0
+        return None
+
+    def _apply_remote_draft_weights(self, listing, bags, request, result, fields):
+        verified, draft_by_name = self._verified_mtp_files(listing, request.refresh)
+        result.mtp_draft_files = verified
+        selected_draft = str(bags.startup.applied.get("spec_draft_model") or "")
+        draft_fields = None
+        if selected_draft in draft_by_name:
+            draft_fields = draft_by_name[selected_draft]
+        result.weights_bytes = self._weight_bytes(fields, bags.startup.applied) if fields.tensors else result.weights_bytes
+        if request.method == "native":
+            result.unknown_reasons.append("Native checking is available after the selected model is installed.")
+        return draft_fields
 
     @staticmethod
     def _local_directory(path: Path, *, refresh: bool = False):
@@ -571,6 +623,12 @@ class MemoryEstimator:
         context, parallel = self._pool(fields, applied, result)
         modes = self._spec_modes(applied)
         rollback = applied.get("spec_draft_n_max", 3) if modes & {"draft-mtp", "draft-eagle3", "draft-dflash", "draft-dspark"} else 0
+        projection = self._apply_selected_cache(fields, applied, result, context, parallel, rollback)
+        speculative = self._include_mtp_or_draft(fields, applied, result, context, parallel, modes, draft_fields)
+        self._metadata_placement(fields, applied, projection, speculative, result,
+                                 projector_fields=projector_fields, draft_fields=draft_fields)
+
+    def _apply_selected_cache(self, fields, applied, result, context, parallel, rollback):
         projection = cache_projection(fields, context, applied.get("cache_type_k", "f16"), applied.get("cache_type_v", "f16"),
             parallel=parallel, rollback=rollback, flash_attention=applied.get("flash_attn", "auto"))
         result.attention_cache_bytes = sum(projection.attention.values()) if projection.attention_known else None
@@ -581,6 +639,9 @@ class MemoryEstimator:
         result.assumptions.append("Metadata totals are known weight/cache components; native buffers, compute, driver and host-cache overhead remain excluded.")
         if result.recurrent_state_bytes:
             result.assumptions.append("Recurrent state uses native f32 tensors per simultaneous request and speculative rollback snapshot, independent of K/V precision.")
+        return projection
+
+    def _include_mtp_or_draft(self, fields, applied, result, context, parallel, modes, draft_fields):
         speculative = CacheProjection()
         draft_weights = 0
         if "draft-mtp" in modes and not applied.get("spec_draft_model"):
@@ -615,10 +676,28 @@ class MemoryEstimator:
             result.weights_bytes = None
         elif draft_weights and result.weights_bytes is not None:
             result.weights_bytes += draft_weights
-        self._metadata_placement(fields, applied, projection, speculative, result,
-                                 projector_fields=projector_fields, draft_fields=draft_fields)
+        return speculative
 
     def _metadata_placement(self, fields, applied, projection, speculative, result, *, projector_fields, draft_fields):
+        rows, single_gpu, total_layers, requested, offload, placement_known = self._device_placement(fields, applied, result)
+        tensors = self._place_target_weights(rows, fields, applied, result, count=offload, layers=total_layers, requested=requested,
+            placement_known=placement_known, single_gpu=single_gpu)
+        self._place_target_caches(rows, projection, count=offload, layers=total_layers, applied=applied,
+            placement_known=placement_known, single_gpu=single_gpu)
+        if draft_fields is None:
+            self._place_speculative_attention(rows, speculative, count=offload, layers=total_layers, applied=applied,
+                placement_known=placement_known, single_gpu=single_gpu)
+        if draft_fields is not None:
+            self._place_separate_draft(rows, draft_fields, applied, speculative, result,
+                placement_known=placement_known, single_gpu=single_gpu)
+        self._place_projector(rows, result, applied, single_gpu)
+        self._finalize_device_rows(rows, result, speculative, placement_known)
+        self._assign_gpu_ram(rows, result, placement_known=placement_known, tensors=tensors, requested=requested, applied=applied)
+        if not tensors and type(requested) is int and requested > 0:
+            result.unknown_reasons.append("Explicit layer placement requires the model's tensor names; weight placement is unavailable.")
+        self._context_upper_bound(fields, applied, projection, result, rows, single_gpu, requested, tensors)
+
+    def _device_placement(self, fields, applied, result):
         rows = {"Host": {"id": "Host", "name": "RAM", "weights_bytes": 0, "attention_cache_bytes": 0,
                          "recurrent_state_bytes": 0, "projector_bytes": 0, "speculation_bytes": 0}}
         devices = result.hardware.gpu_devices
@@ -634,59 +713,75 @@ class MemoryEstimator:
             result.assumptions.append("Automatic placement preview assumes all eligible layers on one GPU; native fitting may place some in RAM.")
         if not placement_known:
             result.unknown_reasons.append("Device placement is unavailable or uses multiple GPUs; their budgets are not pooled.")
-        def device_for_layer(layer, *, count=offload, layers=total_layers, cache=False):
-            if cache and not applied.get("kv_offload", True) or count == 0:
-                return "Host"
-            if not placement_known or type(count) is not int or layers is None:
-                return None
-            return single_gpu.id if layer >= max(layers + 1 - count, 0) and count > 0 else "Host"
-        def add_tensor(tensor, *, count=offload, layers=total_layers):
-            if tensor.n_bytes is None:
-                return
-            match = re.match(r"^blk\.(\d+)\.", tensor.name)
-            target = (device_for_layer(int(match[1]), count=count, layers=layers) if match
-                else device_for_layer(layers, count=count, layers=layers) if layers is not None and tensor.name.startswith(("output.", "output_norm."))
-                else "Host")
-            if target is not None:
-                rows[target]["weights_bytes"] += tensor.n_bytes
+        return rows, single_gpu, total_layers, requested, offload, placement_known
+
+    def _layer_device(self, layer, *, count, layers, applied, placement_known, single_gpu, cache=False):
+        if cache and not applied.get("kv_offload", True) or count == 0:
+            return "Host"
+        if not placement_known or type(count) is not int or layers is None:
+            return None
+        return single_gpu.id if layer >= max(layers + 1 - count, 0) and count > 0 else "Host"
+
+    def _place_weight_tensor(self, rows, tensor, *, count, layers, applied, placement_known, single_gpu):
+        if tensor.n_bytes is None:
+            return
+        match = re.match(r"^blk\.(\d+)\.", tensor.name)
+        target = (self._layer_device(int(match[1]), count=count, layers=layers, applied=applied, placement_known=placement_known, single_gpu=single_gpu) if match
+            else self._layer_device(layers, count=count, layers=layers, applied=applied, placement_known=placement_known, single_gpu=single_gpu) if layers is not None and tensor.name.startswith(("output.", "output_norm."))
+            else "Host")
+        if target is not None:
+            rows[target]["weights_bytes"] += tensor.n_bytes
+
+    def _place_target_weights(self, rows, fields, applied, result, *, count, layers, requested, placement_known, single_gpu):
         tensors = self._selected_tensors(fields, applied)
         for tensor in tensors:
-            add_tensor(tensor)
+            self._place_weight_tensor(rows, tensor, count=count, layers=layers, applied=applied,
+                placement_known=placement_known, single_gpu=single_gpu)
         if not tensors and result.weights_bytes is not None and requested == 0:
             rows["Host"]["weights_bytes"] = result.weights_bytes
+        return tensors
+
+    def _place_target_caches(self, rows, projection, *, count, layers, applied, placement_known, single_gpu):
         for kind, allocations in (("attention_cache_bytes", projection.attention), ("recurrent_state_bytes", projection.recurrent)):
             for layer, size in allocations.items():
-                target = device_for_layer(layer, cache=True)
+                target = self._layer_device(layer, count=count, layers=layers, cache=True, applied=applied,
+                    placement_known=placement_known, single_gpu=single_gpu)
                 if target is not None:
                     rows[target][kind] += size
-        if draft_fields is None:
-            for layer, size in speculative.attention.items():
-                target = device_for_layer(layer, cache=True)
-                if target is not None:
-                    rows[target]["attention_cache_bytes"] += size
-                    rows[target]["speculation_bytes"] += size
-        if draft_fields is not None:
-            draft_layers = _positive(draft_fields.get(f"{draft_fields.get('general.architecture')}.block_count"))
-            draft_count = applied.get("spec_draft_ngl", "auto")
-            if draft_count in {None, -1, "auto", "all"}:
-                draft_count = draft_layers + 1 if draft_layers else None
-            for tensor in self._selected_tensors(draft_fields, applied, keep_embedded_mtp=True):
-                add_tensor(tensor, count=draft_count, layers=draft_layers)
-            for layer, size in speculative.attention.items():
-                target = device_for_layer(layer, count=draft_count, layers=draft_layers, cache=True)
-                if target is not None:
-                    rows[target]["attention_cache_bytes"] += size
-                    rows[target]["speculation_bytes"] += size
-            for layer, size in speculative.recurrent.items():
-                target = device_for_layer(layer, count=draft_count, layers=draft_layers, cache=True)
-                if target is not None:
-                    rows[target]["recurrent_state_bytes"] += size
-            result.unknown_reasons.append("Separate draft placement/compute is approximate and may differ after native fitting.")
+
+    def _place_speculative_attention(self, rows, speculative, *, count, layers, applied, placement_known, single_gpu):
+        for layer, size in speculative.attention.items():
+            target = self._layer_device(layer, count=count, layers=layers, cache=True, applied=applied,
+                placement_known=placement_known, single_gpu=single_gpu)
+            if target is not None:
+                rows[target]["attention_cache_bytes"] += size
+                rows[target]["speculation_bytes"] += size
+
+    def _place_separate_draft(self, rows, draft_fields, applied, speculative, result, *, placement_known, single_gpu):
+        draft_layers = _positive(draft_fields.get(f"{draft_fields.get('general.architecture')}.block_count"))
+        draft_count = applied.get("spec_draft_ngl", "auto")
+        if draft_count in {None, -1, "auto", "all"}:
+            draft_count = draft_layers + 1 if draft_layers else None
+        for tensor in self._selected_tensors(draft_fields, applied, keep_embedded_mtp=True):
+            self._place_weight_tensor(rows, tensor, count=draft_count, layers=draft_layers, applied=applied,
+                placement_known=placement_known, single_gpu=single_gpu)
+        self._place_speculative_attention(rows, speculative, count=draft_count, layers=draft_layers, applied=applied,
+            placement_known=placement_known, single_gpu=single_gpu)
+        for layer, size in speculative.recurrent.items():
+            target = self._layer_device(layer, count=draft_count, layers=draft_layers, cache=True, applied=applied,
+                placement_known=placement_known, single_gpu=single_gpu)
+            if target is not None:
+                rows[target]["recurrent_state_bytes"] += size
+        result.unknown_reasons.append("Separate draft placement/compute is approximate and may differ after native fitting.")
+
+    def _place_projector(self, rows, result, applied, single_gpu):
         if result.projector_bytes is not None and (not applied.get("mmproj_use_gpu", True) or single_gpu or result.projector_bytes == 0):
             target = single_gpu.id if applied.get("mmproj_use_gpu", True) and single_gpu else "Host"
             rows[target]["projector_bytes"] = result.projector_bytes
             if result.projector_bytes:
                 result.assumptions.append("Projector tensor bytes are a component estimate; native vision buffers/compute remain unknown.")
+
+    def _finalize_device_rows(self, rows, result, speculative, placement_known):
         for row in rows.values():
             row["kv_bytes"] = row["attention_cache_bytes"] + row["recurrent_state_bytes"]
             row["runtime_overhead_bytes"] = row["total_bytes"] = None
@@ -705,6 +800,8 @@ class MemoryEstimator:
                 row["kv_bytes"] = None
             if result.projector_bytes is None:
                 row["projector_bytes"] = None
+
+    def _assign_gpu_ram(self, rows, result, *, placement_known, tensors, requested, applied):
         result.devices = list(rows.values())
         selected_components_known = (result.weights_bytes is not None and result.kv_bytes is not None
                                      and result.projector_bytes is not None and result.speculation_bytes is not None)
@@ -714,8 +811,8 @@ class MemoryEstimator:
             if not tensors and requested != 0:
                 result.gpu_bytes = None
                 result.ram_bytes = rows["Host"]["kv_bytes"] if not applied.get("kv_offload", True) else None
-        if not tensors and type(requested) is int and requested > 0:
-            result.unknown_reasons.append("Explicit layer placement requires the model's tensor names; weight placement is unavailable.")
+
+    def _context_upper_bound(self, fields, applied, projection, result, rows, single_gpu, requested, tensors):
         if (single_gpu and not result.hardware.stale and requested in {None, -1, "auto", "all"}
                 and result.weights_bytes is not None and result.projector_disk_bytes == 0
                 and result.speculation_bytes == 0 and applied.get("kv_offload", True)
