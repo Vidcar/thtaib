@@ -161,7 +161,7 @@ try {
   await act(async () => choices(renderer)[0].props.onClick()); await flush();
   assert.equal(applied.at(-1).startup_overrides.ctx_size, 8192, "A to B to A restores chat-local context");
   assert.equal(applied.at(-1).per_request_overrides.reasoning_effort, "medium");
-  await update({ runtimeBusy: false, conversationId: "chat_reload", selectedConfigurationId: "config_a", selectedDeploymentId: "dep_a", configuration: { model_configuration_id: "config_a", deployment_id: "dep_a", startup_overrides: { ctx_size: 8192 }, per_request_overrides: { temperature: 0.2, reasoning_effort: "medium" } } });
+  await update({ runtimeBusy: false, conversationId: "chat_reload", selectionGeneration: 1, selectedConfigurationId: "config_a", selectedDeploymentId: "dep_a", configuration: { model_configuration_id: "config_a", deployment_id: "dep_a", startup_overrides: { ctx_size: 8192 }, per_request_overrides: { temperature: 0.2, reasoning_effort: "medium" } } });
   await open(renderer, "Tune model");
   await act(async () => changeContext(renderer, 12288)); await flush();
   await act(async () => thinkingChoice(renderer, "off").props.onChange()); await flush();
@@ -177,8 +177,8 @@ try {
   assert.equal(aria(renderer, "Chat context", "input").props["data-token-value"], 12288, "the failed candidate stays available for correction or retry");
   assert.match(text(renderer.root), /GPU memory exhausted while reloading/);
   const reloadConfiguration = props.configuration;
-  await update({ conversationId: "chat_other", configuration: { model_configuration_id: "config_a", deployment_id: "dep_a" } });
-  await update({ conversationId: "chat_reload", configuration: reloadConfiguration });
+  await update({ conversationId: "chat_other", selectionGeneration: 2, configuration: { model_configuration_id: "config_a", deployment_id: "dep_a" } });
+  await update({ conversationId: "chat_reload", selectionGeneration: 3, configuration: reloadConfiguration });
   assert.equal(aria(renderer, "Chat context", "input").props["data-token-value"], 12288, "returning to a chat restores its pending capacity draft");
   failure = "";
   let refreshCalls = 0, refreshFails = true;
@@ -300,7 +300,7 @@ try {
 async function checkSavedRevisionAndChoiceCompletion() {
   let mounted;
   const localProfiles = profiles.map(item => ({ ...item, revision: 1 }));
-  const loads = [], applications = [];
+  const loads = [], applications = [], busyReports = [];
   let optionReads = 0, pendingRefresh = null, pendingAcceptance = null;
   let props = { bundles, profiles: localProfiles, deployments: [deployment("resident", "bundle_a", "config_a")], selectedDeploymentId: "resident", selectedConfigurationId: "config_a", configuration: { model_configuration_id: "config_a", deployment_id: "resident" }, conversationId: "revision-chat" };
   const publish = patch => { props = { ...props, ...patch }; mounted.update(React.createElement(ChatModelControls, props)); };
@@ -328,6 +328,7 @@ async function checkSavedRevisionAndChoiceCompletion() {
     if (pendingRefresh) await pendingRefresh.promise;
     publish({ deployments: [loads.at(-1)] });
   };
+  props.onBusyChange = busy => busyReports.push(busy);
   try {
     await act(async () => { mounted = create(React.createElement(ChatModelControls, props)); }); await flush();
     await open(mounted, "Tune model");
@@ -371,6 +372,25 @@ async function checkSavedRevisionAndChoiceCompletion() {
     await act(async () => pendingAcceptance.resolve()); await flush();
     assert.equal(aria(mounted, "Chat model: Qwen").props["aria-expanded"], true, "late acceptance cannot close a newly selected chat's picker");
     assert.equal(applications.length, 3, "late completion cannot reapply a selection");
+
+    await update({ conversationId: null, selectionGeneration: 10, selectedConfigurationId: "config_a", selectedDeploymentId: "", configuration: { model_configuration_id: "config_a", startup_overrides: { ctx_size: 8192 } } });
+    await open(mounted, "Tune model");
+    await act(async () => changeContext(mounted, 12288)); await flush();
+    await update({ selectionGeneration: 11 });
+    assert.equal(aria(mounted, "Chat context", "input").props["data-token-value"], 12288, "fresh New preserves pending settings while changing transient operation ownership");
+
+    const resolving = Promise.withResolvers(), resolveBeforeDisposal = workspaceApi.resolveSetup;
+    workspaceApi.resolveSetup = async (...args) => { if (args[2].model_configuration_id === "config_b") await resolving.promise; return resolveBeforeDisposal(...args); };
+    const beforeDisposal = { loads: loads.length, applications: applications.length };
+    await open(mounted, "Chat model: Qwen");
+    await act(async () => choices(mounted)[1].props.onClick()); await flush();
+    assert.equal(busyReports.at(-1), true, "model preflight publishes its pending state");
+    await act(async () => mounted.unmount()); mounted = undefined;
+    assert.equal(busyReports.at(-1), false, "disposal clears the reported selection gate");
+    await act(async () => resolving.resolve()); await flush();
+    assert.equal(loads.length, beforeDisposal.loads, "disposed model preparation cannot start a model later");
+    assert.equal(applications.length, beforeDisposal.applications, "disposed model preparation cannot apply to a replacement owner");
+    workspaceApi.resolveSetup = resolveBeforeDisposal;
   } finally {
     pendingAcceptance?.resolve(); pendingRefresh?.resolve();
     if (mounted) await act(async () => mounted.unmount());

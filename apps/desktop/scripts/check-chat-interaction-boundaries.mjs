@@ -578,12 +578,14 @@ function makeHarness(options = {}) {
           const threadId = stateMatch[1];
           state.requests.states.push(threadId);
           const runValue = state.streamRuns.get(threadId) ?? null;
+          const conversationId = [...state.threadByConversation.entries()].find(([, value]) => value === threadId)?.[0];
+          const pendingQueue = state.conversations[conversationId]?.queue?.some(item => ["queued", "dispatching"].includes(item.status));
           json(res, 200, {
             values: {
               messages: runValue ? runValue.messages ?? [{ id: `${runValue.id}_message`, type: "ai", content: runValue.messageContent ?? "stream" }] : [],
               workbench: { run: runValue },
             },
-            next: runValue && ["queued", "running", "cancel_requested"].includes(runValue.status) ? ["agent"] : [],
+            next: pendingQueue || runValue && ["queued", "running", "cancel_requested"].includes(runValue.status) ? ["agent"] : [],
             tasks: [],
           });
           return;
@@ -2698,6 +2700,8 @@ async function selectFixtureModel(renderer) {
     const picker = renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatModelControls")[0];
     assert.equal(picker.props.selectedDeploymentId, "dep_1");
     assert.equal(picker.props.disabled, false, "model application finishes before the next choice");
+    const appliedChoice = renderer.root.findAll(node => node.type === "button" && node.props.className === "chat-model-choice" && textOf(node).includes("test"))[0];
+    assert.equal(appliedChoice.props.disabled, false, "the model choice's own admission finishes before the next action");
   }, "fixture model applied to Chat");
 }
 
@@ -3184,6 +3188,234 @@ async function testAcceptedSubmissionRecoversWithoutStreamProjection(vite) {
   }
 }
 
+async function testProjectBusySendAcknowledgesDurableQueue(vite) {
+  for (const variant of ["new", "previous", "response lost", "response and read lost", "new followup", "previous followup", "cancel queued", "delayed response", "previous delayed response", "delayed response switched", "delayed response cancelled", "delayed response already running", "delayed response already completed", "execution fails"]) {
+    const previous = variant.startsWith("previous") ? run("previous_run", "completed", "previous_input", "Earlier answer") : null;
+    let acceptedInput = null;
+    let failedRefresh = false;
+    let delayedReturned = false;
+    const delayedResponse = deferred();
+    const harness = makeHarness({ aRun: previous, threadARun: previous,
+      bRun: variant === "delayed response switched" ? run("run_b", "running") : null,
+      requestOverride: async ({ req, res, url, body, state }) => {
+      if (req.method === "DELETE" && url.pathname === "/v1/chat/conversations/conv_a/queue/queued_busy") {
+        state.conversations.conv_a = { ...state.conversations.conv_a, queue: [] };
+        json(res, 200, state.conversations.conv_a);
+        return true;
+      }
+      if (req.method === "POST" && url.pathname === "/v1/agent-interaction/threads/thread_a/commands") {
+        const payload = JSON.parse(body);
+        state.requests.commands.push({ threadId: "thread_a", payload });
+        const firstCommand = state.requests.commands.length === 1;
+        acceptedInput = payload.params.input.messages[0];
+        state.conversations.conv_a = clearDraftIfRevision({ ...state.conversations.conv_a, queue: [{
+          id: "queued_busy", input_message_id: acceptedInput.id, task: acceptedInput.content,
+          status: "queued", revision: 1, attachment_ids: [], intended_config: { deployment_id: "dep_1" },
+          created_at: now(), updated_at: now(), wait_reason: "project_busy", waiting_owner_title: "Another task",
+        }] }, payload.params.metadata.workbench.draft_revision);
+        if (variant.includes("already")) {
+          const completed = variant.endsWith("completed");
+          const admitted = run("queued_execution", completed ? "completed" : "running", acceptedInput.id);
+          admitted.messages = [{ type: "human", id: acceptedInput.id, content: acceptedInput.content },
+            ...(completed ? [{ type: "ai", id: "early_answer", content: "Completed before the command response" }] : [])];
+          state.conversations.conv_a = { ...state.conversations.conv_a, current_run: admitted,
+            current_run_id: admitted.id, run_ids: [admitted.id],
+            transcript: [{ role: "user", id: acceptedInput.id, content: acceptedInput.content, at: now(), run_id: admitted.id, content_blocks: [] }],
+            queue: completed ? [] : state.conversations.conv_a.queue.map(item => ({ ...item, status: "dispatching", run_id: admitted.id })) };
+          state.streamRuns.set("thread_a", admitted);
+        }
+        if (variant.includes("delayed response") && firstCommand) await delayedResponse.promise;
+        if (variant.includes("response") && firstCommand) json(res, 500, { type: "error", id: payload.id, error: "unknown_error", message: "Acceptance response was interrupted" });
+        else json(res, 200, { type: "success", id: payload.id, result: {} });
+        if (variant.includes("delayed response") && firstCommand) delayedReturned = true;
+        return true;
+      }
+      if (variant === "response and read lost" && acceptedInput && !failedRefresh && req.method === "GET" && url.pathname === "/v1/chat/conversations/conv_a") {
+        failedRefresh = true;
+        json(res, 503, { error: "Follow-up read temporarily unavailable" });
+        return true;
+      }
+      return false;
+    } });
+    const renderer = await renderChat(vite, harness);
+    try {
+      await waitFor(() => button(renderer, "Conversation A"), "saved chat available");
+      await act(async () => button(renderer, "Conversation A").props.onClick());
+      await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "chat bound before project wait");
+      await act(async () => textarea(renderer).props.onChange({ target: { value: "Work after the other chat" } }));
+      await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+      await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "one queued command accepted");
+      await waitFor(() => assert.equal(textarea(renderer).props.value, ""), "durable queued acceptance clears submitted draft");
+      if (!variant.includes("already")) assert.match(allText(renderer), /Waiting for project/, "queue remains visibly waiting");
+      assert.doesNotMatch(allText(renderer), /Acceptance response was interrupted|Follow-up read temporarily unavailable/, "accepted work is not presented as a failed Send");
+      assert.equal(selectedRunId(renderer), variant.includes("already") ? "queued_execution" : previous?.id ?? null, "queue admission only adopts an authoritative run");
+      if (variant === "delayed response switched") {
+        await act(async () => button(renderer, "Conversation B").props.onClick());
+        await waitFor(() => assert.equal(selectedRunId(renderer), "run_b"), "other chat owns its live stream");
+        await act(async () => textarea(renderer).props.onChange({ target: { value: "Other chat draft" } }));
+        const statesBeforeFailure = harness.state.requests.states.length;
+        delayedResponse.resolve();
+        await waitFor(() => assert.ok(delayedReturned), "obsolete response released after switching");
+        await flush();
+        assert.equal(selectedRunId(renderer), "run_b");
+        assert.equal(textarea(renderer).props.value, "Other chat draft");
+        assert.equal(harness.state.requests.states.length, statesBeforeFailure, "obsolete submission cannot reset another observer");
+        assert.doesNotMatch(allText(renderer), /Acceptance response was interrupted/);
+        continue;
+      }
+      if (variant === "delayed response cancelled") {
+        const oldInput = acceptedInput.id;
+        await act(async () => buttonByAriaLabel(renderer, "Cancel waiting message").props.onClick());
+        await waitFor(() => assert.doesNotMatch(allText(renderer), /Waiting for project/), "old queued message removed");
+        await act(async () => textarea(renderer).props.onChange({ target: { value: "New request owns the observer" } }));
+        await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+        await waitFor(() => assert.equal(harness.state.requests.commands.length, 2), "new input dispatched after cancellation");
+        await waitFor(() => assert.equal(textarea(renderer).props.value, ""), "new request acceptance settled");
+        assert.notEqual(acceptedInput.id, oldInput);
+        const statesBeforeFailure = harness.state.requests.states.length;
+        delayedResponse.resolve();
+        await waitFor(() => assert.ok(delayedReturned), "obsolete response released after new submission");
+        await flush();
+        assert.equal(harness.state.requests.states.length, statesBeforeFailure, "obsolete command response cannot reset the new input's observer");
+        assert.equal(harness.state.requests.commands.length, 2);
+        assert.doesNotMatch(allText(renderer), /Acceptance response was interrupted/);
+        continue;
+      }
+      if (variant.includes("delayed response")) {
+        const readsBeforeFailure = harness.state.requests.states.length;
+        await act(async () => textarea(renderer).props.onChange({ target: { value: "A newer unsent draft" } }));
+        delayedResponse.resolve();
+        await waitFor(() => assert.ok(harness.state.requests.states.length > readsBeforeFailure), "late command failure rehydrates only accepted observation");
+        assert.doesNotMatch(allText(renderer), /Acceptance response was interrupted/, "late failure cannot turn confirmed acceptance into an error");
+        assert.equal(textarea(renderer).props.value, "A newer unsent draft");
+        if (variant.endsWith("completed")) {
+          await waitFor(() => assert.match(allText(renderer), /Completed before the command response/), "late failure keeps accepted terminal answer readable");
+          assert.equal(harness.state.requests.commands.length, 1);
+          continue;
+        }
+      }
+      if (variant === "response and read lost") assert.equal(failedRefresh, true);
+      if (variant === "cancel queued") {
+        await act(async () => buttonByAriaLabel(renderer, "Cancel waiting message").props.onClick());
+        await waitFor(() => assert.doesNotMatch(allText(renderer), /Waiting for project/), "cancel removes the last queued message");
+        await act(async () => textarea(renderer).props.onChange({ target: { value: "New work after cancellation" } }));
+        await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+        await waitFor(() => assert.equal(harness.state.requests.commands.length, 2), "cancelled queue releases SDK submission ownership for the next Send");
+        assert.notEqual(harness.state.requests.commands[0].payload.params.input.messages[0].id,
+          harness.state.requests.commands[1].payload.params.input.messages[0].id);
+        continue;
+      }
+      if (variant.endsWith("followup")) {
+        await act(async () => textarea(renderer).props.onChange({ target: { value: "A second queued request" } }));
+        await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+        await waitFor(() => assert.equal(harness.state.requests.queues.length, 1), "later message joins the existing queue");
+        assert.equal(harness.state.requests.commands.length, 1, "waiting SDK submission cannot trigger a second stream start");
+        assert.equal(harness.state.conversations.conv_a.queue.length, 2);
+        continue;
+      }
+      const working = run("queued_execution", "running", acceptedInput.id, "Queued work started");
+      working.messages = [{ type: "human", id: acceptedInput.id, content: acceptedInput.content }];
+      harness.state.conversations.conv_a = { ...harness.state.conversations.conv_a, current_run: working,
+        current_run_id: working.id, run_ids: [...harness.state.conversations.conv_a.run_ids, working.id],
+        transcript: [...harness.state.conversations.conv_a.transcript, { role: "user", id: acceptedInput.id,
+          content: acceptedInput.content, at: now(), run_id: working.id, content_blocks: [] }],
+        queue: harness.state.conversations.conv_a.queue.map(item => ({ ...item, status: "dispatching", run_id: working.id })) };
+      harness.state.streamRuns.set("thread_a", working);
+      await waitFor(() => assert.ok(harness.state.openStreams.get("thread_a")), `${variant}: queued observer remains subscribed`);
+      await act(async () => {
+        const stream = harness.state.openStreams.get("thread_a");
+        stream.write(`data: ${JSON.stringify({ type: "event", method: "lifecycle", params: { namespace: [], data: { event: "running", run_id: working.id } } })}\n\n`);
+        stream.write(`data: ${JSON.stringify(streamFrame(working))}\n\n`);
+      });
+      await waitFor(() => assert.equal(selectedRunId(renderer), working.id), `${variant}: queued input adopts its own running projection`);
+      const statesBeforeTerminal = harness.state.requests.states.length;
+      const completed = { ...working, status: variant === "execution fails" ? "failed" : "completed", messages: [...working.messages,
+        { type: "ai", id: "queued_answer", content: "Queued answer completed" }] };
+      harness.state.conversations.conv_a = { ...harness.state.conversations.conv_a, current_run: completed, queue: [] };
+      harness.state.streamRuns.set("thread_a", completed);
+      await act(async () => {
+        const stream = harness.state.openStreams.get("thread_a");
+        stream.write(`data: ${JSON.stringify(streamFrame(completed))}\n\n`);
+        stream.write(`data: ${JSON.stringify({ type: "event", method: "lifecycle", params: { namespace: [], data: { event: completed.status, run_id: completed.id, ...(completed.status === "failed" ? { error: "Queued execution failed" } : {}) } } })}\n\n`);
+      });
+      await waitFor(() => assert.match(allText(renderer), /Queued answer completed/), "queued answer reaches the mounted conversation");
+      await waitFor(() => assert.doesNotMatch(allText(renderer), /Waiting for project/), "completed queue is removed");
+      if (variant === "execution fails") {
+        await waitFor(() => assert.match(allText(renderer), /Queued execution failed/), "actual execution failure remains visible");
+        assert.equal(harness.state.requests.states.length, statesBeforeTerminal, "normal terminal observation does not replace its SDK stream");
+      }
+      assert.equal(harness.state.requests.commands.length, 1, "queue progression never submits a second command");
+    } finally { delayedResponse.resolve(); await closeHarness(renderer, harness); }
+  }
+}
+
+async function testWarmQueuedAcknowledgementFailureKeepsObservedRun(vite) {
+  const response = deferred();
+  let acceptedInput;
+  const harness = makeHarness({ aRun: null, threadARun: null, commandProjectsRun: true, commandProjectedStatus: "running",
+    requestOverride: async ({ req, res, url, body, state }) => {
+      if (req.method !== "POST" || url.pathname !== "/v1/agent-interaction/threads/thread_a/commands" || state.requests.commands.length !== 1) return false;
+      const payload = JSON.parse(body);
+      state.requests.commands.push({ threadId: "thread_a", payload });
+      acceptedInput = payload.params.input.messages[0];
+      state.conversations.conv_a = { ...state.conversations.conv_a, queue: [{
+        id: "warm_queue", input_message_id: acceptedInput.id, task: acceptedInput.content,
+        status: "queued", revision: 1, attachment_ids: [], intended_config: { deployment_id: "dep_1" },
+        created_at: now(), updated_at: now(), wait_reason: "project_busy",
+      }] };
+      await response.promise;
+      json(res, 500, { type: "error", id: payload.id, error: "unknown_error", message: "Late warm acknowledgement failed" });
+      return true;
+    } });
+  const renderer = await renderChat(vite, harness);
+  const submit = async text => {
+    await act(async () => textarea(renderer).props.onChange({ target: { value: text } }));
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+  };
+  const publish = async current => act(async () => {
+    const stream = harness.state.openStreams.get("thread_a");
+    stream.write(`data: ${JSON.stringify(streamFrame(current))}\n\n`);
+    stream.write(`data: ${JSON.stringify({ type: "event", method: "lifecycle", params: { namespace: [], data: { event: current.status, run_id: current.id } } })}\n\n`);
+  });
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "saved chat");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "warm chat bound");
+    await submit("First warm turn");
+    await waitFor(() => assert.equal(selectedRunId(renderer), "run_projected_1"), "first turn adopted");
+    await waitFor(() => assert.ok(harness.state.openStreams.has("thread_a")), "first stream active");
+    const first = { ...harness.state.streamRuns.get("thread_a"), status: "completed" };
+    harness.state.conversations.conv_a = { ...harness.state.conversations.conv_a, current_run: first };
+    harness.state.streamRuns.set("thread_a", first);
+    await publish(first);
+    await waitFor(() => assert.equal(buttonByAriaLabel(renderer, "Send").props.disabled, true), "first turn finished with empty draft");
+    await submit("Second warm turn");
+    await waitFor(() => assert.equal(harness.state.requests.commands.length, 2), "second command waiting for response");
+    const working = run("warm_second", "running", acceptedInput.id);
+    working.messages = [{ type: "human", id: acceptedInput.id, content: acceptedInput.content }];
+    harness.state.conversations.conv_a = { ...harness.state.conversations.conv_a, current_run: working,
+      current_run_id: working.id, run_ids: [...harness.state.conversations.conv_a.run_ids, working.id],
+      transcript: [...harness.state.conversations.conv_a.transcript, { role: "user", id: acceptedInput.id,
+        content: acceptedInput.content, at: now(), run_id: working.id, content_blocks: [] }],
+      queue: harness.state.conversations.conv_a.queue.map(item => ({ ...item, status: "dispatching", run_id: working.id })) };
+    harness.state.streamRuns.set("thread_a", working);
+    await publish(working);
+    await waitFor(() => assert.equal(selectedRunId(renderer), working.id), "retained SDK stream observes second run");
+    await waitFor(() => assert.equal(textarea(renderer).props.value, ""), "second input confirmed accepted");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Preserve next draft" } }));
+    const streamBeforeFailure = harness.state.openStreams.get("thread_a");
+    const readsBeforeFailure = harness.state.chatGetCounts.get("conv_a");
+    response.resolve();
+    await waitFor(() => assert.ok(harness.state.chatGetCounts.get("conv_a") > readsBeforeFailure), "warm error reconciled against authoritative acceptance");
+    await flush();
+    assert.doesNotMatch(allText(renderer), /Late warm acknowledgement failed/);
+    assert.equal(textarea(renderer).props.value, "Preserve next draft");
+    assert.equal(harness.state.openStreams.get("thread_a"), streamBeforeFailure, "actual run observer retained");
+    assert.equal(selectedRunId(renderer), working.id);
+    assert.equal(harness.state.requests.commands.length, 2, "one command per intended turn");
+  } finally { response.resolve(); await closeHarness(renderer, harness); }
+}
+
 async function testFailedRegistrationKeepsChatReadOnlyUntilRetry(vite) {
   const harness = makeHarness({ aRun: null, threadARun: null });
   harness.state.registrationFailures.set("conv_a", 1);
@@ -3260,6 +3492,131 @@ async function testSelectedModelSurvivesAgentAndNewChat(vite) {
     assert.equal(harness.state.requests.creates[0].project_id, undefined);
     assert.equal(harness.state.requests.creates[0].project_path, null);
   } finally { await closeHarness(renderer, harness); }
+}
+
+async function testModelAndAgentPreparationShareSelectionGate(vite) {
+  const live = id => ({ ...baseDeployment, id, display_name: "connected:" + id, health: { healthy: true } });
+  for (const [departing, replacement] of [[null, null], ["model", "agent"], ["agent", "model"], ["model", "model"], ["agent", "agent"]]) {
+    const gates = [];
+    const hold = kind => { const gate = { kind, entered: false, ...deferred() }; gates.push(gate); return gate; };
+    const harness = makeHarness({ aRun: null, threadARun: null, deployments: [live("dep_1"), live("dep_2")],
+      agentSetups: [{ id: "agent_one", name: "Agent one", current_version_id: "agent-one-version", missing_dependencies: [] }],
+      resolveSetup: async payload => {
+        const kind = payload.agent_setup_version_id === "agent-one-version" ? "agent" : payload.overrides.deployment_id === "dep_2" ? "model" : null;
+        const gate = gates.find(item => !item.entered && item.kind === kind);
+        if (gate) { gate.entered = true; await gate.promise; }
+        return { configuration: { ...payload.overrides, deployment_id: payload.overrides.deployment_id ?? "dep_1" }, instruction_layers: [] };
+      } });
+    const renderer = await renderChat(vite, harness);
+    const picker = () => renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatModelControls")[0];
+    const modelTrigger = () => renderer.root.findAll(node => node.type === "button" && node.props["aria-label"]?.startsWith("Chat model:"))[0];
+    const agentTrigger = () => buttonByAriaLabel(renderer, "Main agent");
+    const modelChoice = () => renderer.root.findAll(node => node.type === "button" && node.props.className === "chat-model-choice" && textOf(node).includes("dep_2"))[0];
+    const publicClick = async control => {
+      assert.notEqual(control.props.disabled, true, "public selection action must be enabled before clicking");
+      await act(async () => control.props.onClick());
+    };
+    const choose = async kind => {
+      const trigger = kind === "model" ? modelTrigger : agentTrigger;
+      if (!trigger().props["aria-expanded"]) await publicClick(trigger());
+      assert.equal(trigger().props["aria-expanded"], true, "selection starts through the opened public menu");
+      await publicClick(kind === "model" ? modelChoice() : button(renderer, "Agent one"));
+    };
+    const ready = async () => waitFor(() => {
+      assert.equal(modelTrigger().props.disabled, false);
+      assert.equal(agentTrigger().props.disabled, false);
+      assert.equal(modelChoice().props.disabled, false);
+    }, "selection controls usable");
+    const prepared = async gate => waitFor(() => assert.equal(gate.entered, true), `${gate.kind} preflight held`);
+    const blocked = () => {
+      assert.equal(agentTrigger().props.disabled, true, "Main agent stays disabled throughout model or agent preflight");
+      assert.equal(modelTrigger().props.disabled, true, "model picker stays disabled throughout agent or model preflight");
+      assert.equal(modelChoice().props.disabled, true, "a previously opened model option also honors the shared gate");
+    };
+    try {
+      await waitFor(() => assert.equal(picker()?.props.selectedDeploymentId, "dep_1"), "initial model ready");
+      await ready();
+      if (!departing) {
+        const model = hold("model");
+        await choose("model"); await prepared(model); blocked();
+        model.resolve();
+        await waitFor(() => assert.equal(picker().props.selectedDeploymentId, "dep_2"), "model accepted before next choice");
+        await ready();
+        const agent = hold("agent");
+        await choose("agent"); await prepared(agent); blocked();
+        agent.resolve();
+        await waitFor(() => assert.match(textOf(agentTrigger()), /Agent one/), "later agent choice accepted");
+        await ready();
+        assert.equal(picker().props.selectedDeploymentId, "dep_2", "the subsequent agent retains the accepted model");
+      } else {
+        const old = hold(departing), generation = picker().props.selectionGeneration;
+        await choose(departing); await prepared(old); blocked();
+        assert.equal(picker().props.conversationId, undefined);
+        await publicClick(button(renderer, "New"));
+        await waitFor(() => assert.ok(picker().props.selectionGeneration > generation), "fresh New advances the selection owner");
+        assert.equal(picker().props.conversationId, undefined, "fresh New has unchanged null conversation identity");
+        await ready();
+        const next = hold(replacement);
+        await choose(next.kind); await prepared(next); blocked();
+        old.resolve();
+        await waitFor(() => assert.equal(harness.state.consumedResponses.filter(item => item.path === "/v1/setup-resolution").length,
+          harness.state.requests.resolutions.length - 1), "obsolete response consumed while replacement preparation remains held");
+        blocked();
+        next.resolve();
+        await waitFor(() => {
+          assert.equal(picker().props.selectedDeploymentId, next.kind === "model" ? "dep_2" : "dep_1");
+          assert.match(textOf(agentTrigger()), next.kind === "agent" ? /Agent one/ : /Default agent/);
+        }, "only replacement selection accepted");
+        await ready();
+      }
+    } finally {
+      gates.forEach(gate => gate.resolve());
+      await closeHarness(renderer, harness);
+    }
+  }
+}
+
+async function testAgentRefreshKeepsSelectionOwnership(vite) {
+  const bag = () => ({ requested: {}, applied: {}, unsupported: [], retired: [], overridden: [], unverified: [] });
+  const connected = { ...baseDeployment, health: { healthy: true } };
+  const profile = { id: "fixed_config", bundle_id: "fixed_bundle", display_name: "Fixed", revision: 1, bags: { startup: bag(), per_request: bag(), agent: bag() } };
+  const managed = { ...connected, id: "managed_1", bundle_id: profile.bundle_id, profile_id: profile.id, scope: "managed" };
+  for (const navigate of [false, true]) {
+    const heldRefresh = deferred();
+    let loaded = false, refreshEntered = false;
+    const harness = makeHarness({ aRun: null, threadARun: null, deployments: [connected], profiles: [profile],
+      agentSetups: [{ id: "agent_one", name: "Agent one", current_version_id: "agent-one-version", configuration: { model_configuration_id: profile.id }, missing_dependencies: [] }],
+      resolveSetup: payload => ({ configuration: { ...payload.overrides, deployment_id: payload.agent_setup_version_id === "agent-one-version" ? (loaded ? managed.id : null) : payload.overrides.deployment_id ?? connected.id }, instruction_layers: [] }),
+      requestOverride: async ({ req, res, url }) => {
+        if (req.method === "POST" && url.pathname === "/v1/deployments/managed") { loaded = true; json(res, 200, managed); return true; }
+        if (req.method === "GET" && url.pathname === "/v1/deployments" && loaded) { refreshEntered = true; await heldRefresh.promise; json(res, 200, [connected, managed]); return true; }
+      } });
+    const renderer = await renderChat(vite, harness);
+    const agentTrigger = () => buttonByAriaLabel(renderer, "Main agent");
+    try {
+      await waitFor(() => assert.equal(agentTrigger().props.disabled, false), "agent selector ready");
+      await act(async () => agentTrigger().props.onClick());
+      assert.equal(agentTrigger().props["aria-expanded"], true);
+      await act(async () => button(renderer, "Agent one").props.onClick());
+      await waitFor(() => assert.equal(refreshEntered, true), "managed model loaded with status refresh held");
+      assert.equal(agentTrigger().props.disabled, true, "agent loading keeps the selection gate through its status refresh");
+      if (navigate) {
+        assert.notEqual(button(renderer, "New").props.disabled, true);
+        await act(async () => button(renderer, "New").props.onClick());
+        await waitFor(() => assert.equal(agentTrigger().props.disabled, false), "replacement fresh chat remains usable");
+        assert.match(textOf(agentTrigger()), /Default agent/);
+      }
+      await waitFor(() => assert.equal(harness.state.consumedResponses.filter(item => item.path !== "/v1/deployments").length,
+        harness.state.outgoingRequests.filter(item => item.path !== "/v1/deployments").length), "other refresh observations settled");
+      heldRefresh.resolve();
+      await waitFor(() => assert.ok(pickerFor(renderer).props.deployments.some(item => item.id === managed.id)), "delayed model observation delivered");
+      await waitFor(() => assert.equal(agentTrigger().props.disabled, false), "agent preparation settled");
+      assert.match(textOf(agentTrigger()), navigate ? /Default agent/ : /Agent one/, "only the initiating selection may accept an agent after its model refresh");
+      assert.equal(pickerFor(renderer).props.selectedDeploymentId, navigate ? connected.id : managed.id);
+      assert.equal(harness.state.outgoingRequests.filter(item => item.method === "POST" && item.path === "/v1/deployments/managed").length, 1, "status observation does not repeat the managed load");
+      if (navigate) assert.equal(harness.state.requests.resolutions.filter(item => item.agent_setup_version_id === "agent-one-version").length, 1, "obsolete refresh cannot begin a new agent acceptance against the replacement owner");
+    } finally { heldRefresh.resolve(); await closeHarness(renderer, harness); }
+  }
 }
 
 async function testSidebarNewChatScopesAndPreservesProjectDraft(vite) {
@@ -3575,7 +3932,7 @@ async function testExecutionPreferencesSurviveDraftAndFreezeAtSubmission(vite) {
   }
 }
 
-export { makeHarness, run, conversation, deferred, json, renderChat, closeHarness, button, textarea, composeForm, allText, textOf, waitFor, flush, streamFrame };
+export { ChatHarness, ErrorBoundary, makeHarness, run, conversation, deferred, json, renderChat, closeHarness, button, textarea, composeForm, allText, textOf, waitFor, flush, streamFrame };
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
 const vite = await createViteServer({
@@ -3619,6 +3976,8 @@ try {
     ["deleted history selection recovery", testDeletedHistorySelectionRecoversToNewChat],
     ["agent setup inheritance and future turns", testAgentSetupInheritanceAndFutureTurn],
     ["selected model survives agent and New Chat", testSelectedModelSurvivesAgentAndNewChat],
+    ["model and agent preparation share selection gate", testModelAndAgentPreparationShareSelectionGate],
+    ["agent refresh keeps selection ownership", testAgentRefreshKeepsSelectionOwnership],
     ["sidebar New chat scopes and preserves project draft", testSidebarNewChatScopesAndPreservesProjectDraft],
     ["sole healthy model fallback keeps configuration", testSoleHealthyModelFallbackKeepsConfigurationIdentity],
     ["stopped named configuration survives New Chat", testStoppedNamedConfigurationSurvivesNewChat],
@@ -3646,6 +4005,8 @@ try {
     ["submitted draft clears", (vite) => testSubmitAckDoesNotClearNewerDraft(vite, false)],
     ["pending submit hides previous cancelled status", testPendingSubmitDoesNotReusePreviousCancelledStatus],
     ["accepted submission recovers without stream projection", testAcceptedSubmissionRecoversWithoutStreamProjection],
+    ["project wait admission and queue progression", testProjectBusySendAcknowledgesDurableQueue],
+    ["warm queued acknowledgement failure", testWarmQueuedAcknowledgementFailureKeepsObservedRun],
     ["pending admission failure keeps edited next draft", testPendingAdmissionFailureKeepsEditedNextDraft],
     ["pending submit stop uses input identity", testPendingSubmitStopUsesPendingInputIdentity],
     ["reopened pending cancel clears from authoritative view", testReopenedPendingCancelShowsStoppingUntilAuthoritativeClear],
