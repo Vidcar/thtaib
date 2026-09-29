@@ -124,22 +124,19 @@ def authored_instruction_sections(*, policy: AgentInputPolicy, profile_text: str
     return sections
 
 
-def build_input_sources(*, policy: AgentInputPolicy | None, instruction_layers=None,
-        knowledge_versions=None, profile=None, deployment=None, presented_tools=None,
-        tool_metadata=None, include_content=False, selected_agent=False, surface_text=None,
-        project_id=None, extra_tools=(), tool_unavailable=None) -> list[InputSourceRow]:
-    """Describe candidate sources, with exact content fetched only on explicit inspection."""
-    rows: list[InputSourceRow] = []
-    excluded = set(policy.excluded_sources) if policy else set()
+def _append_text_source(rows: list[InputSourceRow], excluded: set[str], include_content: bool, source, title, text, *, origin, reason, required=False, editable=False, mode="always", **extra) -> None:
+    actual_mode = "off" if source in excluded and not required else mode
+    rows.append(InputSourceRow(id=source, title=title, kind="instructions", origin=origin,
+        reason="Excluded for future inputs." if actual_mode == "off" else reason, mode=actual_mode,
+        estimated_tokens=0 if actual_mode == "off" else content_token_estimate(text) if text is not None else None,
+        token_counting_method=TOKEN_ESTIMATE_METHOD if text is not None else None,
+        content=text if include_content else None, required=required, editable=editable,
+        history_hint=HISTORY_HINT if actual_mode == "off" else None, **extra))
 
+
+def _append_instruction_sources(rows: list[InputSourceRow], *, policy: AgentInputPolicy | None, excluded: set[str], include_content: bool, instruction_layers, profile, deployment, selected_agent: bool, surface_text) -> None:
     def text_row(source, title, text, *, origin, reason, required=False, editable=False, mode="always", **extra):
-        actual_mode = "off" if source in excluded and not required else mode
-        rows.append(InputSourceRow(id=source, title=title, kind="instructions", origin=origin,
-            reason="Excluded for future inputs." if actual_mode == "off" else reason, mode=actual_mode,
-            estimated_tokens=0 if actual_mode == "off" else content_token_estimate(text) if text is not None else None,
-            token_counting_method=TOKEN_ESTIMATE_METHOD if text is not None else None,
-            content=text if include_content else None, required=required, editable=editable,
-            history_hint=HISTORY_HINT if actual_mode == "off" else None, **extra))
+        _append_text_source(rows, excluded, include_content, source, title, text, origin=origin, reason=reason, required=required, editable=editable, mode=mode, **extra)
 
     text_row("workbench_core", "Workbench operating instructions", WORKBENCH_CORE_INSTRUCTIONS if policy else None,
         origin="Workbench", reason="Shared operating rules.", required=True)
@@ -177,6 +174,21 @@ def build_input_sources(*, policy: AgentInputPolicy | None, instruction_layers=N
     if policy and policy.instruction_override is not None and not any(row.id == target for row in rows):
         text_row(target, "Local behaviour instructions", policy.instruction_override, origin="Chat-local override",
             reason="Local replacement of the selected behaviour block.", editable=True)
+
+
+def _knowledge_reason(mode: str, kind: str) -> str:
+    if mode == "off":
+        return "Excluded for future inputs."
+    if mode == "always" and kind == "memory":
+        return "Selected original text included through native memory formatting, which removes HTML comments and trailing whitespace."
+    if kind == "protected_instruction":
+        return "Full selected protected instruction text."
+    if mode == "when_needed":
+        return "Identifying metadata included; the full frozen original is readable when needed."
+    return "Full original selected text included."
+
+
+def _append_knowledge_sources(rows: list[InputSourceRow], *, policy, knowledge_versions, include_content: bool) -> None:
     for version in knowledge_versions or []:
         mode = reference_source_mode(policy, version.entry_id, version.kind)
         path = f"/memories/{version.scope}/{version.entry_id}/{version.id}.md" if version.kind == "memory" else None
@@ -187,38 +199,77 @@ def build_input_sources(*, policy: AgentInputPolicy | None, instruction_layers=N
             slug, description = parse_skill_markdown(version.content)
             title = version.display_name or slug
             path = f"/skills/{slug}/SKILL.md"
+        estimate_text = version.content if mode == "always" else f"{title} {description or ''} {version.entry_id} {version.id} {path or ''}"
         rows.append(InputSourceRow(id=knowledge_source_id(version.entry_id, version.kind), title=title,
-            kind=version.kind, origin=f"{version.scope} Knowledge", reason="Excluded for future inputs." if mode == "off" else
-            "Selected original text included through native memory formatting, which removes HTML comments and trailing whitespace." if mode == "always" and version.kind == "memory" else
-            "Full selected protected instruction text." if version.kind == "protected_instruction" else
-            "Identifying metadata included; the full frozen original is readable when needed." if mode == "when_needed" else "Full original selected text included.",
-            mode=mode, estimated_tokens=0 if mode == "off" else content_token_estimate(version.content if mode == "always" else f"{title} {description or ''} {version.entry_id} {version.id} {path or ''}"),
+            kind=version.kind, origin=f"{version.scope} Knowledge", reason=_knowledge_reason(mode, version.kind),
+            mode=mode, estimated_tokens=0 if mode == "off" else content_token_estimate(estimate_text),
             token_counting_method=TOKEN_ESTIMATE_METHOD, content=version.content if include_content else None,
             path=path, editable=False, history_hint=HISTORY_HINT if mode == "off" else None,
             version_id=version.id, entry_id=version.entry_id, required_tools=version.required_tools,
             required_connections=version.required_connections, requires_project=version.requires_project))
+
+
+def _tool_source_mode(name: str, *, policy, excluded: set[str], bootstrap: bool) -> str:
+    if f"tool:{name}" in excluded:
+        return "off"
+    if policy is None or policy.tool_loading == "always" or name in policy.pinned_tools or bootstrap:
+        return "always"
+    return "when_needed"
+
+
+def _tool_source_reason(name: str, mode: str, *, policy, bootstrap: bool, unavailable) -> str:
+    if mode == "off":
+        return "Excluded for future inputs."
+    if unavailable:
+        return unavailable
+    if policy and name in policy.pinned_tools:
+        return "Pinned tool definition."
+    if bootstrap and policy and policy.tool_loading == "when_needed":
+        return "Initial discovery, question or reference-reading tool."
+    if mode == "always":
+        return "Tool definition included."
+    return "Enabled and discoverable; definition deferred until needed."
+
+
+def _append_tool_sources(rows: list[InputSourceRow], *, policy, excluded: set[str], presented_tools, tool_metadata, include_content: bool, extra_tools, tool_unavailable) -> None:
     metadata = {item.get("id", item.get("name")): item for item in tool_metadata or []}
     from workbench_backend.agents.tool_disclosure import input_tool_schemas
     schemas = input_tool_schemas(presented_tools or [], extra_tools=extra_tools)
     for name in presented_tools or []:
         bootstrap = name in {"find_tools", "ask_user", "read_file", "read_reference"}
-        mode = "off" if f"tool:{name}" in excluded else "always" if policy is None or policy.tool_loading == "always" or name in policy.pinned_tools or bootstrap else "when_needed"
+        mode = _tool_source_mode(name, policy=policy, excluded=excluded, bootstrap=bootstrap)
         item = metadata.get(name, {})
         schema_text = json.dumps(schemas[name], ensure_ascii=False, sort_keys=True) if name in schemas else None
         unavailable = (tool_unavailable or {}).get(name)
         rows.append(InputSourceRow(id=f"tool:{name}", title=item.get("name", name), kind="tool", origin="Selected capability envelope",
-            reason="Excluded for future inputs." if mode == "off" else unavailable if unavailable else "Pinned tool definition." if policy and name in policy.pinned_tools else
-            "Initial discovery, question or reference-reading tool." if bootstrap and policy and policy.tool_loading == "when_needed" else
-            "Tool definition included." if mode == "always" else "Enabled and discoverable; definition deferred until needed.",
+            reason=_tool_source_reason(name, mode, policy=policy, bootstrap=bootstrap, unavailable=unavailable),
             mode=mode, content=schema_text if include_content else None,
             estimated_tokens=0 if mode in {"off", "when_needed"} else content_token_estimate(schema_text) if schema_text else None,
             token_counting_method=TOKEN_ESTIMATE_METHOD,
             tool_name=name, editable=True, available=not bool(unavailable), history_hint=HISTORY_HINT if mode == "off" else None))
+
+
+def build_input_sources(*, policy: AgentInputPolicy | None, instruction_layers=None,
+        knowledge_versions=None, profile=None, deployment=None, presented_tools=None,
+        tool_metadata=None, include_content=False, selected_agent=False, surface_text=None,
+        project_id=None, extra_tools=(), tool_unavailable=None) -> list[InputSourceRow]:
+    """Describe candidate sources, with exact content fetched only on explicit inspection."""
+    rows: list[InputSourceRow] = []
+    excluded = set(policy.excluded_sources) if policy else set()
+    _append_instruction_sources(rows, policy=policy, excluded=excluded, include_content=include_content,
+        instruction_layers=instruction_layers, profile=profile, deployment=deployment,
+        selected_agent=selected_agent, surface_text=surface_text)
+    _append_knowledge_sources(rows, policy=policy, knowledge_versions=knowledge_versions, include_content=include_content)
+    _append_tool_sources(rows, policy=policy, excluded=excluded, presented_tools=presented_tools,
+        tool_metadata=tool_metadata, include_content=include_content, extra_tools=extra_tools,
+        tool_unavailable=tool_unavailable)
     if presented_tools != []:
-        text_row("tool_protocol", "Tool calling protocol", None, origin="Native model/LangChain tool binding",
+        _append_text_source(rows, excluded, include_content, "tool_protocol", "Tool calling protocol", None,
+            origin="Native model/LangChain tool binding",
             reason="Tool definitions are bound at dispatch; native template tool rules are in Model-native formatting.", required=True)
     if project_id:
-        text_row("project_outline", "Initial project outline", None, origin="Bound project snapshot",
+        _append_text_source(rows, excluded, include_content, "project_outline", "Initial project outline", None,
+            origin="Bound project snapshot",
             reason="Optional authorized outline is captured at admission and estimated at dispatch.")
     return rows
 

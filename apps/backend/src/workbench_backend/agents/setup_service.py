@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 from workbench_backend.agents.setup_schemas import (
-    AgentSetupCreateRequest, AgentSetupRecord, AgentSetupUpdateRequest, AgentSetupVersion,
+    AgentInputPolicy, AgentSetupCreateRequest, AgentSetupRecord, AgentSetupUpdateRequest, AgentSetupVersion,
     AgentSetupView, InstructionLayer, ProjectCreateRequest, ProjectFile, ProjectFileContent,
     ProjectFiles, ProjectRecord, ProjectUpdateRequest, ResolvedSetupSelection, SetupConfiguration,
     SetupDependencyIssue, ResolvedSetting,
@@ -224,8 +224,18 @@ class SetupService:
     def dependencies(self, configuration: SetupConfiguration, *, frozen: bool = False,
         connection_snapshots: list[ConnectionSnapshot] | None = None,
         project_bound: bool = False) -> list[SetupDependencyIssue]:
-        issues = []
-        selected_versions = []
+        issues: list[SetupDependencyIssue] = []
+        selected_versions: list = []
+        self._record_missing_model_issues(configuration, issues)
+        self._record_knowledge_version_issues(configuration, issues, selected_versions, frozen=frozen)
+        available_tools, connection_tool_names, selected_connections = self._record_connection_catalogue(
+            configuration, issues, frozen=frozen, connection_snapshots=connection_snapshots)
+        self._record_presented_tool_issues(configuration, issues, available_tools, selected_versions)
+        return self._record_always_included_skill_issues(
+            configuration, issues, selected_versions, connection_tool_names, selected_connections,
+            frozen=frozen, project_bound=project_bound)
+
+    def _record_missing_model_issues(self, configuration: SetupConfiguration, issues: list[SetupDependencyIssue]) -> None:
         if configuration.bundle_id and not configuration.deployment_id and not configuration.model_configuration_id:
             issues.append(SetupDependencyIssue(kind="deployment_id", id=configuration.bundle_id, reason="choose a saved deployment for this model"))
         for field, getter in [("deployment_id", self.manager.store.get_deployment), ("embedding_deployment_id", self.manager.store.get_deployment), ("profile_id", self.manager.store.get_profile), ("model_configuration_id", self.manager.store.get_profile), ("bundle_id", self.manager.store.get_bundle)]:
@@ -236,6 +246,9 @@ class SetupService:
             deployment = self.manager.store.get_deployment(configuration.deployment_id)
             if deployment is not None and deployment.bundle_id != configuration.bundle_id:
                 issues.append(SetupDependencyIssue(kind="bundle_id", id=configuration.bundle_id, reason="the selected deployment uses a different model"))
+
+    def _record_knowledge_version_issues(self, configuration: SetupConfiguration, issues: list[SetupDependencyIssue],
+        selected_versions: list, *, frozen: bool) -> None:
         for field, kind in [("memory_version_refs", "memory"), ("skill_version_refs", "skill"), ("protected_instruction_version_refs", "protected_instruction")]:
             for ref in getattr(configuration, field) or []:
                 try:
@@ -254,6 +267,10 @@ class SetupService:
                             issues.append(SetupDependencyIssue(kind=kind, id=ref, reason="scope is missing or inactive"))
                 except KnowledgeError:
                     issues.append(SetupDependencyIssue(kind=kind, id=ref, reason="missing"))
+
+    def _record_connection_catalogue(self, configuration: SetupConfiguration, issues: list[SetupDependencyIssue], *,
+        frozen: bool, connection_snapshots: list[ConnectionSnapshot] | None,
+    ) -> tuple[set[str], dict[str, list[str]], list[str] | None]:
         available_tools = set(enabled_catalogue())
         # Document search is a known dynamic capability, including lexical search
         # without an embedder. A saved setup has no turn's attachment selection;
@@ -289,11 +306,19 @@ class SetupService:
             elif self.connection_tools is not None:
                 connection_tool_names[connection] = self.connection_tools(connection)
                 available_tools.update(connection_tool_names[connection])
+        return available_tools, connection_tool_names, selected_connections
+
+    def _record_presented_tool_issues(self, configuration: SetupConfiguration, issues: list[SetupDependencyIssue],
+        available_tools: set[str], selected_versions: list) -> None:
         for tool in configuration.presented_tools or []:
             if tool not in available_tools:
                 issues.append(SetupDependencyIssue(kind="tool", id=tool, reason="not in the current selected catalogue"))
         issues.extend(SetupDependencyIssue(kind=item["code"], id=item["id"], reason=f"{item['message']} {item['action']}")
             for item in deferred_reference_issues(configuration, knowledge_versions=selected_versions))
+
+    def _record_always_included_skill_issues(self, configuration: SetupConfiguration, issues: list[SetupDependencyIssue],
+        selected_versions: list, connection_tool_names: dict[str, list[str]], selected_connections: list[str] | None, *,
+        frozen: bool, project_bound: bool) -> list[SetupDependencyIssue]:
         policy = configuration.input_policy
         always_skills = [version for version in selected_versions if version.kind == "skill"
             and reference_source_mode(policy, version.entry_id, "skill") == "always"]
@@ -366,6 +391,31 @@ class SetupService:
                 raise HarnessError("This agent was removed. Choose another agent.", code="agent_setup_inactive", status_code=409)
             agent_setup_version_id = record.current_version_id
         version = self.get_version(agent_setup_version_id, require_active=True) if agent_setup_version_id else None
+        layers = self._editing_layers(project, version, overrides, editing_layer)
+        builtin_values = {"approval_mode": "ask", "work_mode": "work", "desktop_access": "off", "helper_agent_ids": [], "connection_ids": []}
+        values, effective, instructions, input_policy = self._merge_editing_layers(
+            layers, version, overrides, override_cleared_fields, builtin_values,
+            helper_role=helper_role, latest_knowledge=latest_knowledge)
+        self._apply_model_configuration(values, effective, read_only=read_only, prepare_model=prepare_model)
+        configuration = SetupConfiguration.model_validate(values)
+        configuration, preview_versions, excluded_rows = self._resolve_knowledge_preview(
+            configuration, effective, input_policy, latest_knowledge=latest_knowledge)
+        # A named exclusion can only narrow an explicit capability envelope. The
+        # runtime applies the same filter to its project-dependent default tools.
+        if configuration.presented_tools is not None:
+            configuration = configuration.model_copy(update={"presented_tools": [name for name in configuration.presented_tools if f"tool:{name}" not in input_policy.excluded_sources]})
+        self._apply_builtin_effective_settings(
+            configuration, effective, builtin_values, read_only=read_only, prepare_model=prepare_model)
+        if validate:
+            self._raise_for_dependency_issues(configuration, project)
+        return self._build_resolved_selection(
+            project_id=project_id, version=version, configuration=configuration, instructions=instructions,
+            effective=effective, input_policy=input_policy, preview_versions=preview_versions,
+            excluded_rows=excluded_rows, values=values, include_input_content=include_input_content)
+
+    def _editing_layers(self, project: ProjectRecord | None, version: AgentSetupVersion | None,
+        overrides: SetupConfiguration | None, editing_layer: str,
+    ) -> list[tuple[str, str | None, SetupConfiguration, str]]:
         layers = [("Application defaults", None, overrides or SetupConfiguration(), "application")] if editing_layer == "application" else [("Application defaults", None, self.store.get_setup_defaults(), "application")]
         if project and editing_layer != "application":
             layers.append((f"Project: {project.name}", project.id, (overrides or SetupConfiguration()) if editing_layer == "project" else project.defaults, "project"))
@@ -377,67 +427,23 @@ class SetupService:
             layers.append(("Agent", None, overrides or SetupConfiguration(), "agent"))
         if overrides is not None and editing_layer == "conversation":
             layers.append(("Turn overrides", None, overrides, "conversation"))
+        return layers
+
+    def _merge_editing_layers(self, layers: list[tuple[str, str | None, SetupConfiguration, str]],
+        version: AgentSetupVersion | None, overrides: SetupConfiguration | None,
+        override_cleared_fields: list[str] | None, builtin_values: dict, *, helper_role: bool,
+        latest_knowledge: bool,
+    ) -> tuple[dict, dict, list[InstructionLayer], AgentInputPolicy]:
         values = {}
         effective = {}
-        builtin_values = {"approval_mode": "ask", "work_mode": "work", "desktop_access": "off", "helper_agent_ids": [], "connection_ids": []}
         instructions = []
         protected = []
         input_policy = merge_input_policy(None, None)
         for name, source_id, configuration, scope in layers:
-            explicit = configuration.model_dump(exclude_none=True)
-            if latest_knowledge and self.knowledge is not None:
-                for entry_field, version_field in (("memory_entry_ids", "memory_version_refs"), ("skill_entry_ids", "skill_version_refs"), ("protected_instruction_entry_ids", "protected_instruction_version_refs")):
-                    if entry_field not in explicit and version_field in explicit:
-                        explicit[entry_field] = list(dict.fromkeys(self.knowledge.get_version(ref).entry_id for ref in explicit[version_field]))
-            if scope == "application":
-                explicit = {key: value for key, value in explicit.items() if key in APPLICATION_DEFAULT_FIELDS}
-            elif scope == "project":
-                explicit = {key: value for key, value in explicit.items() if key in PROJECT_CONTEXT_FIELDS}
-            elif scope == "agent" and not helper_role:
-                explicit = {key: value for key, value in explicit.items() if key in MAIN_AGENT_FIELDS}
-            elif scope == "conversation" and version and not helper_role:
-                # A Chat draft cannot replace the saved agent's capabilities.
-                for key in ("presented_tools", "connection_ids", "helper_agent_ids", "review", "requires_project", "requires_host_shell"):
-                    explicit.pop(key, None)
-                if any(getattr(version.configuration, key) for key in ("deployment_id", "bundle_id", "model_configuration_id")):
-                    for key in ("deployment_id", "bundle_id", "model_configuration_id", "profile_id", "inherit_deployment_settings"):
-                        explicit.pop(key, None)
-            self._resolve_model_selector_layer(values, effective, explicit)
-            if explicit.get("inherit_deployment_settings") is False and "profile_id" not in explicit:
-                values.pop("profile_id", None)
-            for key, value in explicit.items():
-                prior = effective.get(key)
-                effective[key] = ResolvedSetting(value=value, source=name, source_id=source_id,
-                    inherited=(name != layers[-1][0] or configuration is not overrides),
-                    requested_override=value if configuration is overrides else None,
-                    inherited_value=prior.value if prior else builtin_values.get(key),
-                    inherited_source=prior.source if prior else "Application default" if key in builtin_values else None)
-                if key == "instructions":
-                    if value.strip():
-                        instructions.append(InstructionLayer(name=name, source_id=source_id, content=value))
-                elif key == "input_policy":
-                    input_policy = merge_input_policy(input_policy, configuration.input_policy)
-                    values[key] = input_policy.model_dump()
-                    effective[key].value = input_policy.model_dump()
-                elif key == "protected_instruction_version_refs":
-                    protected.extend(ref for ref in value if ref not in protected)
-                elif key in {"requires_project", "requires_host_shell"}:
-                    # Requirements are restrictions, not optional scalar preferences.
-                    values[key] = bool(values.get(key) or value)
-                    effective[key].value = values[key]
-                elif key in {"memory_entry_ids", "skill_entry_ids", "protected_instruction_entry_ids"}:
-                    values[key] = list(dict.fromkeys([*values.get(key, []), *value]))
-                elif key in {"per_request_overrides", "startup_overrides"}:
-                    values[key] = {**values.get(key, {}), **value}
-                    prefix = "per_request" if key == "per_request_overrides" else "startup"
-                    for setting, selected in value.items():
-                        path = f"{prefix}.{setting}"
-                        parent = effective.get(path)
-                        effective[path] = ResolvedSetting(value=selected, source=name, source_id=source_id,
-                            inherited=(configuration is not overrides), requested_override=selected if configuration is overrides else None,
-                            inherited_value=parent.value if parent else None, inherited_source=parent.source if parent else None)
-                else:
-                    values[key] = value
+            input_policy = self._merge_layer_explicit(name, source_id, configuration, scope, layers=layers,
+                version=version, overrides=overrides, helper_role=helper_role, latest_knowledge=latest_knowledge,
+                values=values, effective=effective, builtin_values=builtin_values, instructions=instructions,
+                protected=protected, input_policy=input_policy)
         if protected:
             values["protected_instruction_version_refs"] = protected
             effective["protected_instruction_version_refs"].value = protected
@@ -445,6 +451,79 @@ class SetupService:
         for key in override_cleared_fields or []:
             if key in {"profile_id", "embedding_deployment_id"}:
                 values[key] = None
+        return values, effective, instructions, input_policy
+
+    def _merge_layer_explicit(self, name: str, source_id: str | None, configuration: SetupConfiguration, scope: str, *,
+        layers: list[tuple[str, str | None, SetupConfiguration, str]], version: AgentSetupVersion | None,
+        overrides: SetupConfiguration | None, helper_role: bool, latest_knowledge: bool, values: dict, effective: dict,
+        builtin_values: dict, instructions: list[InstructionLayer], protected: list, input_policy: AgentInputPolicy,
+    ) -> AgentInputPolicy:
+        explicit = configuration.model_dump(exclude_none=True)
+        if latest_knowledge and self.knowledge is not None:
+            for entry_field, version_field in (("memory_entry_ids", "memory_version_refs"), ("skill_entry_ids", "skill_version_refs"), ("protected_instruction_entry_ids", "protected_instruction_version_refs")):
+                if entry_field not in explicit and version_field in explicit:
+                    explicit[entry_field] = list(dict.fromkeys(self.knowledge.get_version(ref).entry_id for ref in explicit[version_field]))
+        if scope == "application":
+            explicit = {key: value for key, value in explicit.items() if key in APPLICATION_DEFAULT_FIELDS}
+        elif scope == "project":
+            explicit = {key: value for key, value in explicit.items() if key in PROJECT_CONTEXT_FIELDS}
+        elif scope == "agent" and not helper_role:
+            explicit = {key: value for key, value in explicit.items() if key in MAIN_AGENT_FIELDS}
+        elif scope == "conversation" and version and not helper_role:
+            # A Chat draft cannot replace the saved agent's capabilities.
+            for key in ("presented_tools", "connection_ids", "helper_agent_ids", "review", "requires_project", "requires_host_shell"):
+                explicit.pop(key, None)
+            if any(getattr(version.configuration, key) for key in ("deployment_id", "bundle_id", "model_configuration_id")):
+                for key in ("deployment_id", "bundle_id", "model_configuration_id", "profile_id", "inherit_deployment_settings"):
+                    explicit.pop(key, None)
+        self._resolve_model_selector_layer(values, effective, explicit)
+        if explicit.get("inherit_deployment_settings") is False and "profile_id" not in explicit:
+            values.pop("profile_id", None)
+        for key, value in explicit.items():
+            prior = effective.get(key)
+            effective[key] = ResolvedSetting(value=value, source=name, source_id=source_id,
+                inherited=(name != layers[-1][0] or configuration is not overrides),
+                requested_override=value if configuration is overrides else None,
+                inherited_value=prior.value if prior else builtin_values.get(key),
+                inherited_source=prior.source if prior else "Application default" if key in builtin_values else None)
+            input_policy = self._merge_explicit_value(key, value, name=name, source_id=source_id,
+                configuration=configuration, overrides=overrides, values=values, effective=effective,
+                instructions=instructions, protected=protected, input_policy=input_policy)
+        return input_policy
+
+    def _merge_explicit_value(self, key: str, value, *, name: str, source_id: str | None,
+        configuration: SetupConfiguration, overrides: SetupConfiguration | None, values: dict, effective: dict,
+        instructions: list[InstructionLayer], protected: list, input_policy: AgentInputPolicy,
+    ) -> AgentInputPolicy:
+        if key == "instructions":
+            if value.strip():
+                instructions.append(InstructionLayer(name=name, source_id=source_id, content=value))
+        elif key == "input_policy":
+            input_policy = merge_input_policy(input_policy, configuration.input_policy)
+            values[key] = input_policy.model_dump()
+            effective[key].value = input_policy.model_dump()
+        elif key == "protected_instruction_version_refs":
+            protected.extend(ref for ref in value if ref not in protected)
+        elif key in {"requires_project", "requires_host_shell"}:
+            # Requirements are restrictions, not optional scalar preferences.
+            values[key] = bool(values.get(key) or value)
+            effective[key].value = values[key]
+        elif key in {"memory_entry_ids", "skill_entry_ids", "protected_instruction_entry_ids"}:
+            values[key] = list(dict.fromkeys([*values.get(key, []), *value]))
+        elif key in {"per_request_overrides", "startup_overrides"}:
+            values[key] = {**values.get(key, {}), **value}
+            prefix = "per_request" if key == "per_request_overrides" else "startup"
+            for setting, selected in value.items():
+                path = f"{prefix}.{setting}"
+                parent = effective.get(path)
+                effective[path] = ResolvedSetting(value=selected, source=name, source_id=source_id,
+                    inherited=(configuration is not overrides), requested_override=selected if configuration is overrides else None,
+                    inherited_value=parent.value if parent else None, inherited_source=parent.source if parent else None)
+        else:
+            values[key] = value
+        return input_policy
+
+    def _apply_model_configuration(self, values: dict, effective: dict, *, read_only: bool, prepare_model: bool) -> None:
         configuration_id = values.get("model_configuration_id")
         if not configuration_id and values.get("bundle_id") and not values.get("deployment_id") and hasattr(self, "manager"):
             # A preview may inspect this bundle but must not synthesize or
@@ -489,7 +568,10 @@ class SetupService:
                 for key in ("profile_id", "bundle_id", "deployment_id"):
                     effective[key] = ResolvedSetting(value=values[key], source=source.source if source else "Model configuration", source_id=profile.id,
                         inherited=source.inherited if source else True)
-        configuration = SetupConfiguration.model_validate(values)
+
+    def _resolve_knowledge_preview(self, configuration: SetupConfiguration, effective: dict,
+        input_policy: AgentInputPolicy, *, latest_knowledge: bool,
+    ) -> tuple[SetupConfiguration, list, list]:
         preview_versions = []
         excluded_rows = []
         if self.knowledge is not None:
@@ -529,10 +611,10 @@ class SetupService:
                                 estimated_tokens=0, editable=True, history_hint=HISTORY_HINT))
                     configuration = configuration.model_copy(update={version_field: refs})
                 preview_versions.extend(self.knowledge.get_version(ref) for ref in getattr(configuration, version_field) or [])
-        # A named exclusion can only narrow an explicit capability envelope. The
-        # runtime applies the same filter to its project-dependent default tools.
-        if configuration.presented_tools is not None:
-            configuration = configuration.model_copy(update={"presented_tools": [name for name in configuration.presented_tools if f"tool:{name}" not in input_policy.excluded_sources]})
+        return configuration, preview_versions, excluded_rows
+
+    def _apply_builtin_effective_settings(self, configuration: SetupConfiguration, effective: dict, builtin_values: dict, *,
+        read_only: bool, prepare_model: bool) -> None:
         for key, value in builtin_values.items():
             if getattr(configuration, key) is None:
                 effective[key] = ResolvedSetting(value=value, source="Application default", inherited=True)
@@ -543,21 +625,27 @@ class SetupService:
             effective.update(self._model_selection_facts(configuration, effective))
         if prepare_model and any(value.requires_reload for value in effective.values()):
             raise HarnessError("Apply the changed model settings before sending a message.", code="model_reload_required", status_code=409)
-        if validate:
-            issues = self.dependencies(configuration, project_bound=bool(project))
-            if issues:
-                deferred_only = all(issue.kind in {"deferred_reference_tools_off", "deferred_reference_reader_excluded"} for issue in issues)
-                deferred_code = "deferred_reference_reader_excluded" if any(issue.kind == "deferred_reference_reader_excluded" for issue in issues) else "deferred_reference_tools_off"
-                skill_only = all(issue.kind == "skill_selection_required" for issue in issues)
-                raise HarnessError("Choose Include now, Remove, or Enable reading for references set to When needed without an enabled reading route." if deferred_only else
-                    " ".join(dict.fromkeys(issue.reason for issue in issues)) if skill_only else
-                    "The selected setup has unavailable dependencies. Update its selections before running.",
-                    code=deferred_code if deferred_only else "skill_selection_required" if skill_only else "setup_dependencies_missing",
-                    status_code=409, details={"missing_dependencies": [i.model_dump() for i in issues]})
-            if configuration.bundle_id and configuration.deployment_id:
-                deployment = self.manager.store.get_deployment(configuration.deployment_id)
-                if deployment is not None and deployment.bundle_id != configuration.bundle_id:
-                    raise HarnessError("The selected deployment uses a different model from this setup.", code="setup_model_mismatch", status_code=409)
+
+    def _raise_for_dependency_issues(self, configuration: SetupConfiguration, project: ProjectRecord | None) -> None:
+        issues = self.dependencies(configuration, project_bound=bool(project))
+        if issues:
+            deferred_only = all(issue.kind in {"deferred_reference_tools_off", "deferred_reference_reader_excluded"} for issue in issues)
+            deferred_code = "deferred_reference_reader_excluded" if any(issue.kind == "deferred_reference_reader_excluded" for issue in issues) else "deferred_reference_tools_off"
+            skill_only = all(issue.kind == "skill_selection_required" for issue in issues)
+            raise HarnessError("Choose Include now, Remove, or Enable reading for references set to When needed without an enabled reading route." if deferred_only else
+                " ".join(dict.fromkeys(issue.reason for issue in issues)) if skill_only else
+                "The selected setup has unavailable dependencies. Update its selections before running.",
+                code=deferred_code if deferred_only else "skill_selection_required" if skill_only else "setup_dependencies_missing",
+                status_code=409, details={"missing_dependencies": [i.model_dump() for i in issues]})
+        if configuration.bundle_id and configuration.deployment_id:
+            deployment = self.manager.store.get_deployment(configuration.deployment_id)
+            if deployment is not None and deployment.bundle_id != configuration.bundle_id:
+                raise HarnessError("The selected deployment uses a different model from this setup.", code="setup_model_mismatch", status_code=409)
+
+    def _build_resolved_selection(self, *, project_id: str | None, version: AgentSetupVersion | None,
+        configuration: SetupConfiguration, instructions: list[InstructionLayer], effective: dict,
+        input_policy: AgentInputPolicy, preview_versions: list, excluded_rows: list, values: dict,
+        include_input_content: bool) -> ResolvedSetupSelection:
         profile = self.manager.store.get_profile(configuration.profile_id or configuration.model_configuration_id or "")
         deployment = self.manager.store.get_deployment(configuration.deployment_id or "")
         from workbench_backend.agents.tools import tool_descriptions

@@ -936,6 +936,137 @@ class ModelManager:
                     self.store.put_deployment(restored)
             return self.deployments.start(deployment.id)
 
+    def _guard_reconfigure(self, deployment: Deployment, request: ReconfigureDeploymentRequest) -> None:
+        if deployment.reconfiguration and deployment.reconfiguration.get("phase") == "recovery_required":
+            raise ManagerError("Reload this model to restore its previous configuration first.", code="reconfigure_recovery_required", status_code=409)
+        self._require_no_live_deployment_dependencies(deployment, "deployment_active")
+        if request.expected_updated_at is not None and request.expected_updated_at != deployment.updated_at:
+            raise ManagerError("Model state changed. Refresh before applying.", code="deployment_revision_conflict", status_code=409)
+        if deployment.scope != ManagementScope.managed:
+            raise ManagerError("This model is controlled by an external server.", code="connected_no_lifecycle", status_code=409)
+
+    def _profile_for_reconfigure(self, deployment: Deployment, request: ReconfigureDeploymentRequest):
+        profile = self.canonical_configuration(request.model_configuration_id) if request.model_configuration_id else None
+        if profile is not None:
+            if profile.bundle_id != deployment.bundle_id:
+                raise ManagerError("Configuration belongs to another model.", code="profile_bundle_mismatch", status_code=400)
+            if request.expected_configuration_revision is not None and request.expected_configuration_revision != profile.revision:
+                raise ManagerError("The selected configuration changed. Refresh before applying.", code="configuration_revision_conflict", status_code=409)
+        return profile
+
+    def _bags_for_reconfigure(self, deployment: Deployment, request: ReconfigureDeploymentRequest, bundle, profile):
+        requested = {} if request.replace_startup else dict(deployment.requested_startup)
+        for key, value in request.startup.items():
+            if value is None:
+                requested.pop(key, None)
+            else:
+                requested[key] = value
+        initial_startup, response_defaults = model_default_values(self.store, bundle, startup=requested)
+        bags = resolve_bags(startup=requested, startup_defaults=initial_startup, per_request_defaults=response_defaults,
+            per_request=profile.bags.per_request.requested if profile else deployment.settings.per_request.requested,
+            agent=profile.bags.agent.requested if profile else deployment.settings.agent.requested)
+        return requested, bags
+
+    def _guard_shrinking_conversation_context(self, deployment: Deployment, request: ReconfigureDeploymentRequest, requested: dict, profile, bags) -> None:
+        old_context = deployment.server_props.n_ctx if deployment.server_props else deployment.applied_startup.get("ctx_size")
+        new_context = bags.startup.applied.get("ctx_size")
+        if request.conversation_id and (new_context is None or not old_context or new_context < old_context):
+            with open_application_store(self.paths) as app_store:
+                conversation = app_store.get_conversation(request.conversation_id)
+            if conversation is None or conversation.deployment_id != deployment.id:
+                raise ManagerError("This conversation does not use the selected model.", code="context_conversation_mismatch", status_code=409)
+            if self.validate_chat_reconfiguration is not None:
+                self.validate_chat_reconfiguration(request.conversation_id, deployment.id, requested, profile.id if profile else deployment.profile_id)
+            elif conversation.run_ids or conversation.transcript:
+                raise ManagerError("Conversation compatibility cannot be checked. Retry after opening Chat.",
+                    code="context_compatibility_unavailable", status_code=409)
+
+    def _store_identical_running_launch(self, deployment: Deployment, request: ReconfigureDeploymentRequest, requested: dict, bags, profile) -> tuple[Deployment | None, Deployment]:
+        # Response settings belong to requests, not the loaded process. An
+        # explicit configuration switch with the identical frozen launch
+        # reuses that child without rewriting its snapshot. Keep every
+        # busy/revision/identity check above and require observed ownership;
+        # equal settings on an unhealthy or unowned process are not enough.
+        def same_frozen_launch(current: Deployment) -> bool:
+            selected = loading_startup_settings(bags)
+            return (current.applied_startup == current.settings.startup.applied
+                and not has_response_startup_defaults(current.settings)
+                and selected == loading_startup_settings(current.settings)
+                and (profile is None or loading_startup_settings(profile.bags) == selected))
+
+        if (same_frozen_launch(deployment) and deployment.status == DeploymentStatus.running
+            and deployment.health and deployment.health.healthy and deployment.process_identity
+            and self.deployments.processes.classify(deployment.process_identity) == "match"):
+            identity = deployment.process_identity
+            deployment = self.deployments.health(deployment.id)
+            if (deployment.status == DeploymentStatus.running and deployment.health and deployment.health.healthy
+                and deployment.process_identity == identity
+                and self.deployments.processes.classify(identity) == "match"
+                and same_frozen_launch(deployment)):
+                # Same argv keeps the process. Context Auto is still stored
+                # on the request. Response-only keys leave this snapshot.
+                loading_request, _ = split_response_startup(requested, {})
+                stored_request, _ = split_response_startup(deployment.requested_startup, {})
+                if loading_request != stored_request:
+                    overrides = dict(request.startup) if request.replace_startup else {**deployment.startup_overrides, **request.startup}
+                    return self.store.put_deployment(deployment.model_copy(update={
+                        "requested_startup": requested,
+                        "startup_overrides": overrides,
+                        "settings": deployment.settings.model_copy(update={
+                            "startup": deployment.settings.startup.model_copy(update={"requested": dict(requested)}),
+                        }),
+                        "updated_at": utc_now(),
+                    })), deployment
+                return deployment, deployment
+        return None, deployment
+
+    def _replace_managed_process(self, deployment: Deployment, request: ReconfigureDeploymentRequest, requested: dict, bags, profile, bundle) -> Deployment:
+        # Preflight changed fixed ports while the old process remains usable.
+        if requested.get("port") is not None and (requested.get("port") != deployment.applied_startup.get("port") or requested.get("host", "127.0.0.1") != deployment.applied_startup.get("host", "127.0.0.1")):
+            self.deployments._allocate_listen(bags.startup.applied, fixed=True)
+        prior = deployment.model_dump(mode="json", exclude={"reconfiguration", "capability_evidence", "inference_identity"})
+        journal = {"phase": "applying", "previous": prior, "requested_startup": requested, "started_at": utc_now()}
+        self.store.put_deployment(deployment.model_copy(update={"reconfiguration": journal}))
+        stopped = self.deployments.stop(deployment.id)
+        pending = stopped.model_copy(update={"requested_startup": requested, "applied_startup": bags.startup.applied,
+            "startup_overrides": dict(request.startup) if request.replace_startup else {**deployment.startup_overrides, **request.startup}, "settings": bags,
+            "profile_id": profile.id if profile else deployment.profile_id,
+            "profile_snapshot": profile.bags.model_copy(deep=True) if profile else deployment.profile_snapshot,
+            "configuration_revision": profile.revision if profile else deployment.configuration_revision,
+            "loaded_model_identity": loaded_model_identity(self.runtime.current(), bundle, bags),
+            "server_props": None, "reconfiguration": journal, "updated_at": utc_now()})
+        self.store.put_deployment(pending)
+        failure = None
+        try:
+            result = self.deployments.start(deployment.id)
+            if result.status == DeploymentStatus.running and result.health and result.health.healthy:
+                return self.store.put_deployment(result.model_copy(update={"reconfiguration": None}))
+            failure = result.error or "The changed model did not become ready."
+        except Exception as exc:
+            failure = str(exc)
+        current = self.get_deployment(deployment.id)
+        if current.process_identity is not None:
+            try:
+                self.deployments.stop(current.id)
+            except Exception as exc:
+                journal.update(phase="recovery_required", error=failure, recovery_error=str(exc))
+                self.store.put_deployment(current.model_copy(update={"reconfiguration": journal}))
+                raise ManagerError("The changed model failed and needs recovery before another load.", code="reconfigure_recovery_required", status_code=409, details={"deployment_id": current.id}) from exc
+        restored = Deployment.model_validate(prior).model_copy(update={"pid": None, "process_identity": None,
+            "health": None, "server_props": None, "status": DeploymentStatus.stopped, "reconfiguration": journal})
+        self.store.put_deployment(restored)
+        try:
+            if deployment.status == DeploymentStatus.running:
+                restored = self.deployments.start(restored.id)
+            recovered = restored.status == deployment.status or restored.status == DeploymentStatus.running
+        except Exception as exc:
+            recovered = False
+            journal["recovery_error"] = str(exc)
+        journal.update(phase="rolled_back" if recovered else "recovery_required", error=failure)
+        self.store.put_deployment(self.get_deployment(deployment.id).model_copy(update={"reconfiguration": journal}))
+        raise ManagerError("Could not apply model settings. " + ("The previous configuration was restored." if recovered else "The previous configuration is saved; recovery is needed."),
+            code="reconfigure_failed", status_code=409, details={"deployment_id": deployment.id, "recovered": recovered, "cause": failure})
+
     def reconfigure_deployment(self, deployment_id: str, request: ReconfigureDeploymentRequest) -> Deployment:
         """Change an idle owned process, committing only after verified readiness."""
         from workbench_backend.inference.deployments import _require_valid_managed_startup, managed_argv
@@ -944,126 +1075,18 @@ class ModelManager:
         with self.lifecycle.mutate("reconfigure_deployment", deployment_ids={deployment.id},
             bundle_ids={deployment.bundle_id} if deployment.bundle_id else set()):
             deployment = self.get_deployment(deployment_id)
-            if deployment.reconfiguration and deployment.reconfiguration.get("phase") == "recovery_required":
-                raise ManagerError("Reload this model to restore its previous configuration first.", code="reconfigure_recovery_required", status_code=409)
-            self._require_no_live_deployment_dependencies(deployment, "deployment_active")
-            if request.expected_updated_at is not None and request.expected_updated_at != deployment.updated_at:
-                raise ManagerError("Model state changed. Refresh before applying.", code="deployment_revision_conflict", status_code=409)
-            if deployment.scope != ManagementScope.managed:
-                raise ManagerError("This model is controlled by an external server.", code="connected_no_lifecycle", status_code=409)
+            self._guard_reconfigure(deployment, request)
             bundle = self._require_deployable_bundle(deployment.bundle_id or "")
-            profile = self.canonical_configuration(request.model_configuration_id) if request.model_configuration_id else None
-            if profile is not None:
-                if profile.bundle_id != deployment.bundle_id:
-                    raise ManagerError("Configuration belongs to another model.", code="profile_bundle_mismatch", status_code=400)
-                if request.expected_configuration_revision is not None and request.expected_configuration_revision != profile.revision:
-                    raise ManagerError("The selected configuration changed. Refresh before applying.", code="configuration_revision_conflict", status_code=409)
-            requested = {} if request.replace_startup else dict(deployment.requested_startup)
-            for key, value in request.startup.items():
-                if value is None:
-                    requested.pop(key, None)
-                else:
-                    requested[key] = value
-            initial_startup, response_defaults = model_default_values(self.store, bundle, startup=requested)
-            bags = resolve_bags(startup=requested, startup_defaults=initial_startup, per_request_defaults=response_defaults,
-                per_request=profile.bags.per_request.requested if profile else deployment.settings.per_request.requested,
-                agent=profile.bags.agent.requested if profile else deployment.settings.agent.requested)
+            profile = self._profile_for_reconfigure(deployment, request)
+            requested, bags = self._bags_for_reconfigure(deployment, request, bundle, profile)
             _require_valid_managed_startup(bags.startup)
             executable = self.runtime.require_executable()
             managed_argv(executable, bundle, bags.startup.applied)
-            old_context = deployment.server_props.n_ctx if deployment.server_props else deployment.applied_startup.get("ctx_size")
-            new_context = bags.startup.applied.get("ctx_size")
-            if request.conversation_id and (new_context is None or not old_context or new_context < old_context):
-                with open_application_store(self.paths) as app_store:
-                    conversation = app_store.get_conversation(request.conversation_id)
-                if conversation is None or conversation.deployment_id != deployment.id:
-                    raise ManagerError("This conversation does not use the selected model.", code="context_conversation_mismatch", status_code=409)
-                if self.validate_chat_reconfiguration is not None:
-                    self.validate_chat_reconfiguration(request.conversation_id, deployment.id, requested, profile.id if profile else deployment.profile_id)
-                elif conversation.run_ids or conversation.transcript:
-                    raise ManagerError("Conversation compatibility cannot be checked. Retry after opening Chat.",
-                        code="context_compatibility_unavailable", status_code=409)
-            # Response settings belong to requests, not the loaded process. An
-            # explicit configuration switch with the identical frozen launch
-            # reuses that child without rewriting its snapshot. Keep every
-            # busy/revision/identity check above and require observed ownership;
-            # equal settings on an unhealthy or unowned process are not enough.
-            def same_frozen_launch(current: Deployment) -> bool:
-                selected = loading_startup_settings(bags)
-                return (current.applied_startup == current.settings.startup.applied
-                    and not has_response_startup_defaults(current.settings)
-                    and selected == loading_startup_settings(current.settings)
-                    and (profile is None or loading_startup_settings(profile.bags) == selected))
-
-            if (same_frozen_launch(deployment) and deployment.status == DeploymentStatus.running
-                and deployment.health and deployment.health.healthy and deployment.process_identity
-                and self.deployments.processes.classify(deployment.process_identity) == "match"):
-                identity = deployment.process_identity
-                deployment = self.deployments.health(deployment.id)
-                if (deployment.status == DeploymentStatus.running and deployment.health and deployment.health.healthy
-                    and deployment.process_identity == identity
-                    and self.deployments.processes.classify(identity) == "match"
-                    and same_frozen_launch(deployment)):
-                    # Same argv keeps the process. Context Auto is still stored
-                    # on the request. Response-only keys leave this snapshot.
-                    loading_request, _ = split_response_startup(requested, {})
-                    stored_request, _ = split_response_startup(deployment.requested_startup, {})
-                    if loading_request != stored_request:
-                        overrides = dict(request.startup) if request.replace_startup else {**deployment.startup_overrides, **request.startup}
-                        return self.store.put_deployment(deployment.model_copy(update={
-                            "requested_startup": requested,
-                            "startup_overrides": overrides,
-                            "settings": deployment.settings.model_copy(update={
-                                "startup": deployment.settings.startup.model_copy(update={"requested": dict(requested)}),
-                            }),
-                            "updated_at": utc_now(),
-                        }))
-                    return deployment
-            # Preflight changed fixed ports while the old process remains usable.
-            if requested.get("port") is not None and (requested.get("port") != deployment.applied_startup.get("port") or requested.get("host", "127.0.0.1") != deployment.applied_startup.get("host", "127.0.0.1")):
-                self.deployments._allocate_listen(bags.startup.applied, fixed=True)
-            prior = deployment.model_dump(mode="json", exclude={"reconfiguration", "capability_evidence", "inference_identity"})
-            journal = {"phase": "applying", "previous": prior, "requested_startup": requested, "started_at": utc_now()}
-            self.store.put_deployment(deployment.model_copy(update={"reconfiguration": journal}))
-            stopped = self.deployments.stop(deployment.id)
-            pending = stopped.model_copy(update={"requested_startup": requested, "applied_startup": bags.startup.applied,
-                "startup_overrides": dict(request.startup) if request.replace_startup else {**deployment.startup_overrides, **request.startup}, "settings": bags,
-                "profile_id": profile.id if profile else deployment.profile_id,
-                "profile_snapshot": profile.bags.model_copy(deep=True) if profile else deployment.profile_snapshot,
-                "configuration_revision": profile.revision if profile else deployment.configuration_revision,
-                "loaded_model_identity": loaded_model_identity(self.runtime.current(), bundle, bags),
-                "server_props": None, "reconfiguration": journal, "updated_at": utc_now()})
-            self.store.put_deployment(pending)
-            failure = None
-            try:
-                result = self.deployments.start(deployment.id)
-                if result.status == DeploymentStatus.running and result.health and result.health.healthy:
-                    return self.store.put_deployment(result.model_copy(update={"reconfiguration": None}))
-                failure = result.error or "The changed model did not become ready."
-            except Exception as exc:
-                failure = str(exc)
-            current = self.get_deployment(deployment.id)
-            if current.process_identity is not None:
-                try:
-                    self.deployments.stop(current.id)
-                except Exception as exc:
-                    journal.update(phase="recovery_required", error=failure, recovery_error=str(exc))
-                    self.store.put_deployment(current.model_copy(update={"reconfiguration": journal}))
-                    raise ManagerError("The changed model failed and needs recovery before another load.", code="reconfigure_recovery_required", status_code=409, details={"deployment_id": current.id}) from exc
-            restored = Deployment.model_validate(prior).model_copy(update={"pid": None, "process_identity": None,
-                "health": None, "server_props": None, "status": DeploymentStatus.stopped, "reconfiguration": journal})
-            self.store.put_deployment(restored)
-            try:
-                if deployment.status == DeploymentStatus.running:
-                    restored = self.deployments.start(restored.id)
-                recovered = restored.status == deployment.status or restored.status == DeploymentStatus.running
-            except Exception as exc:
-                recovered = False
-                journal["recovery_error"] = str(exc)
-            journal.update(phase="rolled_back" if recovered else "recovery_required", error=failure)
-            self.store.put_deployment(self.get_deployment(deployment.id).model_copy(update={"reconfiguration": journal}))
-            raise ManagerError("Could not apply model settings. " + ("The previous configuration was restored." if recovered else "The previous configuration is saved; recovery is needed."),
-                code="reconfigure_failed", status_code=409, details={"deployment_id": deployment.id, "recovered": recovered, "cause": failure})
+            self._guard_shrinking_conversation_context(deployment, request, requested, profile, bags)
+            reused, deployment = self._store_identical_running_launch(deployment, request, requested, bags, profile)
+            if reused is not None:
+                return reused
+            return self._replace_managed_process(deployment, request, requested, bags, profile, bundle)
 
     def deployment_health(self, deployment_id: str) -> Deployment:
         return self.deployments.health(deployment_id)
