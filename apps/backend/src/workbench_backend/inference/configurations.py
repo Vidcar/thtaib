@@ -5,10 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 from workbench_backend.errors import ManagerError
 from workbench_backend.inference.ids import utc_now
-from workbench_backend.inference.schemas import ModelBundle, RunProfile, RuntimeManifest, SettingsBags
+from workbench_backend.inference.schemas import GgufRuntimeMetadata, ModelBundle, RunProfile, RuntimeManifest, SettingsBags
 from workbench_backend.inference.settings import (
     REQUEST_STARTUP_ALIASES, REQUEST_TEMPLATE_ALIASES, normalize_startup_requested,
     resolve_bags, split_response_startup,
@@ -44,7 +45,7 @@ def loading_startup_settings(bags: SettingsBags) -> dict:
     original_parallel = startup.get("parallel")
     if original_parallel in {None, -1}:
         startup["parallel"] = 4
-        startup.setdefault("kv_unified", True)
+        startup["kv_unified"] = True
     else:
         startup.setdefault("kv_unified", False)
     startup.setdefault("fit", "on")
@@ -69,7 +70,8 @@ def has_response_startup_defaults(bags: SettingsBags) -> bool:
     return isinstance(kwargs, dict) and any(key in kwargs for key in REQUEST_TEMPLATE_ALIASES)
 
 
-def loaded_model_identity(runtime: RuntimeManifest | None, bundle: ModelBundle, bags: SettingsBags) -> str:
+def loaded_model_identity(runtime: RuntimeManifest | None, bundle: ModelBundle, bags: SettingsBags,
+                          *, hash_external: bool = True) -> str | None:
     """Hash exact inference runtime/artifacts and the normalized loading plan."""
     from workbench_backend.inference.bundles import mmproj_companion
     from workbench_backend.inference.hashes import cached_sha256_file
@@ -89,6 +91,8 @@ def loaded_model_identity(runtime: RuntimeManifest | None, bundle: ModelBundle, 
         if startup.get(key):
             path = Path(str(startup[key])).resolve()
             if str(path) not in recorded:
+                if not hash_external:
+                    return None
                 recorded[str(path)] = cached_sha256_file(path) if path.is_file() else "missing"
     payload = {
         "version": 1,
@@ -100,55 +104,66 @@ def loaded_model_identity(runtime: RuntimeManifest | None, bundle: ModelBundle, 
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def upgrade_configuration(profile: RunProfile) -> RunProfile:
-    """Preserve effective old saved defaults once without rewriting history."""
-    if profile.settings_schema_version >= 2:
-        return profile
-    requested = dict(profile.bags.startup.requested)
-    applied = profile.bags.startup.applied
-    for key, legacy in (("n_gpu_layers", -1), ("flash_attn", "on"), ("fit", "on")):
-        requested.setdefault(key, applied.get(key, legacy))
-    old_parallel = applied.get("parallel", requested.get("parallel"))
-    requested.setdefault("parallel", 4 if old_parallel in {None, -1} else old_parallel)
-    requested.setdefault("kv_unified", applied.get("kv_unified", old_parallel in {None, -1}))
-    if applied.get("n_gpu_layers", requested.get("n_gpu_layers")) == 0:
-        # A historical zero-layer setup was weight-only CPU placement. Retain
-        # its effective companion/operation defaults during this semantic cutover.
-        for key, legacy in (("kv_offload", True), ("op_offload", True), ("mmproj_use_gpu", True), ("spec_draft_ngl", "auto")):
-            requested.setdefault(key, applied.get(key, legacy))
-    loading, response = split_response_startup(requested, profile.bags.per_request.requested)
-    return profile.model_copy(update={
-        "bags": resolve_bags(startup=loading, per_request=response, agent=profile.bags.agent.requested,
-                             per_request_defaults=profile.bags.per_request.applied),
-        "settings_schema_version": 2,
-    })
+def model_default_values(store: RecordStore, bundle: ModelBundle, *, startup: dict[str, Any] | None = None
+                         ) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Read the shared native/template/card baseline without creating overrides."""
+    from workbench_backend.inference.configuration_options import (
+        bundle_configuration_options, initial_context_size, response_default_values,
+    )
+    from workbench_backend.inference.inspect import read_gguf_runtime_metadata
+    from workbench_backend.inference.inspection_cache import cached_inspection
+
+    try:
+        metadata, _, _ = cached_inspection(store, bundle, "runtime", GgufRuntimeMetadata,
+            lambda: read_gguf_runtime_metadata(Path(bundle.primary_path or "")))
+    except (OSError, ValueError, KeyError, TypeError, ManagerError):
+        metadata = GgufRuntimeMetadata()
+    config = bundle.huggingface_configuration
+    startup = startup or {}
+    selected_file = startup.get("chat_template_file") or (
+        config.template_file if config and not startup.get("chat_template") else None)
+    selected_source = "configuration_template" if startup.get("chat_template_file") or startup.get("chat_template") else (
+        f"{config.template_origin}_template" if config and config.template_file else None)
+    if selected_file:
+        path = Path(str(selected_file))
+        record = next((item for item in bundle.files if Path(item.path) == path), None)
+        try:
+            with path.open("rb") as template_stream:
+                payload = template_stream.read(2 * 1024 * 1024 + 1)
+            if (len(payload) > 2 * 1024 * 1024
+                or record is not None and hashlib.sha256(payload).hexdigest() != record.sha256
+                or record is None and selected_source != "configuration_template"):
+                raise ValueError("selected template differs from the bundle record")
+            metadata = metadata.model_copy(update={"chat_template": payload.decode("utf-8")})
+        except (OSError, UnicodeError, ValueError):
+            metadata = metadata.model_copy(update={"chat_template": None})
+    elif startup.get("chat_template"):
+        inline = str(startup["chat_template"])
+        metadata = metadata.model_copy(update={"chat_template": inline if "{{" in inline or "{%" in inline else None})
+    options = bundle_configuration_options(bundle.id, metadata, huggingface_configuration=config,
+        selected_template_source=selected_source)
+    return {"ctx_size": initial_context_size(metadata.context_length)}, response_default_values(options)
 
 
 def ensure_model_configurations(store: RecordStore) -> None:
     """Create one fresh default for a bundle that has no valid default.
 
-    Existing saved configurations retain their effective defaults at the
-    settings cutover. Historical deployment snapshots and merged profile
-    aliases remain separate from this saved configuration authority.
+    Existing configurations and accepted deployment snapshots keep their
+    identity. Reading a model never rewrites requested settings.
     """
     with store.configuration_lock():
-        for profile in store.list_profiles():
-            migrated = upgrade_configuration(profile)
-            if migrated != profile:
-                store.put_profile(migrated)
         for bundle in store.list_bundles():
             current = store.get_profile(bundle.default_configuration_id) if bundle.default_configuration_id else None
             if current is not None and current.bundle_id == bundle.id:
                 continue
             now = utc_now()
-            publisher_defaults = (bundle.huggingface_configuration.generation_defaults
-                                  if bundle.huggingface_configuration else None)
+            startup_defaults, response_defaults = model_default_values(store, bundle)
             default_id = f"config_{bundle.id}"
             default = store.get_profile(default_id)
             if default is None:
                 default = store.put_profile(RunProfile(
                     id=default_id, bundle_id=bundle.id, display_name="Default",
-                    bags=resolve_bags(per_request_defaults=publisher_defaults),
+                    bags=resolve_bags(startup_defaults=startup_defaults, per_request_defaults=response_defaults),
                     settings_schema_version=2,
                     created_at=now, updated_at=now,
                 ))

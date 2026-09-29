@@ -4627,30 +4627,28 @@ export interface components {
             capacity_source: "server_props.n_ctx" | "unknown";
             /** Capacity Tokens */
             capacity_tokens?: number | null;
+            /** Configured Output Tokens */
+            configured_output_tokens?: number | null;
+            /**
+             * Counting Basis
+             * @default estimated
+             * @enum {string}
+             */
+            counting_basis: "native" | "estimated";
             /**
              * Counting Method
-             * @default Character estimate (3 chars/token), outbound messages/tools/schema counted once, 2048 tokens/image, 8% capacity margin; not tokenizer usage
+             * @default Deep Agents / LangChain approximate token counter; not tokenizer usage
              */
             counting_method: string;
-            /**
-             * Estimated Input Tokens
-             * @default 0
-             */
-            estimated_input_tokens: number;
             /** Fits */
             fits?: boolean | null;
             /**
-             * Margin Tokens
+             * Input Tokens
              * @default 0
              */
-            margin_tokens: number;
+            input_tokens: number;
             /** Notes */
             notes?: string[];
-            /**
-             * Output Reservation Tokens
-             * @default 0
-             */
-            output_reservation_tokens: number;
             /**
              * Purpose
              * @default work
@@ -4659,7 +4657,7 @@ export interface components {
             purpose: "work" | "summary" | "review" | "probe";
             /**
              * Schema Version
-             * @default 1
+             * @default 2
              */
             schema_version: number;
             /**
@@ -4668,8 +4666,6 @@ export interface components {
              * @constant
              */
             summarization_path: "deepagents-upstream";
-            /** Usable Input Tokens */
-            usable_input_tokens?: number | null;
         };
         /** CredentialWrite */
         CredentialWrite: {
@@ -6281,6 +6277,12 @@ export interface components {
         ModelEstimateRequest: {
             /** Bundle Id */
             bundle_id?: string | null;
+            /**
+             * Method
+             * @default metadata
+             * @enum {string}
+             */
+            method: "metadata" | "native";
             /** Primary Files */
             primary_files?: string[];
             /** Projector Files */
@@ -6324,6 +6326,10 @@ export interface components {
             architecture?: string | null;
             /** Assumptions */
             assumptions?: string[];
+            /** Attention Cache Bytes */
+            attention_cache_bytes?: number | null;
+            /** Calculation Ms */
+            calculation_ms?: number | null;
             /**
              * Completeness
              * @default partial
@@ -6375,6 +6381,8 @@ export interface components {
             projector_disk_bytes?: number | null;
             /** Ram Bytes */
             ram_bytes?: number | null;
+            /** Recurrent State Bytes */
+            recurrent_state_bytes?: number | null;
             /** Runtime Overhead Bytes */
             runtime_overhead_bytes?: number | null;
             /** Selected Startup */
@@ -6940,49 +6948,6 @@ export interface components {
             /** Rss Bytes */
             rss_bytes?: number | null;
         };
-        /** ResponseBudgetBinding */
-        ResponseBudgetBinding: {
-            /** Bound At */
-            bound_at: string;
-            /** Capacity Tokens */
-            capacity_tokens: number;
-            /** Margin Tokens */
-            margin_tokens: number;
-            /** Model Identity */
-            model_identity: string;
-            /** Source */
-            source: string;
-            /** Total Tokens */
-            total_tokens: number;
-            /**
-             * Version
-             * @default 1
-             */
-            version: number;
-        };
-        /** ResponseBudgetPolicy */
-        ResponseBudgetPolicy: {
-            /**
-             * Mode
-             * @default workbench_auto
-             * @enum {string}
-             */
-            mode: "explicit" | "publisher" | "workbench_auto";
-            /**
-             * Source
-             * @default Workbench Auto
-             */
-            source: string;
-            /** Thinking */
-            thinking?: boolean | null;
-            /** Total Tokens */
-            total_tokens?: number | null;
-            /**
-             * Version
-             * @default 1
-             */
-            version: number;
-        };
         /** ResponsePreset */
         ResponsePreset: {
             /** Description */
@@ -7459,6 +7424,8 @@ export interface components {
             options?: components["schemas"]["RuntimeControlOption"][];
             /** Recommended */
             recommended?: unknown;
+            /** Request Path */
+            request_path?: string | null;
             /** Reset Value */
             reset_value?: unknown;
             /**
@@ -7630,8 +7597,6 @@ export interface components {
             applied?: {
                 [key: string]: unknown;
             };
-            output_budget_binding?: components["schemas"]["ResponseBudgetBinding"] | null;
-            output_budget_policy?: components["schemas"]["ResponseBudgetPolicy"] | null;
             /** Overridden */
             overridden?: components["schemas"]["SettingNote"][];
             recipe_origin?: components["schemas"]["ResponseRecipeOrigin"] | null;
@@ -8389,8 +8354,6 @@ export type SchemaResizeAction = components['schemas']['ResizeAction'];
 export type SchemaResolvedSetting = components['schemas']['ResolvedSetting'];
 export type SchemaResolvedSetupSelection = components['schemas']['ResolvedSetupSelection'];
 export type SchemaResourceUsage = components['schemas']['ResourceUsage'];
-export type SchemaResponseBudgetBinding = components['schemas']['ResponseBudgetBinding'];
-export type SchemaResponseBudgetPolicy = components['schemas']['ResponseBudgetPolicy'];
 export type SchemaResponsePreset = components['schemas']['ResponsePreset'];
 export type SchemaResponseRecipe = components['schemas']['ResponseRecipe'];
 export type SchemaResponseRecipeConfigurationRequest = components['schemas']['ResponseRecipeConfigurationRequest'];

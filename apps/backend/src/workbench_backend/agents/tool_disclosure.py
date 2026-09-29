@@ -431,15 +431,23 @@ class LeanFilesystemMiddleware(FilesystemMiddleware):
     def name(self):
         return "FilesystemMiddleware"
 
-    def __init__(self, *, disclosure: ToolDisclosureMiddleware, **kwargs):
+    def __init__(self, *, disclosure: ToolDisclosureMiddleware | None = None,
+                 request_preparer: Callable[[ModelRequest], ModelRequest] | None = None, **kwargs):
         super().__init__(**kwargs)
         self.disclosure = disclosure
+        self.request_preparer = request_preparer
+
+    def prepare_request(self, request: ModelRequest) -> ModelRequest:
+        if self.disclosure is not None:
+            request = self.disclosure.prepare_request(request)
+        return self.request_preparer(request) if self.request_preparer is not None else request
 
     def wrap_model_call(self, request, handler):
-        return super().wrap_model_call(self.disclosure.prepare_request(request), handler)
+        return super().wrap_model_call(self.prepare_request(request), handler)
 
     async def awrap_model_call(self, request, handler):
-        return await super().awrap_model_call(self.disclosure.prepare_request(request), handler)
+        prepared = await asyncio.to_thread(self.prepare_request, request)
+        return await super().awrap_model_call(prepared, handler)
 
 
 class LeanTodoListMiddleware(TodoListMiddleware):

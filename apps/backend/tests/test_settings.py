@@ -82,23 +82,27 @@ class SettingsBagTests(unittest.TestCase):
         self.assertEqual(bags.startup.applied["n_gpu_layers"], "auto")
         self.assertEqual(bags.startup.applied["flash_attn"], "auto")
         self.assertEqual(bags.startup.applied["fit"], "on")
-        self.assertEqual(bags.startup.applied["parallel"], 4)
+        self.assertEqual(bags.startup.applied["parallel"], -1)
         self.assertTrue(bags.startup.applied["kv_unified"])
         self.assertNotIn("ctx_size", DEFAULT_GPU_PROFILE)
         self.assertEqual(DEFAULT_GPU_PROFILE["n_gpu_layers"], "auto")
         self.assertIn(DEFAULT_GPU_PROFILE["flash_attn"], {"on", "off", "auto"})
 
-    def test_auto_omits_context_and_cpu_includes_native_companion_placement(self) -> None:
+    def test_auto_omits_context_and_cpu_weights_leave_companion_placement_independent(self) -> None:
         automatic = resolve_bags(startup={"ctx_size": None})
         self.assertNotIn("--ctx-size", startup_cli_args(automatic.startup.applied))
         full = resolve_bags(startup={"ctx_size": 0})
         self.assertEqual(full.startup.applied["ctx_size"], 0)
         cpu = resolve_bags(startup={"n_gpu_layers": 0})
         args = startup_cli_args(cpu.startup.applied)
-        self.assertIn("--no-op-offload", args)
-        self.assertIn("--no-mmproj-offload", args)
-        self.assertIn("--no-kv-offload", args)
-        self.assertEqual(args[args.index("--spec-draft-ngl") + 1], "0")
+        for flag in ("--no-op-offload", "--no-mmproj-offload", "--no-kv-offload", "--spec-draft-ngl"):
+            self.assertNotIn(flag, args)
+        explicit = resolve_bags(startup={"n_gpu_layers": 0, "kv_offload": False, "op_offload": True,
+                                       "mmproj_use_gpu": False, "spec_draft_ngl": "all"})
+        self.assertFalse(explicit.startup.applied["kv_offload"])
+        self.assertTrue(explicit.startup.applied["op_offload"])
+        self.assertFalse(explicit.startup.applied["mmproj_use_gpu"])
+        self.assertEqual(explicit.startup.applied["spec_draft_ngl"], "all")
 
     def test_known_request_values_reject_nonfinite_and_fractional_counts(self) -> None:
         for requested in ({"temperature": float("inf")}, {"min_p": float("nan")},
@@ -107,7 +111,7 @@ class SettingsBagTests(unittest.TestCase):
                 bag = resolve_bags(per_request=requested).per_request
                 self.assertEqual(bag.unsupported, list(requested))
                 self.assertEqual(bag.requested, requested)
-                self.assertEqual(bag.applied, {})
+                self.assertEqual(bag.applied, {"max_tokens": -1})
 
     def test_native_logit_bias_pairs_and_token_bans_survive_resolution(self) -> None:
         for requested in ([[17, False], ["suffix", -2.5]], {"17": False, "suffix": 1.5}):
@@ -118,12 +122,26 @@ class SettingsBagTests(unittest.TestCase):
         self.assertEqual(resolve_bags(per_request={"logit_bias": [[17, float("nan")]]}).per_request.unsupported, ["logit_bias"])
 
     def test_startup_dependencies_fail_before_loading(self) -> None:
-        for startup, invalid in (({"n_gpu_layers": "auto", "fit": "off"}, "fit"),
-                                 ({"flash_attn": "off", "cache_type_v": "q8_0"}, "cache_type_v"),
-                                 ({"batch_size": 64, "ubatch_size": 128}, "ubatch_size"),
-                                 ({"spec_draft_n_max": 3, "spec_draft_n_min": 4}, "spec_draft_n_min")):
+        for startup, invalid in (({"flash_attn": "off", "cache_type_v": "q8_0"}, "cache_type_v"),):
             with self.subTest(startup=startup):
                 self.assertIn(invalid, resolve_bags(startup=startup).startup.unsupported)
+
+    def test_native_clamped_or_independent_startup_settings_remain_available(self) -> None:
+        for startup in ({"n_gpu_layers": "auto", "fit": "off"},
+                        {"batch_size": 64, "ubatch_size": 128}, {"batch_size": 64, "ubatch_size": 0},
+                        {"spec_draft_n_max": 3, "spec_draft_n_min": 4}):
+            with self.subTest(startup=startup):
+                bag = resolve_bags(startup=startup).startup
+                self.assertEqual(bag.unsupported, [])
+                for key, value in startup.items():
+                    self.assertEqual(bag.applied[key], value)
+                    self.assertIn(str(value), startup_cli_args(bag.applied))
+
+    def test_default_output_is_unlimited_and_explicit_limits_are_exact(self) -> None:
+        for response in ({}, {"max_tokens": None}, {"reasoning": "off"}, {"reasoning": "on"}):
+            self.assertEqual(resolve_bags(per_request=response).per_request.applied["max_tokens"], -1)
+        self.assertEqual(resolve_bags(per_request={"max_tokens": 65000}).per_request.applied["max_tokens"], 65000)
+        self.assertEqual(resolve_bags(per_request={"max_tokens": 0}).per_request.applied["max_tokens"], 0)
 
     def test_explicit_all_gpu_layers_reaches_llama_server(self) -> None:
         for value in ("all", "auto", -1):

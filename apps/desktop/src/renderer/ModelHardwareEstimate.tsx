@@ -37,8 +37,8 @@ function EstimateContents({ result, expanded = false }: { result: ModelMemoryEst
     <div className="estimate-availability" aria-label="Available memory">{devices.length ? devices.map(device => <span key={device.id}>{devices.length === 1 ? "GPU" : device.name} <strong>{bytes(device.available_bytes)} / {bytes(device.total_bytes)}</strong>{result.hardware.stale ? " · stale" : ""}</span>) : <span>GPU <strong>Not reported</strong></span>}<span>RAM <strong>{bytes(result.hardware.ram_available_bytes)} / {bytes(result.hardware.ram_total_bytes)}</strong></span><small className="hint">Available / total</small></div>
     <dl className="estimate-totals" data-completeness={completeness}><div><dt>Estimated GPU</dt><dd>{bytes(result.gpu_bytes)}</dd></div><div><dt>Estimated RAM</dt><dd>{bytes(result.ram_bytes)}</dd></div></dl>
     <div className="estimate-summary"><span>Weights <strong>{bytes(result.weights_bytes)}</strong></span><span>Cache and model state <strong>{bytes(result.kv_bytes)}</strong></span><span>Compute <strong>{bytes(result.runtime_overhead_bytes)}</strong></span>{result.projector_disk_bytes ? <span>Vision <strong>{bytes(result.projector_bytes)}</strong></span> : null}</div>
-    {result.speculation_bytes != null && result.speculation_bytes > 0 ? <p className="hint">Speculation: {bytes(result.speculation_bytes)} included in the measured components.</p> : null}
-    <p className="estimate-completeness hint">{completeness === "complete" ? "Selected model components measured." : completeness === "unavailable" ? "Native measurement unavailable." : "Some selected components could not be measured."} Driver, operating system and host-cache costs remain unknown.</p>
+    {result.speculation_bytes != null && result.speculation_bytes > 0 ? <p className="hint">Speculation: {bytes(result.speculation_bytes)} included in the {result.source === "native_prediction" ? "measured" : "estimated"} components.</p> : null}
+    <p className="estimate-completeness hint">{completeness === "complete" ? result.source === "native_prediction" ? "Selected model components measured." : "Selected model components estimated." : completeness === "unavailable" ? "Estimate unavailable." : "Some selected components are unknown."} Driver, operating system and host-cache costs remain unknown.</p>
     {shortage ? <p className="estimate-shortage">At least {bytes(shortage)} above available GPU memory, before unknown dynamic costs.</p> : null}
     {result.effective_context != null ? <p className="estimate-context">Shared context pool: <strong>{result.effective_context.toLocaleString()} tokens</strong>{result.effective_parallel != null ? ` · ${result.effective_parallel} request slots` : ""}{result.effective_context_per_slot != null && result.effective_parallel !== 1 ? <small>Up to {result.effective_context_per_slot.toLocaleString()} tokens per request. Slots share the pool.</small> : null}</p> : result.context_marker != null ? <p className="hint">{result.context_marker_kind === "upper_bound" ? "Context upper bound" : "Automatic context estimate"}: {result.context_marker.toLocaleString()} tokens · dynamic costs excluded.</p> : null}
     {observed ? <p className="estimate-observed"><span>Observed</span><strong>{bytes(observedUsage?.rss_bytes)} process RAM</strong>{typeof observed.observed_at === "string" ? <small>{new Date(observed.observed_at).toLocaleTimeString()}</small> : null}</p> : <p className="hint">Observed: no matching loaded model.</p>}
@@ -62,6 +62,9 @@ export function ModelHardwareEstimate({ selection, onEstimate, active = true, co
   const refreshRequest = useRef<{ key: string; epoch: number } | null>(null);
   const [answer, setAnswer] = useState<EstimateAnswer | null>(null);
   const [pending, setPending] = useState<{ key: string; epoch: number } | null>(null);
+  const [nativeAnswer, setNativeAnswer] = useState<EstimateAnswer | null>(null);
+  const [nativePending, setNativePending] = useState<{ key: string; epoch: number } | null>(null);
+  const nativeController = useRef<AbortController | null>(null);
   const completed = answer?.key === key && answer.epoch === epoch;
   const loading = active && (!completed || pending?.key === key && pending.epoch === epoch);
   useEffect(() => {
@@ -77,28 +80,44 @@ export function ModelHardwareEstimate({ selection, onEstimate, active = true, co
       }).catch(failure => {
         if (current()) { setAnswer({ key, epoch, error: errorMessage(failure) }); setPending(null); }
       });
-    }, selection.bundle_id ? 500 : 250);
+    }, selection.bundle_id ? 120 : 250);
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [key, epoch, selection.bundle_id, active]);
+  useEffect(() => () => { nativeController.current?.abort(); nativeController.current = null; }, [key, epoch, active]);
   const result = answer?.key === key && (!compact || completed && !loading) ? answer.data : undefined;
   const error = completed && !loading ? answer?.error : undefined;
   const refresh = () => { refreshRequest.current = { key, epoch: epoch + 1 }; setEpoch(epoch + 1); };
   const shortage = gpuShortage(result);
-  const status = loading ? "Checking…" : error || result?.completeness === "unavailable" ? "Unavailable" : !result ? "Paused" : shortage ? "GPU shortfall" : result.completeness === "complete" ? "Measured" : "Partial estimate";
+  const status = loading ? "Updating…" : error || result?.completeness === "unavailable" ? "Unavailable" : !result ? "Paused" : shortage ? "GPU shortfall" : result.completeness === "complete" ? "Estimate" : "Partial";
   const statusDetail = loading ? "Estimating memory" : error || result?.completeness === "unavailable" ? "See details" : !result ? "Open to estimate" : shortage ? `At least ${bytes(shortage)} over` : result.hardware.stale ? "Available memory stale" : "Some costs unknown";
   const value = (amount?: number | null) => loading || !result && !error ? "—" : bytes(amount);
   const refreshButton = <button type="button" className="text-button" onClick={refresh} disabled={loading || !active} aria-label="Refresh hardware estimate">Refresh</button>;
+  const nativeLoading = Boolean(nativePending?.key === key && nativePending.epoch === epoch && !nativeController.current?.signal.aborted);
+  const nativeResult = nativeAnswer?.key === key && nativeAnswer.epoch === epoch ? nativeAnswer : null;
+  async function checkNative() {
+    if (!active || nativeLoading) return;
+    const controller = new AbortController(); nativeController.current?.abort(); nativeController.current = controller;
+    const checked = { key, epoch }; setNativePending(checked); setNativeAnswer(null);
+    try {
+      const data = await estimateModel({ ...selection, method: "native" }, true, controller.signal);
+      if (!controller.signal.aborted && identity.current.key === key && identity.current.epoch === epoch && identity.current.active) setNativeAnswer({ ...checked, data });
+    } catch (failure) {
+      if (!controller.signal.aborted && identity.current.key === key && identity.current.epoch === epoch && identity.current.active) setNativeAnswer({ ...checked, error: errorMessage(failure) });
+    } finally { if (nativeController.current === controller) { nativeController.current = null; setNativePending(null); } }
+  }
+  const nativeCheck = selection.bundle_id ? <section className="native-memory-check"><div className="estimate-heading"><strong>Native allocation check</strong><button type="button" disabled={!active || nativeLoading} onClick={() => void checkNative()}>{nativeLoading ? "Checking…" : "Check with native engine"}</button></div>{nativeResult?.error ? <p className="estimate-error" role="status">Native check unavailable · {nativeResult.error}</p> : null}{nativeResult?.data ? <EstimateContents result={nativeResult.data} expanded /> : <p className="hint">Optional. Checks this loading plan without interrupting the loaded model.</p>}</section> : null;
   if (compact) return <>
     <section className="model-memory-estimate model-memory-estimate-compact" aria-label="Advisory hardware estimate" aria-busy={loading} data-estimate-state={loading ? "pending" : error ? "error" : result?.completeness ?? "idle"}>
-      <div className="estimate-heading"><strong>Memory preview <small className="hint">Estimated</small></strong><div className="estimate-actions">{refreshButton}<button type="button" className="text-button" onClick={onDetails} disabled={!onDetails} aria-label="Memory estimate details">Details</button></div></div>
-      <dl className="estimate-compact-totals"><div><dt>GPU</dt><dd title={value(result?.gpu_bytes)}>{value(result?.gpu_bytes)}</dd><small>Estimated</small></div><div><dt>RAM</dt><dd title={value(result?.ram_bytes)}>{value(result?.ram_bytes)}</dd><small>Estimated</small></div><div className="estimate-compact-status" data-shortage={shortage > 0} role="status" aria-atomic="true"><dt>Status</dt><dd title={status}>{status}</dd><small title={statusDetail}>{statusDetail}</small></div></dl>
+      <div className="estimate-heading"><strong>Memory <small className="hint">Estimated</small></strong><div className="estimate-actions"><button type="button" className="text-button" onClick={onDetails} disabled={!onDetails} aria-label="Memory estimate details">Details</button></div></div>
+      <dl className="estimate-compact-totals"><div><dt>GPU</dt><dd title={value(result?.gpu_bytes)}>{value(result?.gpu_bytes)}</dd></div><div><dt>RAM</dt><dd title={value(result?.ram_bytes)}>{value(result?.ram_bytes)}</dd></div><div className="estimate-compact-status" data-shortage={shortage > 0} role="status" aria-atomic="true"><dt>Status</dt><dd title={statusDetail}>{status}</dd></div></dl>
     </section>
-    {detailsTarget ? createPortal(<section className="model-memory-estimate model-memory-estimate-details" aria-label="Memory estimate details" aria-busy={loading}><div className="estimate-heading"><strong>Memory details</strong>{refreshButton}</div>{loading ? <p className="hint" role="status">Estimating the selected loading settings…</p> : null}{error ? <p className="estimate-error" role="status">Estimate unavailable · {error}</p> : null}{result ? <EstimateContents result={result} expanded /> : !loading && !error ? <p className="hint" role="status">No estimate is available for the selected loading settings.</p> : null}</section>, detailsTarget) : null}
+    {detailsTarget ? createPortal(<section className="model-memory-estimate model-memory-estimate-details" aria-label="Memory estimate details" aria-busy={loading}><div className="estimate-heading"><strong>Metadata estimate</strong>{refreshButton}</div>{loading ? <p className="hint" role="status">Estimating the selected loading settings…</p> : null}{error ? <p className="estimate-error" role="status">Estimate unavailable · {error}</p> : null}{result ? <EstimateContents result={result} expanded /> : !loading && !error ? <p className="hint" role="status">No estimate is available for the selected loading settings.</p> : null}{nativeCheck}</section>, detailsTarget) : null}
   </>;
   return <section className="model-memory-estimate" aria-label="Advisory hardware estimate" aria-busy={loading}>
     <div className="estimate-heading"><strong>Memory preview <small className="hint">Estimated</small></strong>{refreshButton}</div>
     {loading && !result ? <span className="hint" role="status">Estimating…</span> : null}
     {error ? <span className="hint" role="status">Estimate unavailable · {error}</span> : null}
     {result ? <EstimateContents result={result} /> : null}
+    {selection.bundle_id ? <details><summary>Native check</summary>{nativeCheck}</details> : null}
   </section>;
 }

@@ -74,7 +74,7 @@ export function HoverHelp({ title = "About this setting", children, triggerConte
       onFocus={() => { focused.current = true; show(); }} onBlur={() => { focused.current = false; leave(); }} onClick={show}
       onKeyDown={(event) => {
         if (open && event.key === "Tab" && !event.shiftKey) {
-          const control = bubble.current?.querySelector<HTMLElement>("button, a[href], input, select, textarea, summary, [tabindex='0']");
+          const control = bubble.current?.querySelector<HTMLElement>("button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex='0']");
           if (control) { event.preventDefault(); control.focus(); }
         }
       }}>{triggerContent ?? <Icon name="info" size={14} />}</button>

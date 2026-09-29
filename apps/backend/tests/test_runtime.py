@@ -211,7 +211,7 @@ class RuntimePinTests(unittest.TestCase):
         self.assertTrue((install / "cudart64_134.dll").is_file())
         self.assertTrue((install / exe.name).is_file())
 
-    def test_default_gpu_profile_keeps_model_context_on_managed_create(self) -> None:
+    def test_managed_create_uses_stock_context_and_native_auto_modes(self) -> None:
         manager = self._manager(nvidia_present=lambda: False)
         job = manager.import_local(LocalImportRequest(source_path=str(self.gguf)))
         manager.pin_runtime(
@@ -220,13 +220,14 @@ class RuntimePinTests(unittest.TestCase):
         deployment = manager.create_managed(
             ManagedDeploymentRequest(bundle_id=job.bundle_id or "", auto_start=False)
         )
-        self.assertNotIn("ctx_size", deployment.applied_startup)
+        self.assertEqual(deployment.applied_startup["ctx_size"], 32768)
         self.assertEqual(deployment.applied_startup["n_gpu_layers"], "auto")
         self.assertEqual(deployment.applied_startup["flash_attn"], "auto")
-        self.assertEqual(deployment.applied_startup["parallel"], 4)
+        self.assertEqual(deployment.applied_startup["parallel"], -1)
         self.assertTrue(deployment.applied_startup["kv_unified"])
         args = startup_cli_args(deployment.applied_startup)
-        self.assertNotIn("--ctx-size", args)
+        self.assertEqual(args[args.index("--ctx-size") + 1], "32768")
+        self.assertEqual(args[args.index("--parallel") + 1], "-1")
         flash_at = args.index("--flash-attn")
         self.assertEqual(args[flash_at + 1], "auto")
         self.assertNotEqual(deployment.requested_startup, {"startup": {}})

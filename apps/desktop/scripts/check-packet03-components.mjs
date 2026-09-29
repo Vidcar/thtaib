@@ -185,7 +185,7 @@ async function checkChatMeasurements(ChatMeasurements) {
   const tip = { getBoundingClientRect: () => ({ width: 272, height: 180 }), contains: () => false };
   globalThis.window = { ...originals.window, innerWidth: 800, innerHeight: 600, ...events };
   globalThis.document = { body: { nodeType: 1, children: [], createNodeMock: () => tip }, ...events };
-  const context = { estimated_input_tokens: 2516, capacity_tokens: 65536 };
+  const context = { input_tokens: 2516, counting_basis: "estimated", capacity_tokens: 65536 };
   let run = { id: "usage", status: "running", context_observation: context };
   let renderer;
   const tipText = () => textOf(renderer.root.findByProps({ className: "hover-help-bubble chat-usage-bubble" }));

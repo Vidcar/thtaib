@@ -62,7 +62,7 @@ class HelperRecoveryTests(unittest.TestCase):
                 "parent-unknown": ToolOutcome(call_id="parent-unknown", name="write_file", outcome="uncertain", recovery_action="continue", evidence={"acknowledged_at": utc_now()}, updated_at=utc_now()),
             }
             run.failure = RunFailure(category="capacity", code="context_capacity_exceeded", message="Parent-only failure", recovery_action="change_limit")
-            run.housekeeping_context = {"summary": ContextObservation(purpose="summary", estimated_input_tokens=456)}
+            run.housekeeping_context = {"summary": ContextObservation(purpose="summary", input_tokens=456)}
             run.housekeeping_generation = {"summary": GenerationObservation(purpose="summary", output_tokens=123, elapsed_seconds=1, measured_at=utc_now())}
             run.project_outline = {"cache_key": "parent-only"}
             run.retrieved_material = ["parent-only retrieval"]
@@ -157,12 +157,12 @@ class HelperContextTests(unittest.TestCase):
         finished = fixture._complete(started.json())
         self.assertEqual(len(admitted), 1, finished)
         child, = admitted
-        self.assertIs(child.context_observation.fits, False, "admission must not preempt native context reduction")
+        self.assertIsNone(child.context_observation.fits, "estimated admission must not preempt native context reduction")
         saved = fixture.harness.get_run(child.id)
         self.assertEqual(saved.failure.category, "capacity")
         self.assertEqual(saved.failure.recovery_action, "change_limit")
         self.assertIs(saved.context_observation.fits, False)
-        self.assertIn("Native context recovery exhausted", " ".join(saved.context_observation.notes))
+        self.assertIn("Deep Agents exhausted native context reduction", " ".join(saved.context_observation.notes))
         self.assertIsNone(saved.activity_phase)
         self.assertEqual(fixture.chat_payloads, [], "an irreducible request must fail before model dispatch")
         self.assertEqual(finished["tool_outcomes"]["delegate"]["outcome"], "failed")

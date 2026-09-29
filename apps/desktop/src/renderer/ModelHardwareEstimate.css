@@ -36,3 +36,5 @@
 .model-memory-estimate-details p {overflow-wrap: anywhere;}
 .model-memory-estimate-details .estimate-availability > span {flex-wrap: wrap;}
 .estimate-error {color: var(--warn); overflow-wrap: anywhere;}
+.native-memory-check {margin-top: var(--space-stack); padding-top: var(--pad-card); border-top: var(--line-hairline) solid var(--border);}
+.native-memory-check .estimate-heading {flex-wrap: wrap; gap: var(--space-compact);}

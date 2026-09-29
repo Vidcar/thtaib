@@ -10,6 +10,8 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from langchain_core.messages.utils import count_tokens_approximately
+
 from tests.support import close_workbench_sqlite, offline_workbench_client, wait_for_run
 from workbench_backend.app import create_app
 from workbench_backend.inference.ids import utc_now
@@ -20,6 +22,7 @@ class TelemetryStreamingTests(unittest.TestCase):
     def test_live_measurements_reset_between_tool_calls_and_reach_durable_projection(self):
         release_first, second_entered, start_second, release_second = [threading.Event() for _ in range(4)]
         calls = []
+        count_calls = []
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *_args):
@@ -34,7 +37,18 @@ class TelemetryStreamingTests(unittest.TestCase):
                 self.wfile.write(data)
 
             def do_POST(self):
-                calls.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                if self.path.endswith("/chat/completions/input_tokens"):
+                    count_calls.append(body)
+                    data = json.dumps({"input_tokens": count_tokens_approximately(
+                        body["messages"], tools=body.get("tools"))}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
+                calls.append(body)
                 index = len(calls)
                 if index == 2:
                     second_entered.set()
@@ -111,6 +125,11 @@ class TelemetryStreamingTests(unittest.TestCase):
             self.assertEqual(len(final["tool_invocations"]), 1)
             self.assertEqual(len(calls), 2)
             self.assertTrue(all(call["timings_per_token"] and call["return_progress"] for call in calls))
+            self.assertTrue(count_calls)
+            self.assertTrue(all(call["stream"] is False for call in count_calls))
+            self.assertEqual(final["context_observation"]["counting_basis"], "native")
+            self.assertEqual(len(final["model_requests"]), 2,
+                "Native input counting must not create extra generation captures")
             self.assertEqual(app.state.app_store.get_interaction(conversation_id)["snapshot"]["workbench"]["run"]["generation_observation"], final["generation_observation"])
         finally:
             for gate in (release_first, start_second, release_second):

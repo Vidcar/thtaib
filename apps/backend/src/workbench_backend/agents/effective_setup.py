@@ -165,23 +165,14 @@ def effective_setting_values(manager, configuration, provenance: dict) -> dict:
             default_source = descriptor.default_source if descriptor else None
             if descriptor and default_value is None and descriptor.applied not in (None, "auto", "default"):
                 default_value, default_source = descriptor.applied, descriptor.source
-            if bag_name == "per_request" and key == "max_tokens" and is_default:
-                publisher_limit = bags.per_request.applied.get("max_tokens")
-                if type(publisher_limit) is int and publisher_limit > 0:
-                    value, source, known = publisher_limit, "Publisher recommendation", True
-                    default_value, default_source = publisher_limit, source
-                elif not (type(default_value) is int and default_value > 0):
-                    # Auto becomes numeric only when accepted work binds to an
-                    # exact loaded capacity. A cold editor must not invent one.
-                    value, source, known = None, "Workbench Auto", False
-                    default_value, default_source = None, source
             parent_value = origin.inherited_value if origin and origin.inherited_source else selected.get(key)
             parent_source = origin.inherited_source if origin and origin.inherited_source else selected_source
             if parent_value is None or (key == "reasoning_effort" and parent_value == "default") or (key == "reasoning" and parent_value == "auto"):
                 parent_value, parent_source = default_value, default_source
             reload = False
             if bag_name == "startup" and deployment and key in requested:
-                normalized = resolve_bags(startup={**selected, **overrides}).startup.applied
+                normalized = resolve_bags(startup={**selected, **overrides}, startup_defaults={
+                    name: value for name, value in bags.startup.applied.items() if name not in selected}).startup.applied
                 loaded = deployment.applied_startup.get(key)
                 reload = normalized.get(key) != loaded
             result[path] = ResolvedSetting(value=value, source=source, source_id=origin.source_id if origin else source_id,
@@ -248,7 +239,8 @@ def resolve_effective_setup(
         startup_requested = {**startup_selected.requested, **startup_overrides}
         startup_selected = resolve_bags(startup={
             key: value for key, value in startup_requested.items() if value is not None
-        }).startup
+        }, startup_defaults={key: value for key, value in startup_selected.applied.items()
+            if key not in startup_selected.requested}).startup
     mismatches = _startup_mismatches(startup_selected, deployment.applied_startup)
     loaded = [_loaded_fact(version) for version in knowledge_versions]
     system_prompt = compose_system_prompt(
@@ -423,9 +415,8 @@ def _resolve_per_request(
     inherit_deployment_settings: bool = True,
 ) -> SettingsBag:
     source = profile.bags.per_request if profile is not None else deployment.settings.per_request
-    if (profile is not None or inherit_deployment_settings) and source.output_budget_policy is not None and not overrides:
-        # Accepted response policy, its first runtime binding and recipe origin
-        # are immutable execution facts. Resolving a resumed setup preserves them.
+    if (profile is not None or inherit_deployment_settings) and not overrides:
+        # Accepted exact response values and recipe origin remain immutable.
         return source.model_copy(deep=True)
     if profile is not None:
         requested = dict(profile.bags.per_request.requested)
@@ -464,7 +455,8 @@ def _resolve_startup(profile: RunProfile | None) -> SettingsBag:
     """
     if profile is None:
         return SettingsBag()
-    return resolve_bags(startup=profile.bags.startup.requested).startup
+    return resolve_bags(startup=profile.bags.startup.requested, startup_defaults={
+        key: value for key, value in profile.bags.startup.applied.items() if key not in profile.bags.startup.requested}).startup
 
 
 def _startup_mismatches(
@@ -475,7 +467,7 @@ def _startup_mismatches(
     for key, requested in selected.requested.items():
         if key not in STARTUP_KEYS:
             continue
-        selected_value = selected.applied.get(key, requested)
+        selected_value = selected.applied.get(key) if key == "ctx_size" and requested == "auto" else selected.applied.get(key, requested)
         loaded_value = loaded_startup.get(key)
         if selected_value != loaded_value:
             mismatches.append(

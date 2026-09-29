@@ -15,7 +15,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
-from workbench_backend.agents.context import BudgetedSummarizationMiddleware
+from deepagents.middleware.summarization import create_summarization_middleware
 from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.app import create_app
 from workbench_backend.inference.capabilities import setup_fingerprint
@@ -447,36 +447,35 @@ class InteractionApiTests(unittest.TestCase):
         answer_messages = [message for message in state["values"]["messages"] if message.get("tool_calls")]
         self.assertEqual(answer_messages[-1]["tool_calls"][0]["id"], "call_answer")
 
-    def test_command_native_budget_rejects_irreducible_context_before_second_execution(self) -> None:
+    def test_command_exhausted_native_overflow_recovery_keeps_canonical_history(self) -> None:
+        from langchain_core.exceptions import ContextOverflowError
+        from workbench_backend.inference.telemetry import current_request_purpose
         self._set_server_props(n_ctx=32768, vision=False)
-        model = self._install_model([AIMessage(content="first retained"), AIMessage(content="should not run")])
+        model = self._install_model([AIMessage(content="first retained"), AIMessage(content="internal summary")])
         thread_id = self._register_agent()
-        first = self._run_start(
-            thread_id,
-            command_id="context-first",
-            message_id="context-input-1",
-            content="long-context " + ("older material " * 900),
-            metadata={"presented_tools": []},
-        )
+        first = self._run_start(thread_id, command_id="context-first", message_id="context-input-1",
+            content="long-context " + "older material " * 900, metadata={"presented_tools": []})
         self.assertEqual(first.status_code, 200, first.text)
         before = self._wait_state(thread_id)
         before_messages = list(before["values"]["messages"])
         self._set_server_props(n_ctx=512, vision=False)
-
-        rejected = self._run_start(
-            thread_id,
-            command_id="context-second",
-            message_id="context-input-2",
-            content="Continue briefly.",
-            metadata={"presented_tools": []},
-        )
-        self.assertEqual(rejected.status_code, 200, rejected.text)
-        after = self._wait_state(thread_id, status="failed")
-        failed_run = after["values"]["workbench"]["run"]
-        self.assertEqual(failed_run["failure"]["recovery_action"], "change_limit")
-        self.assertFalse(failed_run["context_observation"]["fits"])
+        original = type(model)._generate
+        def native_rejection(instance, messages, *args, **kwargs):
+            if current_request_purpose() == "work":
+                raise ContextOverflowError("Native fixture cannot fit this work request.")
+            return original(instance, messages, *args, **kwargs)
+        with patch.object(type(model), "_generate", native_rejection):
+            rejected = self._run_start(thread_id, command_id="context-second", message_id="context-input-2",
+                content="Continue briefly.", metadata={"presented_tools": []})
+            self.assertEqual(rejected.status_code, 200, rejected.text)
+            after = self._wait_state(thread_id, status="failed")
+        failed = after["values"]["workbench"]["run"]
+        self.assertEqual(failed["failure"]["recovery_action"], "change_limit")
+        self.assertFalse(failed["context_observation"]["fits"])
         self.assertEqual(after["values"]["messages"][:len(before_messages)], before_messages)
-        self.assertEqual(model._index, 1, "native budget recovery must stop before another model or tool executes")
+        self.assertEqual(failed["dispatched_tool_calls"], 0)
+        self.assertNotIn("internal summary", [message.get("content") for message in after["values"]["messages"]])
+
 
     def test_command_compaction_summary_is_not_archived_as_assistant_answer(self) -> None:
         self._set_server_props(n_ctx=16384, vision=False)
@@ -487,8 +486,8 @@ class InteractionApiTests(unittest.TestCase):
         ])
         thread_id = self._register_agent()
         with patch(
-            "workbench_backend.agents.harness.BudgetedSummarizationMiddleware",
-            wraps=BudgetedSummarizationMiddleware,
+            "workbench_backend.agents.harness.create_summarization_middleware",
+            wraps=create_summarization_middleware,
         ) as middleware_factory:
             first = self._run_start(
                 thread_id,
@@ -504,7 +503,7 @@ class InteractionApiTests(unittest.TestCase):
                 thread_id,
                 command_id="compact-second",
                 message_id="compact-input-2",
-                content="Now preserve the important details from this later material. " + ("recent detail " * 1400),
+                content="Now preserve the important details from this later material. " + ("recent detail " * 2800),
                 metadata={"presented_tools": []},
             )
             self.assertEqual(second.status_code, 200, second.text)

@@ -24,10 +24,10 @@ export function RunProgress(props: {
   const context = run.context_observation;
   const structured = run.structured_output;
   const contextFit = context?.fits === true
-    ? "Estimate fits observed capacity"
+    ? "Counted input fits observed capacity"
     : context?.fits === false
-      ? "Estimate exceeds observed capacity"
-      : "Capacity fit is unknown";
+      ? "Counted input exceeds observed capacity"
+      : "Input fit is not established";
   const structuredStrategy = structured?.strategy === "provider"
     ? "Provider strategy"
     : structured?.strategy === "tool"
@@ -74,8 +74,8 @@ export function RunProgress(props: {
         <details className="run-inspection">
           <summary><Icon name="tune" size={14} /> Request details</summary>
           {context ? (
-            <section aria-label="Context estimate">
-              <h4>Context estimate</h4>
+            <section aria-label="Context usage">
+              <h4>Context usage</h4>
               <p className="hint">
                 {context.capacity_tokens == null
                   ? "Observed context capacity: unknown"
@@ -83,13 +83,12 @@ export function RunProgress(props: {
                 {context.capacity_source === "server_props.n_ctx" ? " (reported by the running model server)" : ""}
               </p>
               <ul className="plain-list">
-                <li>Estimated input: {context.estimated_input_tokens.toLocaleString()} tokens</li>
-                <li>Safety margin: {context.margin_tokens.toLocaleString()} tokens</li>
-                <li>Reserved for output: {context.output_reservation_tokens.toLocaleString()} tokens</li>
+                <li>{context.counting_basis === "native" ? "Counted input" : "Estimated input"}: {context.input_tokens.toLocaleString()} tokens</li>
+                <li>Maximum output: {context.configured_output_tokens == null || context.configured_output_tokens === -1 ? "Unlimited" : `${context.configured_output_tokens.toLocaleString()} tokens`}</li>
                 <li>{contextFit}</li>
               </ul>
-              <p className="hint">Estimate method: {context.counting_method}</p>
-              {context.notes.map((note, index) => <p className="hint" key={`${index}-${note}`}>{note}</p>)}
+              <p className="hint">Counting method: {context.counting_method}</p>
+              {(context.notes ?? []).map((note, index) => <p className="hint" key={`${index}-${note}`}>{note}</p>)}
             </section>
           ) : null}
           {structured ? (

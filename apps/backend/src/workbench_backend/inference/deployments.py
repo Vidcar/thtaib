@@ -150,10 +150,11 @@ class DeploymentService:
                 requested_startup[key] = value
         per_request = profile.bags.per_request.requested if profile else {}
         agent = profile.bags.agent.requested if profile else {}
-        publisher_defaults = (bundle.huggingface_configuration.generation_defaults
-            if bundle.huggingface_configuration else {})
+        from workbench_backend.inference.configurations import model_default_values
+        initial_startup, publisher_defaults = model_default_values(self.store, bundle, startup=requested_startup)
         bags = resolve_bags(
             startup=requested_startup,
+            startup_defaults=initial_startup,
             per_request=per_request,
             agent=agent,
             per_request_defaults=publisher_defaults,
@@ -165,6 +166,7 @@ class DeploymentService:
         overrides = {"host": host, "port": port}
         bags = resolve_bags(
             startup=requested_startup,
+            startup_defaults=initial_startup,
             per_request=per_request,
             agent=agent,
             startup_overrides=overrides,

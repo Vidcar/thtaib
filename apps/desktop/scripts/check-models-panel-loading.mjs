@@ -30,6 +30,7 @@ try {
   assert.equal(settingValue(0.949999988079071), "0.95", "server float noise should not leak into the settings readout");
   await checkModelsRenderBeforeDeferredRuntimeAndConfiguration(ModelsPanel);
   await checkRefreshFailureKeepsModelDraft(ModelsPanel);
+  await checkSavedLoadingRetainsRunningModel(DeploymentsPanel);
   await checkExistingBundleRecipes((await vite.ssrLoadModule("/src/renderer/ModelResponseRecipes.tsx")).ModelResponseRecipes);
   await checkPinnedCardViewer((await vite.ssrLoadModule("/src/renderer/ModelResponseRecipes.tsx")).ModelResponseRecipes);
   await checkModelPresetDraftAndVisibility(ModelPresetPanel);
@@ -46,6 +47,11 @@ try {
 }
 
 console.log("Models loading, contextual details, preset drafts/visibility and late-result ownership checks passed.");
+
+function contextInput(renderer, label = "Context") { const input = renderer.root.findAll(node => node.type === "input" && node.props.type === "range" && node.props["aria-label"] === label)[0]; assert.ok(input, "expected " + label); return input; }
+function ownerControl(node, name) { while (node && node.type?.name !== name) node = node.parent; assert.ok(node, "expected " + name); return node; }
+function changeContext(renderer, value, label = "Context") { ownerControl(contextInput(renderer, label), "ContextSlider").props.onChange(value); }
+function resetSetting(renderer, label) { const row = renderer.root.findAll(node => node.type?.name === "SettingRow" && node.props.label === label)[0]; assert.equal(typeof row?.props.onReset, "function"); row.props.onReset(); }
 
 async function checkModelPicker(ModelPicker) {
   const previousDocument = globalThis.document;
@@ -109,8 +115,8 @@ async function checkSelectedModelOwnsDetails(ModelsPanel, DeploymentsPanel) {
     assert.equal(textOf(renderer.root.findByProps({ "aria-label": "Selected model" })).includes("Selected Qwen"), true);
     assert.equal(renderer.root.findAllByProps({ "aria-label": "Other active models" }).length, 0, "runtime details have one contextual owner instead of another main-page strip");
     await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Model card").props.onClick());
-    assert.ok(textOf(renderer.root).includes("No publisher card"), "the header opens information for the selected local model");
-    await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Files").props.onClick());
+    assert.equal(renderer.root.find(node => node.type?.name === "ModelInspector").props.view, "presets", "the header opens the selected model's presets");
+    await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Files & model information").props.onClick());
     assert.ok(renderer.root.findByProps({ "aria-label": "Model files, source and metadata" }), "Files opens the information panel");
     await act(async () => renderer.root.findByProps({ "aria-label": "Loaded model details" }).props.onClick());
     assert.equal(renderer.root.find(node => node.type?.name === "ModelInspector").props.view, "runtime", "the loaded-state action opens runtime diagnostics in the shared inspector");
@@ -127,12 +133,122 @@ async function checkSelectedModelOwnsDetails(ModelsPanel, DeploymentsPanel) {
   } finally { if (renderer) await act(async () => renderer.unmount()); globalThis.fetch = originalFetch; }
 }
 
+async function checkSavedLoadingRetainsRunningModel(Panel) {
+  const originalFetch = globalThis.fetch;
+  const bag = requested => ({ requested, applied: requested, unsupported: [], retired: [], overridden: [], unverified: [] });
+  const model = { ...bundle("stock-qwen", "Stock Qwen"), default_configuration_id: "stock-default", huggingface_configuration: {
+    source_repo_id: "publisher/qwen", source_revision: "revision-test", response_recipes: [{ id: "publisher-sampling", name: "Publisher sampling", reasoning: "preserve", per_request: { temperature: 1, top_p: 0.95 }, source_repo_id: "publisher/qwen", source_revision: "revision-test", card_sha256: "hash", section: "Sampling" }],
+  } };
+  let profiles = [{ id: "stock-default", bundle_id: model.id, display_name: "Stock", revision: 1, bags: { startup: bag({ ctx_size: 32768 }), per_request: bag({ temperature: 1 }), agent: bag({}) } }];
+  const deployment = (id, context, updated, status = "running", profile = "stock-default") => ({ id, bundle_id: model.id, profile_id: profile, display_name: id, scope: "managed", status, pid: context, updated_at: `2026-09-29T${updated}:00:00Z`, health: { healthy: status === "running" }, applied_startup: { ctx_size: context }, server_props: { n_ctx: context, total_slots: 1 }, endpoint: `http://localhost:${context}/v1` });
+  const originalRunning = deployment("loaded-32768", 32768, "10");
+  let deployments = [
+    deployment("earlier-healthy", 24576, "09"),
+    deployment("wrong-configuration", 131072, "16", "running", "other-default"),
+    deployment("loaded-46080", 46080, "15", "stopped"),
+    deployment("later-failed", 65536, "14", "failed"),
+    deployment("later-unhealthy", 65536, "13", "unhealthy"),
+    originalRunning,
+  ];
+  const calls = [];
+  let renderer, rejectSave = false;
+  const panel = () => React.createElement(Panel, { selectedBundleId: model.id, initialBundles: [model], initialProfiles: profiles, onBundlesChanged: async () => renderer.update(panel()) });
+  globalThis.fetch = async (url, init = {}) => {
+    const address = String(url), body = init.body ? JSON.parse(init.body) : null;
+    calls.push({ address, body });
+    if (address.endsWith("/v1/runtime")) return jsonResponse(runtimeReady());
+    if (address.endsWith("/v1/deployments")) return jsonResponse(deployments);
+    if (address.endsWith("/v1/setup-resolution")) {
+      const context = body.overrides.startup_overrides?.ctx_size ?? profiles[0].bags.startup.requested.ctx_size;
+      return jsonResponse({ configuration: { ...body.overrides, deployment_id: `loaded-${context}` }, effective_values: { "startup.ctx_size": { value: context, known: true, source: "Configuration: Stock", default_value: 32768, default_source: "pinned_runtime_default" } }, instruction_layers: [] });
+    }
+    if (address.includes("/configuration-options")) return jsonResponse({ ...configurationOptions(), bundle_id: model.id });
+    if (address.endsWith("/v1/settings/preview")) return jsonResponse({ startup: bag(body.startup), per_request: bag(body.per_request), agent: bag(body.agent ?? {}) });
+    if (address.endsWith("/configurations")) {
+      if (rejectSave) throw new Error("Save temporarily unavailable");
+      profiles = [{ ...profiles[0], revision: profiles[0].revision + 1, bags: { startup: bag(body.startup), per_request: bag(body.per_request), agent: bag(body.agent ?? {}) }, recipe_origin: body.recipe_origin ?? null }];
+      return jsonResponse(profiles[0]);
+    }
+    if (address.endsWith("/v1/deployments/managed")) {
+      assert.equal(body.profile_id, profiles[0].id);
+      const context = profiles[0].bags.startup.requested.ctx_size;
+      const loaded = deployment(`loaded-${context}`, context, "11");
+      deployments = [deployment("newer-healthy-snapshot", 98304, "17"), ...deployments.filter(item => item.id !== loaded.id).map(item => item.id === originalRunning.id ? { ...item, status: "stopped" } : item), loaded];
+      return jsonResponse(loaded);
+    }
+    if (address.endsWith("/v1/hardware/estimate")) return jsonResponse({ completeness: "unavailable", reasons: [], unknown_costs: [], gpu: {}, ram: {}, components: [], devices: [] });
+    throw new Error(`Unexpected saved-loading request ${address}`);
+  };
+  const button = label => renderer.root.findAllByType("button").find(node => textOf(node) === label);
+  const readiness = () => textOf(renderer.root.findByProps({ "aria-label": "Loaded model details" }));
+  const toolbar = () => textOf(renderer.root.findByProps({ className: "model-toolbar-status" }));
+  const temperature = () => renderer.root.findAllByType("input").find(node => node.props.id === "model-response-temperature");
+  const contextRow = () => renderer.root.findAll(node => node.type?.name === "SettingRow" && node.props.label === "Context")[0];
+  const save = async () => act(async () => { renderer.root.findByProps({ id: "model-settings-form" }).props.onSubmit({ preventDefault() {} }); await tick(); });
+  try {
+    await act(async () => { renderer = create(panel(), { createNodeMock: element => element.type === "form" ? { reportValidity: () => true } : null }); await tick(); });
+    const range = contextInput(renderer);
+    const cpuThreads = renderer.root.findAllByType("select").find(node => node.props.id === "model-threads");
+    for (const key of ["threads", "threads_batch", "spec_draft_threads", "spec_draft_threads_batch", "parallel"]) {
+      const control = renderer.root.findAllByType("select").find(node => node.props.id === `model-${key}`);
+      assert.ok(control, `${key} keeps its named native mode after descriptor loading`);
+      assert.equal(control.props.value, "-1");
+      assert.equal(textOf(control.findAllByType("option").find(node => node.props.value === "-1")), "Auto");
+      assert.equal(Object.hasOwn(profiles[0].bags.startup.requested, key), false, "viewing Auto does not materialize inherited loading settings");
+    }
+    for (const label of ["Prompt batch size", "Draft tokens"]) {
+      const row = renderer.root.findAll(node => node.type?.name === "SettingRow" && node.props.label === label)[0];
+      assert.equal(row.findAllByType("input").find(node => node.props.type === "number").props.min, 0, "descriptor minimum zero wins for ordinary numeric counts");
+    }
+    assert.equal(readiness(), "Ready"); assert.ok(button("Reload"));
+    await act(async () => { changeContext(renderer, 46080); await tick(); });
+    assert.equal(contextInput(renderer), range, "Context editing retains the mounted range");
+    assert.equal(readiness(), "Ready"); assert.ok(button("Load saved"));
+    assert.match(contextRow().props.hint.props.children.join(""), /Loaded per request: 32k tokens/);
+    await save();
+    assert.equal(profiles[0].bags.startup.requested.ctx_size, 46080);
+    assert.equal(contextInput(renderer), range, "Save retains the editor and focus target");
+    assert.equal(renderer.root.findAllByType("select").find(node => node.props.id === "model-threads"), cpuThreads, "descriptor refresh preserves the mounted Auto selector");
+    assert.equal(range.props["data-token-value"], 46080);
+    assert.equal(readiness(), "Ready", "saving future loading settings keeps the current model's healthy state");
+    assert.ok(button("Reload"), "saved loading changes retain an explicit Reload action");
+    assert.match(contextRow().props.hint.props.children.join(""), /Loaded per request: 32k tokens/, "loaded Context remains distinct from saved Context until reload");
+    assert.equal(originalRunning.pid, 32768);
+    assert.equal(calls.filter(call => call.address.endsWith("/v1/deployments/managed")).length, 0, "Save never starts or replaces a child process");
+    assert.equal(calls.filter(call => call.address.includes("/configuration-options")).at(-1).body.deployment_id, originalRunning.id, "metadata stays attributed to the actual running child");
+    assert.equal(toolbar(), "Saved.");
+
+    await act(async () => temperature().props.onChange({ target: { value: "0.7" } }));
+    assert.equal(renderer.root.findByProps({ className: "model-edit-state" }).props["data-dirty"], true);
+    assert.ok(!toolbar().includes("Saved"), "response edits clear the previous save confirmation");
+    await save();
+    assert.equal(toolbar(), "Saved.");
+    await act(async () => renderer.root.findByProps({ id: "model-authored-instructions" }).props.onChange({ target: { value: "Use this instruction" } }));
+    assert.ok(!toolbar().includes("Saved"), "instruction edits clear the previous save confirmation");
+    await save();
+    await act(async () => button("Model card").props.onClick());
+    await act(async () => button("Apply to draft").props.onClick());
+    assert.equal(renderer.root.findByProps({ className: "model-edit-state" }).props["data-dirty"], true);
+    assert.ok(!toolbar().includes("Saved"), "applying a preset clears the previous save confirmation");
+    rejectSave = true;
+    await save();
+    assert.match(toolbar(), /Save temporarily unavailable/);
+    await act(async () => temperature().props.onChange({ target: { value: "0.8" } }));
+    assert.match(toolbar(), /Save temporarily unavailable/, "editing keeps actionable errors visible");
+    await act(async () => button("Revert edits").props.onClick());
+    await act(async () => { button("Reload").props.onClick(); await tick(); });
+    assert.equal(calls.filter(call => call.address.endsWith("/v1/deployments/managed")).length, 1, "only explicit Reload starts the saved setup");
+    assert.equal(calls.filter(call => call.address.includes("/configuration-options")).at(-1).body.deployment_id, "loaded-46080", "exact desired residency wins over a newer historical configuration instance");
+    assert.equal(readiness(), "Ready"); assert.equal(contextRow().props.hint, undefined, "loaded and saved Context agree after explicit reload");
+  } finally { if (renderer) await act(async () => renderer.unmount()); globalThis.fetch = originalFetch; }
+}
+
 async function checkModelsRenderBeforeDeferredRuntimeAndConfiguration(ModelsPanel) {
   const originalFetch = globalThis.fetch;
   const runtime = createDeferred();
   const configuration = createDeferred();
   const calls = [];
-  globalThis.fetch = async (url) => {
+  globalThis.fetch = async (url, init = {}) => {
     const address = String(url);
     calls.push(address);
     if (address.endsWith("/v1/bundles")) {
@@ -157,6 +273,8 @@ async function checkModelsRenderBeforeDeferredRuntimeAndConfiguration(ModelsPane
     if (address.endsWith("/v1/profiles")) return jsonResponse([]);
     if (address.endsWith("/v1/deployments")) return jsonResponse([]);
     if (address.endsWith("/v1/imports")) return jsonResponse([]);
+    if (address.endsWith("/v1/setup-resolution")) return jsonResponse({ configuration: JSON.parse(init.body).overrides, effective_values: {}, instruction_layers: [] });
+    if (address.endsWith("/v1/models/storage")) return jsonResponse({ future_install_root: "D:\\Models", locations: [] });
     if (address.endsWith("/projectors")) return jsonResponse({ bundle_id: "bundle_fast", selected_path: null, candidates: [] });
     if (address.endsWith("/v1/runtime/models")) return jsonResponse({ max_loaded_models: 1, loaded_deployment_ids: [], loading_deployment_ids: [], router_status: "stopped" });
     if (address.endsWith("/v1/runtime")) return runtime.promise;
@@ -185,21 +303,21 @@ async function checkModelsRenderBeforeDeferredRuntimeAndConfiguration(ModelsPane
       await tick();
     });
     assert.ok(calls.some((call) => call.includes("/configuration-options")), "configuration metadata should load after runtime/deployment refresh");
-    assert.ok(textOf(renderer.root).includes("Local engine ready"), "ready runtime should replace pending engine copy");
+    assert.ok(!textOf(renderer.root).includes("Checking local engine"), "ready runtime clears pending engine copy");
 
     configuration.resolve(jsonResponse(configurationOptions()));
     await act(async () => {
       await tick();
     });
-    assert.ok(textOf(renderer.root).includes("256k maximum context"), "deferred configuration result should hydrate model capacity");
+    assert.equal(ownerControl(contextInput(renderer), "ContextSlider").props.maximum, 262144, "deferred configuration result hydrates the slider's model bound");
     const speculation = renderer.root.findByProps({ id: "model-spec_type", role: "radiogroup" });
     const speculationModes = speculation.findAllByType("input").filter(node => node.props.type === "radio");
-    assert.deepEqual(speculationModes.map(option => option.props.value), ["", "none", "draft-mtp"], "startup controls offer a distinct default-following choice");
-    assert.deepEqual(speculationModes.filter(option => option.props.checked).map(option => option.props.value), [""], "an unset startup control follows the default");
+    assert.deepEqual(speculationModes.map(option => option.props.value), ["none", "draft-mtp"], "MTP shows actual Off/On values without a duplicate Default");
+    assert.deepEqual(speculationModes.filter(option => option.props.checked).map(option => option.props.value), ["none"], "an unset startup control selects the known native Off value");
     await act(async () => { speculationModes.find(option => option.props.value === "draft-mtp").props.onChange(); });
-    assert.equal(renderer.root.findByProps({ id: "model-spec_draft_n_max" }).props.value, "", "MTP draft count stays inherited until explicitly selected");
+    assert.equal(renderer.root.findAll(node => node.type === "select" && node.props.id === "model-spec_draft_n_max")[0].props.value, "3", "MTP displays its native three-token draft count");
     const thinkingEditor = renderer.root.findAll(node => node.type?.name === "ResponseSettingsEditor")[0];
-    assert.deepEqual(thinkingEditor.props.options.per_request_defaults.reasoning_effort.options.map(option => option.value), ["default", "low", "medium", "xhigh"], "The response editor receives only model-specific thinking levels");
+    assert.deepEqual(thinkingEditor.props.options.per_request_defaults.reasoning_effort.options.map(option => option.value), ["low", "medium", "xhigh"], "the response editor receives actual model-specific Thinking levels");
     assert.equal(renderer.root.findAll(node => node.type === "label" && textOf(node).startsWith("Saved preset")).length, 0, "Models has one configuration editor instead of a second preset selection");
     await act(async () => renderer.unmount());
   } finally {
@@ -242,15 +360,15 @@ async function checkRefreshFailureKeepsModelDraft(ModelsPanel) {
     }
     throw new Error(`Unexpected model draft request: ${address}`);
   };
-  const context = () => renderer.root.findByProps({ id: "model-ctx-size" });
+  const context = () => contextInput(renderer);
   const temperature = () => renderer.root.findAllByType("input").find(node => node.props.id === "model-response-temperature");
   const button = label => renderer.root.findAllByType("button").find(node => textOf(node) === label);
   try {
     await act(async () => { renderer = create(React.createElement(ModelsPanel), { createNodeMock: element => element.type === "form" ? { reportValidity: () => true } : null }); await tick(); });
-    assert.equal(context().props.value, "8192");
+    assert.equal(context().props["data-token-value"], 8192);
     assert.equal(renderer.root.findByProps({ id: "model-authored-instructions" }).props.value, "Saved model instructions");
     await act(async () => {
-      context().props.onChange({ target: { value: "16384" } });
+      changeContext(renderer, 16384);
       temperature().props.onChange({ target: { value: "0.7" } });
       renderer.root.findByProps({ id: "model-configuration-name" }).props.onChange({ target: { value: "My draft" } });
       renderer.root.findByProps({ id: "model-authored-instructions" }).props.onChange({ target: { value: "Full edited model instructions\nKeep the user's wording." } });
@@ -261,14 +379,14 @@ async function checkRefreshFailureKeepsModelDraft(ModelsPanel) {
     await act(async () => { renderer.update(React.createElement(ModelsPanel, { active: true })); await tick(); });
     assert.ok(textOf(renderer.root).includes("Model refresh connection failed"));
     assert.ok(button("Retry"), "a refresh failure offers an explicit retry beside the retained editor");
-    assert.equal(context().props.value, "16384", "failed refresh never unmounts the visited editor or discards its startup draft");
+    assert.equal(context().props["data-token-value"], 16384, "failed refresh never unmounts the visited editor or discards its startup draft");
     assert.equal(temperature().props.value, 0.7, "response draft also survives failed re-entry");
     assert.equal(renderer.root.findByProps({ id: "model-configuration-name" }).props.value, "My draft");
     assert.equal(renderer.root.findByProps({ id: "model-authored-instructions" }).props.value, "Full edited model instructions\nKeep the user's wording.", "optional model instruction edits survive failed editor re-entry");
     failure = "";
     await act(async () => { button("Retry").props.onClick(); await tick(); });
     assert.equal(button("Retry"), undefined, "successful retry clears the connection notice");
-    assert.equal(context().props.value, "16384", "successful retry keeps the unsaved edit rather than restoring saved values");
+    assert.equal(context().props["data-token-value"], 16384, "successful retry keeps the unsaved edit rather than restoring saved values");
 
     await act(async () => { renderer.update(React.createElement(ModelsPanel, { active: false })); await tick(); });
     failure = "profiles";
@@ -276,7 +394,7 @@ async function checkRefreshFailureKeepsModelDraft(ModelsPanel) {
     await act(async () => { renderer.update(React.createElement(ModelsPanel, { active: true })); await tick(); });
     assert.ok(textOf(renderer.root).includes("Model configurations temporarily unavailable"));
     assert.ok(textOf(renderer.root.findByProps({ "aria-label": "Selected model" })).includes("Draft model"), "partial refresh failure retains the last complete catalogue and selection");
-    assert.equal(context().props.value, "16384");
+    assert.equal(context().props["data-token-value"], 16384);
     failure = "";
     catalogue = [model];
     assert.equal(button("Save").props.type, "submit", "sticky Save submits the single settings form");
@@ -287,10 +405,10 @@ async function checkRefreshFailureKeepsModelDraft(ModelsPanel) {
     assert.equal(savedRequests[0].display_name, "My draft");
     assert.equal(savedRequests[0].agent.system_prompt, "Full edited model instructions\nKeep the user's wording.", "saved text reaches only its model agent bag");
     assert.equal(button("Retry"), undefined, "save refresh clears the earlier catalogue error");
-    assert.equal(renderer.root.findByProps({ className: "badge model-edit-state" }).props["data-dirty"], false);
-    assert.ok(textOf(renderer.root).includes("Setup saved."));
+    assert.equal(renderer.root.findByProps({ className: "model-edit-state" }).props["data-dirty"], false);
+    assert.ok(textOf(renderer.root).includes("Saved"));
 
-    await act(async () => renderer.root.findAllByType("button").find(node => String(node.props["aria-label"]).startsWith("Reset model instructions:")).props.onClick());
+    await act(async () => resetSetting(renderer, "Model instructions"));
     assert.equal(renderer.root.findByProps({ id: "model-authored-instructions" }).props.value, "");
     await act(async () => { renderer.root.findByProps({ id: "model-settings-form" }).props.onSubmit({ preventDefault() {} }); await tick(); });
     assert.equal(savedRequests.length, 2);
@@ -304,7 +422,7 @@ async function checkRefreshFailureKeepsModelDraft(ModelsPanel) {
     assert.ok(!textOf(renderer.root).includes("Your first model starts here"), "failed loading does not imply the user's model catalogue is empty");
     failure = "";
     await act(async () => { button("Retry").props.onClick(); await tick(); });
-    assert.equal(context().props.value, "16384", "initial-error recovery loads the saved configuration");
+    assert.equal(context().props["data-token-value"], 16384, "initial-error recovery loads the saved configuration");
   } finally {
     if (renderer) await act(async () => renderer.unmount());
     globalThis.fetch = originalFetch;
@@ -339,7 +457,7 @@ async function checkRepositoryChoicesAndLateResults(HuggingFaceImport) {
     await act(async () => review.props.onClick());
     let download = renderer.root.findAllByType("button").find(node => textOf(node) === "Download model");
     await act(async () => { download.props.onClick(); download.props.onClick(); await tick(); });
-    assert.deepEqual(downloads, [{ repo_id: "org/second", revision: "pinned-revision", allow_patterns: ["weights[[]4].gguf", "mmproj.gguf", "README.md"], recipe_ids: [], default_recipe_id: null, initial_startup: {} }], "download pins the inspected revision, exact files and initial settings, escaping glob syntax and deduplicating clicks");
+    assert.deepEqual(downloads, [{ repo_id: "org/second", revision: "pinned-revision", allow_patterns: ["weights[[]4].gguf", "mmproj.gguf", "README.md"], recipe_ids: [], default_recipe_id: null, initial_startup: { n_gpu_layers: "auto", flash_attn: "auto", ctx_size: 32768 } }], "download pins the inspected revision, exact files and initial settings, escaping glob syntax and deduplicating clicks");
     assert.equal(completions, 1);
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
@@ -374,6 +492,9 @@ async function checkCardViewerAndLateRefreshRetainNewSelection(ModelsPanel) {
     assert.equal(renderer.root.findAll(node => node.type?.name === "ModelResponseRecipes").length, 0, "card content is not mounted until requested from the header");
     const button = label => renderer.root.findAllByType("button").find(node => textOf(node) === label);
     await act(async () => { button("Model card").props.onClick(); await tick(); });
+    assert.equal(renderer.root.find(node => node.type?.name === "ModelInspector").props.view, "presets", "the main Model card action opens preset comparison");
+    assert.equal(renderer.root.findAll(node => node.type?.name === "ModelResponseRecipes").length, 0, "opening presets does not fetch or mount the occasional README viewer");
+    await act(async () => { renderer.root.find(node => node.type?.name === "DeploymentsPanel").props.inspector.open("card"); await tick(); });
     assert.equal(renderer.root.find(node => node.type?.name === "ModelResponseRecipes").props.bundle.id, "first");
     assert.ok(textOf(renderer.root).includes("Loading this model's pinned card"));
     assert.equal(button("Show model card"), undefined, "the opened card panel has no second show-card control");
@@ -381,6 +502,7 @@ async function checkCardViewerAndLateRefreshRetainNewSelection(ModelsPanel) {
     await act(async () => { renderer.root.findAllByProps({ className: "catalogue-row" }).find(node => textOf(node).includes("Second model")).props.onClick(); await tick(); });
     assert.equal(renderer.root.find(node => node.type?.name === "ModelInspector").props.view, null);
     await act(async () => { button("Model card").props.onClick(); await tick(); });
+    await act(async () => { renderer.root.find(node => node.type?.name === "DeploymentsPanel").props.inspector.open("card"); await tick(); });
     assert.ok(textOf(renderer.root).includes("Second card content"), "the newly selected model loads its own pinned card");
     await act(async () => { pendingView.resolve(jsonResponse(card(first, "First card content"))); await tick(); });
     assert.ok(!textOf(renderer.root).includes("First card content"), "a late card response cannot appear after switching models");
@@ -527,25 +649,25 @@ async function checkModelPresetDraftAndVisibility(ModelPresetPanel) {
     await act(async () => renderer.unmount());
     await act(async () => { renderer = create(React.createElement(ModelPresetPanel, props())); });
     assert.equal(renderer.root.findAllByType("input").some(node => node.props.value === "neutral"), false, "reopening respects persisted visibility");
-    await act(async () => { button("Restore presets from model card").props.onClick(); await tick(); });
+    await act(async () => { button("Restore presets").props.onClick(); await tick(); });
     assert.ok(textOf(renderer.root).includes("Pinned card temporarily unavailable"));
     assert.deepEqual(model.huggingface_configuration.hidden_response_recipe_ids, ["neutral"], "failed restore leaves the previous exclusions intact");
     assert.equal(changed, 1, "failed restore does not publish a new catalogue");
-    await act(async () => { button("Restore presets from model card").props.onClick(); await tick(); });
+    await act(async () => { button("Restore presets").props.onClick(); await tick(); });
     assert.ok(renderer.root.findAllByType("input").some(node => node.props.value === "neutral"));
     assert.ok(calls.slice(1, 3).every(call => call.body.restore_hidden === true), "restore explicitly requests pinned restoration");
     assert.deepEqual(current, responseBeforeHide); assert.deepEqual(origin, originBeforeHide);
-    await act(async () => { button("Refresh from model card").props.onClick(); await tick(); });
+    await act(async () => { button("Refresh presets").props.onClick(); await tick(); });
     assert.equal(calls.at(-1).body.restore_hidden, false, "ordinary refresh does not silently restore removed choices");
     assert.ok(calls.every(call => call.address.includes("/response-recipes/")), "preset management cannot change saved setups or model weights");
     await choose("coding");
     await act(async () => { externalDisabled = true; renderer.update(React.createElement(ModelPresetPanel, props())); });
     assert.equal(button("Apply to draft").props.disabled, true, "parent Save/Load activity blocks preset draft edits");
     assert.equal(button("Remove from list").props.disabled, true);
-    assert.equal(button("Refresh from model card").props.disabled, true);
+    assert.equal(button("Refresh presets").props.disabled, true);
     assert.ok(renderer.root.findAllByType("input").every(node => node.props.disabled));
     const requestsBeforeBlockedRefresh = calls.length;
-    await act(async () => { button("Refresh from model card").props.onClick(); await tick(); });
+    await act(async () => { button("Refresh presets").props.onClick(); await tick(); });
     assert.equal(calls.length, requestsBeforeBlockedRefresh, "a parent mutation cannot race a preset refresh");
     await act(async () => { externalDisabled = false; renderer.update(React.createElement(ModelPresetPanel, props())); });
     await act(async () => { options = { per_request_defaults: { reasoning: { supported: false } } }; renderer.update(React.createElement(ModelPresetPanel, props())); });
@@ -554,7 +676,7 @@ async function checkModelPresetDraftAndVisibility(ModelPresetPanel) {
     await act(async () => { model = { ...model, huggingface_configuration: { ...model.huggingface_configuration, hidden_response_recipe_ids: ["coding", "instruct", "neutral"] } }; renderer.update(React.createElement(ModelPresetPanel, props())); });
     assert.equal(renderer.root.findAllByType("input").length, 0);
     assert.ok(textOf(renderer.root).includes("All presets were removed from this list"), "an empty hidden list points to restoration");
-    assert.equal(button("Restore presets from model card").props.disabled, false);
+    assert.equal(button("Restore presets").props.disabled, false);
   } finally { if (renderer) await act(async () => renderer.unmount()); globalThis.fetch = originalFetch; }
 }
 
@@ -576,22 +698,22 @@ async function checkPresetLateModelOwnership(ModelPresetPanel) {
   };
   try {
     await act(async () => { renderer = create(React.createElement(ModelPresetPanel, props())); });
-    await act(async () => { button("Refresh from model card").props.onClick(); await tick(); });
+    await act(async () => { button("Refresh presets").props.onClick(); await tick(); });
     await act(async () => { currentModel = second; renderer.update(React.createElement(ModelPresetPanel, props())); await tick(); });
-    assert.equal(button("Refresh from model card").props.disabled, false, "a new model does not inherit another model's pending presentation");
+    assert.equal(button("Refresh presets").props.disabled, false, "a new model does not inherit another model's pending presentation");
     await act(async () => { pendingRefresh.reject(new Error("First model refresh failed late")); await tick(); });
     assert.ok(!textOf(renderer.root).includes("First model refresh failed late"), "late failure cannot become the selected model's error");
     assert.ok(textOf(renderer.root).includes("Second model preset"));
-    await act(async () => { button("Refresh from model card").props.onClick(); await tick(); });
+    await act(async () => { button("Refresh presets").props.onClick(); await tick(); });
     assert.equal(refreshed, 1);
     await act(async () => { currentModel = first; renderer.update(React.createElement(ModelPresetPanel, props())); await tick(); });
-    await act(async () => { button("Restore presets from model card").props.onClick(); await tick(); });
+    await act(async () => { button("Restore presets").props.onClick(); await tick(); });
     await act(async () => { currentModel = second; renderer.update(React.createElement(ModelPresetPanel, props())); await tick(); });
     await act(async () => { pendingRestore.resolve(jsonResponse({ ...first, huggingface_configuration: { ...first.huggingface_configuration, hidden_response_recipe_ids: [] } })); await tick(); });
     assert.equal(refreshed, 2, "successful background changes refresh the global catalogue even after selection changes");
     assert.ok(textOf(renderer.root).includes("Second model preset"));
     assert.equal(renderer.root.findAllByType("input").some(node => node.props.value === "neutral"), false, "late restored recipes cannot appear for another selected model");
-    assert.equal(button("Refresh from model card").props.disabled, false);
+    assert.equal(button("Refresh presets").props.disabled, false);
     assert.equal(edits.length, 0); assert.deepEqual(draft, { temperature: 0.4, reasoning: "off", max_tokens: 4096 }, "background management leaves the selected response draft intact");
   } finally { if (renderer) await act(async () => renderer.unmount()); globalThis.fetch = originalFetch; }
 }
@@ -634,7 +756,7 @@ async function checkFileLinkAndRecipes(HuggingFaceImport) {
     await act(async () => { for (const recipe of recipes) recipe.props.onChange({ target: { checked: true } }); });
     await act(async () => renderer.root.findByProps({ id: "import-initial-recipe" }).props.onChange({ target: { value: "general" } }));
     await act(async () => {
-      renderer.root.findByProps({ "aria-label":"Import context tokens" }).props.onChange({ target:{value:"16384"} });
+      changeContext(renderer, 16384, "Import context");
       renderer.root.findByProps({ "aria-label":"Import cache location" }).props.onChange({ target:{value:"cpu"} });
     });
     assert.equal(downloads.length, 0, "Choose never transfers weights");
@@ -642,17 +764,17 @@ async function checkFileLinkAndRecipes(HuggingFaceImport) {
     await act(async () => { renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }); await tick(); });
     assert.equal(calls.length, 1, "returning to an unchanged exact source must not re-inspect or reset choices");
     assert.equal(renderer.root.findAllByType("input").find(node => node.props.name === "model-variant" && node.props.value === files[1]).props.checked, true);
-    assert.equal(renderer.root.findByProps({ "aria-label":"Import context tokens" }).props.value, "16384");
+    assert.equal(contextInput(renderer, "Import context").props["data-token-value"], 16384);
     assert.equal(renderer.root.findByProps({ "aria-label":"Import cache location" }).props.value, "cpu");
     assert.equal(renderer.root.findByProps({ id: "import-initial-recipe" }).props.value, "general");
     await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Review download").props.onClick());
     assert.ok(textOf(renderer.root.findByProps({ className: "selected-download-files" })).includes("LOW-MTP"), "review shows the selected kind and exact file before download");
     await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Back").props.onClick());
-    assert.equal(renderer.root.findByProps({ "aria-label":"Import context tokens" }).props.value, "16384", "Back preserves context");
+    assert.equal(contextInput(renderer, "Import context").props["data-token-value"], 16384, "Back preserves context");
     assert.equal(renderer.root.findByProps({ "aria-label":"Import cache location" }).props.value, "cpu", "Back preserves KV placement");
     await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Review download").props.onClick());
     await act(async () => { renderer.root.findAllByType("button").find(node => textOf(node) === "Download model").props.onClick(); await tick(); });
-    assert.deepEqual(downloads, [{ repo_id, revision: "a".repeat(40), allow_patterns: [files[1], "README.md"], recipe_ids: ["general", "coding", "instruct", "recommended"], default_recipe_id: null, initial_startup:{kv_offload:false, ctx_size:16384}, initial_recipe_id: "general", initial_per_request: { temperature: 1, min_p: 0, reasoning: "on" } }], "download retains exact LOW-MTP file, explicit recipe/default and initial settings choices");
+    assert.deepEqual(downloads, [{ repo_id, revision: "a".repeat(40), allow_patterns: [files[1], "README.md"], recipe_ids: ["general", "coding", "instruct", "recommended"], default_recipe_id: null, initial_startup:{n_gpu_layers:"auto", flash_attn:"auto", kv_offload:false, ctx_size:16384}, initial_recipe_id: "general", initial_per_request: { temperature: 1, min_p: 0, reasoning: "on" } }], "download retains exact LOW-MTP file, explicit recipe/default and initial settings choices");
     inspected = { ...inspected, file_hint: "missing-IQ4_XS.gguf", variants: [inspected.variants[0]] };
     await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Back").props.onClick());
     await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Back").props.onClick());
@@ -852,12 +974,14 @@ function configurationOptions() {
       options: [{ value: -1, label: "All" }],
     },
     startup_defaults: {
-      threads: { recommended: 8, options: [{ value: 8, label: "8 threads" }] },
-      spec_type: { options: [{ value: "none", label: "Off" }, { value: "draft-mtp", label: "MTP" }] },
-      spec_draft_n_max: { options: [{ value: 3, label: "3" }, { value: 6, label: "6" }] },
+      threads: { applied: -1, default_value: -1, recommended: 8, options: [{ value: -1, label: "Auto" }, ...[8, 16, 32].map(value => ({ value, label: `${value} threads` }))] },
+      ...Object.fromEntries(["threads_batch", "spec_draft_threads", "spec_draft_threads_batch", "parallel"].map(key => [key, { applied: -1, default_value: -1, options: [{ value: -1, label: "Auto" }] }])),
+      batch_size: { applied: 2048, minimum: 0, options: [] },
+      spec_type: { applied: "none", default_value: "none", options: [{ value: "none", label: "Off" }, { value: "draft-mtp", label: "MTP" }] },
+      spec_draft_n_max: { applied: 3, default_value: 3, minimum: 0, options: [{ value: 3, label: "3" }, { value: 6, label: "6" }] },
     },
     metadata: { architecture: "qwen", inspection_cached: true },
-    per_request_defaults: { reasoning_effort: { supported: true, options: ["default", "low", "medium", "xhigh"].map(value => ({ value, label: value })) } },
+    per_request_defaults: { reasoning_effort: { applied: "xhigh", default_value: "xhigh", supported: true, options: ["low", "medium", "xhigh"].map(value => ({ value, label: value })) } },
     notes: [],
   };
 }

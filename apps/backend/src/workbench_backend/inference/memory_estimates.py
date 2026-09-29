@@ -2,17 +2,17 @@
 
 Remote inspection reads bounded prefixes to inspect a GGUF directory. A small
 file may include initial tensor bytes; transfers are capped regardless of size.
-Installed predictions delegate allocation planning to the pinned native helper.
-Neither path starts a deployment, rewrites settings or establishes residency.
+Installed previews use cached directory facts. The pinned native helper runs
+only for an explicit check. Neither path establishes residency or changes settings.
 """
 from __future__ import annotations
 
 from collections import OrderedDict
+from dataclasses import dataclass, field
 import json
 import math
 from pathlib import Path
 import re
-import struct
 import subprocess
 import sys
 import threading
@@ -26,106 +26,23 @@ from huggingface_hub import get_token, hf_hub_url
 from workbench_backend.errors import ManagerError
 from workbench_backend.inference.bundles import mmproj_companion
 from workbench_backend.inference.configurations import loading_startup_settings, loaded_model_identity
+from workbench_backend.inference.configuration_options import initial_context_size
 from workbench_backend.inference.hardware import HardwareObserver
 from workbench_backend.inference.ids import utc_now
+from workbench_backend.inference.inspect import (GgufFields, IncompleteMetadata, MAX_METADATA_BYTES,
+    parse_gguf_directory, read_gguf_directory)
+from workbench_backend.inference.inspection_cache import bundle_identity
 from workbench_backend.inference.native_memory import COMMIT, PROTOCOL, preview_environment, require_planner
-from workbench_backend.inference.schemas import ModelEstimateRequest, ModelMemoryEstimate
+from workbench_backend.inference.schemas import ModelEstimateRequest, ModelMemoryEstimate, ResourceUsage
 from workbench_backend.inference.settings import resolve_bags, startup_cli_args
 
-MAX_METADATA_BYTES = 16 * 1024 * 1024
 MAX_METADATA_REQUESTS = 16
 METADATA_DEADLINE = 15.0
 NATIVE_DEADLINE = 15.0
 MAX_NATIVE_OUTPUT = 256 * 1024
 DENSE_ARCHITECTURES = frozenset({"llama", "qwen2", "qwen3"})
+HYBRID_ARCHITECTURES = frozenset({"qwen35", "qwen35moe", "qwen3next"})
 
-
-class IncompleteMetadata(ValueError):
-    pass
-
-
-def parse_gguf_directory(payload: bytes) -> tuple[dict[str, Any], int | None]:
-    """Bounded structural inspection; use gguf's quant block sizes, not guessed bits."""
-    offset = 0
-    endian = "<"
-
-    def take(size: int) -> bytes:
-        nonlocal offset
-        if size < 0 or size > MAX_METADATA_BYTES or offset + size > MAX_METADATA_BYTES:
-            raise ValueError("GGUF metadata exceeds the inspection budget")
-        if offset + size > len(payload):
-            raise IncompleteMetadata("More GGUF metadata is required")
-        result = payload[offset:offset + size]
-        offset += size
-        return result
-
-    def number(fmt: str):
-        return struct.unpack(endian + fmt, take(struct.calcsize(fmt)))[0]
-
-    def string(*, keep: bool = True):
-        size = number("Q")
-        raw = take(size)
-        return raw.decode("utf-8") if keep else None
-
-    def value(kind: int, *, keep: bool = True):
-        formats = {0: "B", 1: "b", 2: "H", 3: "h", 4: "I", 5: "i", 6: "f", 7: "?", 10: "Q", 11: "q", 12: "d"}
-        if kind in formats:
-            result = number(formats[kind])
-            return result if keep else None
-        if kind == 8:
-            return string(keep=keep)
-        if kind == 9:
-            element, count = number("I"), number("Q")
-            if count > MAX_METADATA_BYTES or element == 9:
-                raise ValueError("Unsupported GGUF metadata array")
-            if element in formats:
-                take(struct.calcsize(formats[element]) * count)
-            else:
-                for _ in range(count):
-                    value(element, keep=False)
-            return None  # variable per-layer layouts remain explicitly unsupported
-        raise ValueError("Unknown GGUF metadata type")
-
-    if take(4) != b"GGUF":
-        raise ValueError("Not a GGUF file")
-    raw_version = take(4)
-    version = struct.unpack("<I", raw_version)[0]
-    if version not in {2, 3}:
-        endian = ">"
-        version = struct.unpack(">I", raw_version)[0]
-    if version not in {2, 3}:
-        raise ValueError("Unsupported GGUF version")
-    tensor_count, field_count = number("Q"), number("Q")
-    if tensor_count > 1000000 or field_count > 1000000:
-        raise ValueError("Invalid GGUF directory count")
-    fields: dict[str, Any] = {}
-    for _ in range(field_count):
-        name = string()
-        if len(name) > 1024:
-            raise ValueError("Invalid GGUF metadata key")
-        kind = number("I")
-        keep = not name.startswith("tokenizer.")
-        entry = value(kind, keep=keep)
-        if keep:
-            fields[name] = entry
-    total = 0
-    known = True
-    for _ in range(tensor_count):
-        string(keep=False)
-        dimensions = number("I")
-        if not 1 <= dimensions <= 4:
-            raise ValueError("Invalid GGUF tensor dimensions")
-        shape = [number("Q") for _ in range(dimensions)]
-        kind, _tensor_offset = number("I"), number("Q")
-        try:
-            block, size = GGML_QUANT_SIZES[GGMLQuantizationType(kind)]
-            elements = math.prod(shape)
-            if any(not 0 < item <= 2**40 for item in shape) or shape[0] % block:
-                raise ValueError("Unsupported tensor block layout")
-            total += elements // block * size
-        except (ValueError, KeyError):
-            known = False
-    return fields, total if known else None
 
 
 def dense_kv_bytes(fields: dict[str, Any], context: int, key_type: str, value_type: str) -> int | None:
@@ -134,31 +51,152 @@ def dense_kv_bytes(fields: dict[str, Any], context: int, key_type: str, value_ty
         return None
     prefix = f"{architecture}."
     for key, value in fields.items():
-        if not ("sliding_window" in key or ".ssm." in key or "expert_count" in key
+        if not ("sliding_window" in key or ".ssm." in key
                 or "nextn_predict" in key or "kv_lora" in key or "recurrent" in key):
             continue
         # Presence with unknown or array-valued metadata cannot prove a dense
         # per-layer cache. Only an explicit numeric zero/false disables it.
         if value is not False and not (type(value) in {int, float} and value == 0):
             return None
-    def positive(key: str) -> int | None:
-        result = fields.get(prefix + key)
-        return result if isinstance(result, int) and not isinstance(result, bool) and 0 < result <= 2**20 else None
-    layers, heads, kv_heads = positive("block_count"), positive("attention.head_count"), positive("attention.head_count_kv")
-    embedding = positive("embedding_length")
-    if not layers or not heads or not kv_heads or not embedding or embedding % heads:
+    layers = _positive(fields.get(prefix + "block_count"))
+    if layers is None:
         return None
-    key_dim = positive("attention.key_length") or embedding // heads
-    value_dim = positive("attention.value_length") or embedding // heads
-    def row_size(width: int, precision: str) -> int:
-        block, size = GGML_QUANT_SIZES[GGMLQuantizationType[precision.upper()]]
-        if width % block:
-            raise ValueError("Unsupported cache block layout")
-        return width // block * size
     try:
-        return layers * context * (row_size(kv_heads * key_dim, key_type) + row_size(kv_heads * value_dim, value_type))
-    except (KeyError, ValueError):
+        return sum(_attention_bytes(fields, layer, context, key_type, value_type) for layer in range(layers))
+    except (KeyError, ValueError, TypeError):
         return None
+
+
+def _positive(value: Any, *, zero: bool = False) -> int | None:
+    return value if type(value) is int and (0 if zero else 1) <= value <= 2**20 else None
+
+
+def _layer_value(fields: dict[str, Any], key: str, layer: int) -> int | None:
+    value = fields.get(f"{fields.get('general.architecture')}.{key}")
+    if isinstance(value, list):
+        value = value[layer] if layer < len(value) else None
+    return _positive(value, zero=True)
+
+
+def _row_bytes(width: int, precision: str) -> int:
+    block, size = GGML_QUANT_SIZES[GGMLQuantizationType[precision.upper()]]
+    if width % block:
+        raise ValueError("Unsupported cache block layout")
+    return width // block * size
+
+
+def _attention_bytes(fields, layer, context, key_type, value_type, *, v_trans=False) -> int:
+    heads = _layer_value(fields, "attention.head_count", layer)
+    kv_heads = _layer_value(fields, "attention.head_count_kv", layer)
+    if kv_heads == 0:
+        return 0
+    embedding = _layer_value(fields, "embedding_length", layer)
+    inferred = embedding // heads if embedding and heads and embedding % heads == 0 else None
+    key_dim = _layer_value(fields, "attention.key_length", layer) or inferred
+    value_dim = _layer_value(fields, "attention.value_length", layer) or inferred
+    if not kv_heads or not key_dim or not value_dim:
+        raise ValueError("Attention cache dimensions are unavailable.")
+    value_width = kv_heads * value_dim
+    if v_trans:
+        layers = _positive(fields.get(f"{fields.get('general.architecture')}.block_count"))
+        if layers is None:
+            raise ValueError("Layer count is unavailable.")
+        widths = []
+        for index in range(layers):
+            count = _layer_value(fields, "attention.head_count_kv", index)
+            dim = _layer_value(fields, "attention.value_length", index) or inferred
+            if count is None or dim is None:
+                raise ValueError("Variable value cache dimensions are unavailable.")
+            widths.append(count * dim)
+        value_width = max(widths)
+    return context * (_row_bytes(kv_heads * key_dim, key_type) + _row_bytes(value_width, value_type))
+
+
+@dataclass
+class CacheProjection:
+    attention: dict[int, int] = field(default_factory=dict)
+    recurrent: dict[int, int] = field(default_factory=dict)
+    attention_known: bool = True
+    recurrent_known: bool = True
+    unknown: list[str] = field(default_factory=list)
+
+    @property
+    def total(self) -> int | None:
+        return (sum(self.attention.values()) + sum(self.recurrent.values())
+                if self.attention_known and self.recurrent_known else None)
+
+
+def cache_projection(fields, context, key_type="f16", value_type="f16", *, parallel=4,
+                     rollback=0, mtp=False, flash_attention="auto") -> CacheProjection:
+    """Pinned b11045 tensor shapes; compute/driver allocation remains unknown.
+
+    See src/{llama-kv-cache,llama-memory-recurrent,llama-hparams}.cpp and
+    src/models/qwen35.cpp at ggml-org/llama.cpp's b11045 tag.
+    """
+    result = CacheProjection()
+    arch = fields.get("general.architecture")
+    layers = _positive(fields.get(f"{arch}.block_count"))
+    nextn = _positive(fields.get(f"{arch}.nextn_predict_layers", 0), zero=True)
+    if arch not in DENSE_ARCHITECTURES | HYBRID_ARCHITECTURES or not layers or nextn is None or nextn > layers:
+        result.attention_known = result.recurrent_known = False
+        result.unknown.append("Cache and model state projection is unavailable for this architecture.")
+        return result
+    trunk = layers - nextn
+    if mtp:
+        if not nextn:
+            result.attention_known = False
+            result.unknown.append("MTP attention layers are not reported by this model.")
+            return result
+        attention_layers, recurrent_layers = list(range(trunk, layers)), []
+    elif arch in HYBRID_ARCHITECTURES:
+        mask = fields.get(f"{arch}.attention.recurrent_layers")
+        if mask is None:
+            interval = _positive(fields.get(f"{arch}.full_attention_interval", 4))
+            mask = [(index + 1) % interval != 0 for index in range(layers)] if interval else None
+        elif type(mask) in {int, bool}:
+            mask = [mask] * layers
+        if (not isinstance(mask, list) or len(mask) != layers
+                or any(type(value) not in {bool, int} or value not in {False, True} for value in mask)):
+            result.attention_known = result.recurrent_known = False
+            result.unknown.append("The model's recurrent layer layout is unavailable.")
+            return result
+        recurrent_layers = [index for index in range(trunk) if mask[index]]
+        attention_layers = [index for index in range(trunk) if not mask[index]]
+    else:
+        if dense_kv_bytes(fields, 1, key_type, value_type) is None:
+            result.attention_known = False
+            result.unknown.append("The model's dense cache dimensions/layout are unavailable.")
+            return result
+        attention_layers, recurrent_layers = list(range(trunk)), []
+    sliding = fields.get(f"{arch}.attention.sliding_window", 0)
+    if sliding not in (0, False, None):
+        result.attention_known = False
+        result.unknown.append("Sliding-window cache allocation is not included in this metadata projection.")
+    elif type(context) is not int or context <= 0:
+        result.attention_known = False
+        result.unknown.append("Automatic context allocation requires a known model maximum or a native check.")
+    else:
+        for layer in attention_layers:
+            try:
+                result.attention[layer] = _attention_bytes(fields, layer, context, key_type, value_type,
+                    v_trans=flash_attention == "off")
+            except (KeyError, TypeError, ValueError):
+                result.attention_known = False
+                result.unknown.append(f"Attention cache dimensions/type are unavailable for layer {layer}.")
+    if recurrent_layers:
+        conv = _positive(fields.get(f"{arch}.ssm.conv_kernel"))
+        inner = _positive(fields.get(f"{arch}.ssm.inner_size"))
+        state = _positive(fields.get(f"{arch}.ssm.state_size"))
+        groups = _positive(fields.get(f"{arch}.ssm.group_count"))
+        if None in (conv, inner, state, groups):
+            result.recurrent_known = False
+            result.unknown.append("Recurrent state dimensions are unavailable; attention bytes remain known.")
+        else:
+            # Native recurrent R/S are f32 independent of requested K/V precision.
+            rows = max(1, parallel) * (1 + rollback)
+            per_layer = ((conv - 1) * (inner + 2 * groups * state) + state * inner) * 4 * rows
+            result.recurrent = {layer: per_layer for layer in recurrent_layers}
+    return result
 
 
 def _bounded_native(args: list[str], timeout: float = NATIVE_DEADLINE) -> str:
@@ -214,6 +252,7 @@ class MemoryEstimator:
         self._worker = threading.Lock()
 
     def estimate(self, request: ModelEstimateRequest) -> ModelMemoryEstimate:
+        started = time.perf_counter()
         bags = resolve_bags(startup=request.startup)
         if bags.startup.unsupported:
             raise ManagerError("Check the selected launch settings.", code="estimate_settings", status_code=400)
@@ -221,41 +260,81 @@ class MemoryEstimator:
         identity = request.bundle_id or f"{request.repo_id}@{request.revision}:{','.join(request.primary_files)}"
         result = ModelMemoryEstimate(source_identity=identity, estimated_at=utc_now(), hardware=hardware,
             selected_startup=dict(request.startup), evaluated_startup=dict(request.startup))
-        fields: dict[str, Any] = {}
+        fields = GgufFields()
+        projector_fields: GgufFields | None = None
+        draft_fields: GgufFields | None = None
         if request.bundle_id:
-            bundle = self.manager.get_bundle(request.bundle_id)
+            bundle = self.manager.store.get_bundle(request.bundle_id)
+            if bundle is None:
+                raise ManagerError("Unknown bundle", code="bundle_missing", status_code=404)
             primaries = [item for item in bundle.files if item.name.lower().endswith(".gguf")
                 and item.role.value in {"primary_weights", "shard"}]
             result.model_disk_bytes = sum(item.size_bytes for item in primaries)
             projector = mmproj_companion(bundle)
             result.projector_disk_bytes = projector.size_bytes if projector else 0
             try:
-                fields, weights = self._local_directory(Path(bundle.primary_path or ""))
-                result.weights_bytes = weights if len(primaries) == 1 else None
+                for index, primary in enumerate(primaries):
+                    if Path(primary.path).stat().st_size != primary.size_bytes:
+                        raise ValueError("Model files changed; known disk totals may be out of date. Verify the model in Files.")
+                    shard_fields, _ = self._local_directory(Path(primary.path), refresh=request.refresh)
+                    if index == 0:
+                        fields = shard_fields
+                    else:
+                        fields.tensors += shard_fields.tensors
+                result.weights_bytes = self._weight_bytes(fields, bags.startup.applied)
                 result.architecture = fields.get("general.architecture")
                 maximum = fields.get(f"{result.architecture}.context_length")
                 result.context_maximum = maximum if isinstance(maximum, int) and 0 < maximum < 2**32 else None
             except (OSError, ValueError, ManagerError) as exc:
                 result.unknown_reasons.append(str(exc) if not isinstance(exc, ManagerError) else exc.message)
-            # A directory larger than our metadata budget does not disable the
-            # trusted native predictor, which owns its own bounded inspection.
-            try:
-                self._native_prediction(bundle, request, result)
-            except (OSError, ValueError, ManagerError) as exc:
-                result.completeness = "unavailable"
-                result.unknown_reasons.append(str(exc) if not isinstance(exc, ManagerError) else exc.message)
+            bags = resolve_bags(startup=request.startup,
+                                startup_defaults={"ctx_size": initial_context_size(result.context_maximum)})
+            if projector:
+                try:
+                    projector_fields, result.projector_bytes = self._local_directory(Path(projector.path), refresh=request.refresh)
+                except (OSError, ValueError, ManagerError) as exc:
+                    result.unknown_reasons.append(f"Projector metadata is unavailable: {getattr(exc, 'message', str(exc))}")
+            else:
+                result.projector_bytes = 0
+            draft_path = bags.startup.applied.get("spec_draft_model")
+            if draft_path and self._spec_modes(bags.startup.applied) - {"none"}:
+                try:
+                    draft_fields, _ = self._local_directory(Path(draft_path), refresh=request.refresh)
+                except (OSError, ValueError, ManagerError) as exc:
+                    result.unknown_reasons.append(f"Draft metadata is unavailable: {getattr(exc, 'message', str(exc))}")
+            if request.method == "native":
+                # A metadata-reader failure cannot disable an explicit native check.
+                try:
+                    self._native_prediction(bundle, request, result)
+                except (OSError, ValueError, ManagerError) as exc:
+                    result.completeness = "unavailable"
+                    result.unknown_reasons.append(str(exc) if not isinstance(exc, ManagerError) else exc.message)
             # A different setup, slot policy or cache on the same weights is
             # not an observation of this candidate. Response choices are absent
             # from the canonical native residency identity.
-            plan_identity = loaded_model_identity(self.manager.runtime.current(), bundle, bags)
+            plan_identity = loaded_model_identity(self.manager.runtime.current(), bundle, bags, hash_external=False)
             result.plan_identity = plan_identity
-            live = next((item for item in self.manager.store.list_deployments() if item.bundle_id == bundle.id
+            try:
+                verification = json.loads(self.manager.store.get_setting(f"model-verification:{bundle.id}") or "null")
+                observed_files_match = (isinstance(verification, dict) and verification.get("matches") is True
+                                        and verification.get("identity") == bundle_identity(bundle))
+            except (OSError, ValueError):
+                observed_files_match = False
+            live = next((item for item in self.manager.store.list_deployments() if plan_identity is not None
+                and observed_files_match
+                and item.bundle_id == bundle.id
                 and item.status.value == "running" and item.health and item.health.healthy
                 and item.loaded_model_identity == plan_identity), None)
             if live:
+                usage = live.resource_usage
+                if live.router_preset_id is not None:
+                    # Routed deployments own the shared parent process. Its RSS
+                    # does not measure this model's unrecorded native child.
+                    usage = ResourceUsage(available=False,
+                        reason="Model process RAM is unavailable; the recorded process usage belongs to the shared router.")
                 result.observed_runtime = {"deployment_id": live.id, "observed_at": live.updated_at,
                     "plan_identity": plan_identity, "kind": "observed",
-                    "startup": live.applied_startup, "resource_usage": live.resource_usage.model_dump(mode="json") if live.resource_usage else None}
+                    "startup": live.applied_startup, "resource_usage": usage.model_dump(mode="json") if usage else None}
         elif request.repo_id:
             repository_key = f"{request.repo_id}@{request.revision}"
             with self._lock:
@@ -284,18 +363,33 @@ class MemoryEstimator:
                     while len(self._metadata_failures) > 32:
                         self._metadata_failures.popitem(last=False)
             if projector:
+                try:
+                    projector_fields, result.projector_bytes = self._remote_directories(listing.repo_id,
+                        listing.resolved_revision, projector.files, request.refresh)
+                except (ValueError, OSError, httpx.HTTPError) as exc:
+                    result.unknown_reasons.append("Bounded projector metadata is unavailable.")
                 result.unknown_reasons.append("Vision runtime/compute allocation is unknown before loading.")
+            else:
+                result.projector_bytes = 0
+            result.weights_bytes = self._weight_bytes(fields, bags.startup.applied) if fields.tensors else result.weights_bytes
+            if request.method == "native":
+                result.unknown_reasons.append("Native checking is available after the selected model is installed.")
         else:
             raise ManagerError("Choose an installed model or exact repository files.", code="estimate_selection", status_code=400)
         if result.source != "native_prediction":
-            self._metadata_prediction(fields, bags.startup.applied, result)
+            maximum = fields.get(f"{fields.get('general.architecture')}.context_length")
+            maximum = maximum if type(maximum) is int and maximum > 0 else None
+            bags = resolve_bags(startup=request.startup, startup_defaults={"ctx_size": initial_context_size(maximum)})
+            self._metadata_prediction(fields, bags.startup.applied, result,
+                                      projector_fields=projector_fields, draft_fields=draft_fields)
         result.unknown_reasons.extend(hardware.reasons)
+        result.unknown_reasons = list(dict.fromkeys(result.unknown_reasons))
+        result.calculation_ms = round((time.perf_counter() - started) * 1000, 3)
         return result
 
     @staticmethod
-    def _local_directory(path: Path):
-        with path.open("rb") as handle:
-            return parse_gguf_directory(handle.read(MAX_METADATA_BYTES))
+    def _local_directory(path: Path, *, refresh: bool = False):
+        return read_gguf_directory(path, refresh=refresh)
 
     def _remote_directories(self, repo: str, revision: str, files: list[str], refresh: bool):
         key = f"{repo}@{revision}:{','.join(files)}"
@@ -308,7 +402,7 @@ class MemoryEstimator:
             return cached
         budget, requests = MAX_METADATA_BYTES, MAX_METADATA_REQUESTS
         deadline = time.monotonic() + METADATA_DEADLINE
-        first_fields: dict[str, Any] = {}
+        first_fields = GgufFields()
         weight_total: int | None = 0
         token = get_token()
         headers = {"Authorization": f"Bearer {token}"} if token else {}
@@ -344,6 +438,8 @@ class MemoryEstimator:
                         fields, weights = parse_gguf_directory(bytes(payload))
                         if index == 0:
                             first_fields = fields
+                        else:
+                            first_fields.tensors += fields.tensors
                         weight_total = weight_total + weights if weight_total is not None and weights is not None else None
                         break
                     except IncompleteMetadata:
@@ -357,68 +453,255 @@ class MemoryEstimator:
                 self._metadata.popitem(last=False)
         return result
 
-    def _metadata_prediction(self, fields, applied, result):
+    @staticmethod
+    def _spec_modes(applied):
+        raw = applied.get("spec_type", "none")
+        return set(raw if isinstance(raw, list) else str(raw).split(","))
+
+    @staticmethod
+    def _selected_tensors(fields, applied):
+        tensors = getattr(fields, "tensors", ())
+        arch = fields.get("general.architecture")
+        layers = _positive(fields.get(f"{arch}.block_count"))
+        nextn = _positive(fields.get(f"{arch}.nextn_predict_layers", 0), zero=True)
+        if (arch in HYBRID_ARCHITECTURES and layers and nextn is not None
+                and "draft-mtp" not in MemoryEstimator._spec_modes(applied)):
+            trunk = layers - nextn
+            return tuple(tensor for tensor in tensors if
+                         (match := re.match(r"^blk\.(\d+)\.", tensor.name)) is None or int(match[1]) < trunk)
+        return tensors
+
+    @staticmethod
+    def _weight_bytes(fields, applied):
+        tensors = MemoryEstimator._selected_tensors(fields, applied)
+        return sum(tensor.n_bytes for tensor in tensors) if tensors and all(tensor.n_bytes is not None for tensor in tensors) else None
+
+    @staticmethod
+    def _pool(fields, applied, result):
+        parallel = applied.get("parallel", -1)
+        automatic = parallel is None or parallel == -1
+        parallel = 4 if automatic else max(1, parallel)
+        unified = True if automatic else applied.get("kv_unified", False)
+        context = applied.get("ctx_size")
+        cap = applied.get("kv_unified_per_slot", 0)
+        if not context:
+            context = parallel * cap if cap else result.context_maximum
+            if context:
+                result.assumptions.append("Automatic context preview precedes native memory fitting and may differ when loaded.")
+        if context:
+            context = math.ceil(context / 256) * 256
+            per_slot = context if unified else math.ceil((context // parallel) / 256) * 256
+            context = per_slot if unified else per_slot * parallel
+            result.effective_context = context
+            result.effective_context_per_slot = min(per_slot, result.context_maximum or per_slot, cap or per_slot)
+            result.evaluated_startup.update(ctx_size=context)
+        result.effective_parallel, result.kv_unified = parallel, unified
+        result.evaluated_startup.update(parallel=parallel, kv_unified=unified)
+        if unified and parallel > 1:
+            result.assumptions.append("Simultaneous requests share the total context pool; each slot's maximum is not a separate reservation.")
+        return context, parallel
+
+    def _metadata_prediction(self, fields, applied, result, *, projector_fields=None, draft_fields=None):
+        if result.projector_disk_bytes == 0 and result.projector_bytes is None:
+            result.projector_bytes = 0
         architecture = fields.get("general.architecture")
         result.architecture = architecture if isinstance(architecture, str) else None
         maximum = fields.get(f"{architecture}.context_length")
         result.context_maximum = maximum if isinstance(maximum, int) and 0 < maximum < 2**32 else None
-        context = applied.get("ctx_size")
-        if context:
-            result.kv_bytes = dense_kv_bytes(fields, context, applied.get("cache_type_k", "f16"), applied.get("cache_type_v", "f16"))
-        if result.kv_bytes is None:
-            result.unknown_reasons.append("Cache projection is unavailable for this architecture or automatic context.")
+        context, parallel = self._pool(fields, applied, result)
+        modes = self._spec_modes(applied)
+        rollback = applied.get("spec_draft_n_max", 3) if modes & {"draft-mtp", "draft-eagle3", "draft-dflash", "draft-dspark"} else 0
+        projection = cache_projection(fields, context, applied.get("cache_type_k", "f16"), applied.get("cache_type_v", "f16"),
+            parallel=parallel, rollback=rollback, flash_attention=applied.get("flash_attn", "auto"))
+        result.attention_cache_bytes = sum(projection.attention.values()) if projection.attention_known else None
+        result.recurrent_state_bytes = sum(projection.recurrent.values()) if projection.recurrent_known else None
+        result.kv_bytes = projection.total
+        result.unknown_reasons.extend(projection.unknown)
         result.unknown_reasons.append("Runtime/compute overhead is unknown until a matching native prediction or load.")
-        result.assumptions.append("Dense cache projection excludes allocation padding and runtime overhead; file bytes are shown separately.")
-        if applied.get("kv_offload", True) is False and result.kv_bytes is not None:
-            result.ram_bytes = result.kv_bytes
-            result.assumptions.append("KV cache is requested in RAM; weights may still use the GPU.")
-        if applied.get("n_gpu_layers") == 0 and result.weights_bytes is not None:
-            result.ram_bytes = result.weights_bytes + (result.kv_bytes or 0)
-            result.gpu_bytes = 0  # known model/cache lower bound, not driver/compute allocation
-            result.assumptions.append("Weight layers and their cache are on CPU; RAM total excludes unknown compute overhead.")
-        if len(result.hardware.gpu_devices) > 1:
-            result.unknown_reasons.append("Device budgets are separate; automatic multi-GPU placement is unknown.")
-        layers = applied.get("n_gpu_layers")
-        full_gpu_candidate = layers in {None, -1, "auto"}
-        if isinstance(layers, int) and layers > 0:
-            result.unknown_reasons.append("Explicit layer placement requires native tensor placement; GPU/RAM weight allocation is unknown.")
-        if len(result.hardware.gpu_devices) == 1 and not result.hardware.stale and result.weights_bytes is not None:
-            available = result.hardware.gpu_devices[0].available_bytes
-            per_token = dense_kv_bytes(fields, 1, applied.get("cache_type_k", "f16"), applied.get("cache_type_v", "f16"))
-            if available is not None and per_token and applied.get("kv_offload", True) and result.projector_disk_bytes == 0 and full_gpu_candidate:
-                result.context_marker = max(0, (available - result.weights_bytes) // per_token)
-                if result.context_maximum:
-                    result.context_marker = min(result.context_marker, result.context_maximum)
+        result.assumptions.append("Metadata totals are known weight/cache components; native buffers, compute, driver and host-cache overhead remain excluded.")
+        if result.recurrent_state_bytes:
+            result.assumptions.append("Recurrent state uses native f32 tensors per simultaneous request and speculative rollback snapshot, independent of K/V precision.")
+        speculative = CacheProjection()
+        draft_weights = 0
+        if "draft-mtp" in modes and not applied.get("spec_draft_model"):
+            speculative = cache_projection(fields, context, applied.get("spec_draft_type_k", "f16"),
+                applied.get("spec_draft_type_v", "f16"), parallel=parallel, mtp=True,
+                flash_attention=applied.get("flash_attn", "auto"))
+            result.speculation_bytes = speculative.total
+            result.assumptions.append("MTP shares the loaded target weights; its dense cache is additional and shared weights are counted once.")
+        elif modes - {"none"}:
+            if draft_fields is None:
+                speculative.attention_known = speculative.recurrent_known = False
+                result.speculation_bytes = None
+                result.unknown_reasons.append("The selected speculative allocation is unavailable; target components remain known.")
+            else:
+                draft_weights = self._weight_bytes(draft_fields, applied)
+                if modes & {"draft-eagle3", "draft-dflash", "draft-dspark"}:
+                    speculative.attention_known = speculative.recurrent_known = False
+                    speculative.unknown.append("Specialist draft cache geometry is unavailable; its weight bytes remain known.")
+                else:
+                    speculative = cache_projection(draft_fields, context, applied.get("spec_draft_type_k", "f16"),
+                        applied.get("spec_draft_type_v", "f16"), parallel=parallel, mtp="draft-mtp" in modes,
+                        flash_attention=applied.get("flash_attn", "auto"))
+                result.speculation_bytes = draft_weights + speculative.total if draft_weights is not None and speculative.total is not None else None
+        else:
+            result.speculation_bytes = 0
+        result.unknown_reasons.extend(speculative.unknown)
+        if speculative.total is not None and result.kv_bytes is not None:
+            result.kv_bytes += speculative.total
+        elif speculative.total is None:
+            result.kv_bytes = None
+        if draft_weights is None:
+            result.weights_bytes = None
+        elif draft_weights and result.weights_bytes is not None:
+            result.weights_bytes += draft_weights
+        self._metadata_placement(fields, applied, projection, speculative, result,
+                                 projector_fields=projector_fields, draft_fields=draft_fields)
+
+    def _metadata_placement(self, fields, applied, projection, speculative, result, *, projector_fields, draft_fields):
+        rows = {"Host": {"id": "Host", "name": "RAM", "weights_bytes": 0, "attention_cache_bytes": 0,
+                         "recurrent_state_bytes": 0, "projector_bytes": 0, "speculation_bytes": 0}}
+        devices = result.hardware.gpu_devices
+        single_gpu = devices[0] if len(devices) == 1 else None
+        if single_gpu:
+            rows[single_gpu.id] = {**rows["Host"], "id": single_gpu.id, "name": single_gpu.name}
+        total_layers = _positive(fields.get(f"{fields.get('general.architecture')}.block_count"))
+        requested = applied.get("n_gpu_layers", "auto")
+        auto = requested in {None, -1, "auto"}
+        offload = total_layers + 1 if total_layers and (auto or requested == "all") else requested
+        placement_known = type(offload) is int and total_layers is not None and (offload == 0 or single_gpu is not None)
+        if auto:
+            result.assumptions.append("Automatic placement preview assumes all eligible layers on one GPU; native fitting may place some in RAM.")
+        if not placement_known:
+            result.unknown_reasons.append("Device placement is unavailable or uses multiple GPUs; their budgets are not pooled.")
+        def device_for_layer(layer, *, count=offload, layers=total_layers, cache=False):
+            if cache and not applied.get("kv_offload", True) or count == 0:
+                return "Host"
+            if not placement_known or type(count) is not int or layers is None:
+                return None
+            return single_gpu.id if layer >= max(layers + 1 - count, 0) and count > 0 else "Host"
+        def add_tensor(tensor, *, count=offload, layers=total_layers):
+            if tensor.n_bytes is None:
+                return
+            match = re.match(r"^blk\.(\d+)\.", tensor.name)
+            target = (device_for_layer(int(match[1]), count=count, layers=layers) if match
+                else device_for_layer(layers, count=count, layers=layers) if layers is not None and tensor.name.startswith(("output.", "output_norm."))
+                else "Host")
+            if target is not None:
+                rows[target]["weights_bytes"] += tensor.n_bytes
+        tensors = self._selected_tensors(fields, applied)
+        for tensor in tensors:
+            add_tensor(tensor)
+        if not tensors and result.weights_bytes is not None and requested == 0:
+            rows["Host"]["weights_bytes"] = result.weights_bytes
+        for kind, allocations in (("attention_cache_bytes", projection.attention), ("recurrent_state_bytes", projection.recurrent)):
+            for layer, size in allocations.items():
+                target = device_for_layer(layer, cache=True)
+                if target is not None:
+                    rows[target][kind] += size
+        if draft_fields is None:
+            for layer, size in speculative.attention.items():
+                target = device_for_layer(layer, cache=True)
+                if target is not None:
+                    rows[target]["attention_cache_bytes"] += size
+                    rows[target]["speculation_bytes"] += size
+        if draft_fields is not None:
+            draft_layers = _positive(draft_fields.get(f"{draft_fields.get('general.architecture')}.block_count"))
+            draft_count = applied.get("spec_draft_ngl", "auto")
+            if draft_count in {None, -1, "auto", "all"}:
+                draft_count = draft_layers + 1 if draft_layers else None
+            for tensor in self._selected_tensors(draft_fields, applied):
+                add_tensor(tensor, count=draft_count, layers=draft_layers)
+            for layer, size in speculative.attention.items():
+                target = device_for_layer(layer, count=draft_count, layers=draft_layers, cache=True)
+                if target is not None:
+                    rows[target]["attention_cache_bytes"] += size
+                    rows[target]["speculation_bytes"] += size
+            for layer, size in speculative.recurrent.items():
+                target = device_for_layer(layer, count=draft_count, layers=draft_layers, cache=True)
+                if target is not None:
+                    rows[target]["recurrent_state_bytes"] += size
+            result.unknown_reasons.append("Separate draft placement/compute is approximate and may differ after native fitting.")
+        if result.projector_bytes is not None and (not applied.get("mmproj_use_gpu", True) or single_gpu or result.projector_bytes == 0):
+            target = single_gpu.id if applied.get("mmproj_use_gpu", True) and single_gpu else "Host"
+            rows[target]["projector_bytes"] = result.projector_bytes
+            if result.projector_bytes:
+                result.assumptions.append("Projector tensor bytes are a component estimate; native vision buffers/compute remain unknown.")
+        for row in rows.values():
+            row["kv_bytes"] = row["attention_cache_bytes"] + row["recurrent_state_bytes"]
+            row["runtime_overhead_bytes"] = row["total_bytes"] = None
+            row["known_total_bytes"] = row["weights_bytes"] + row["kv_bytes"] + row["projector_bytes"]
+            row["lower_bound"] = True
+            row["known_weights_bytes"] = row["weights_bytes"]
+            row["known_attention_cache_bytes"] = row["attention_cache_bytes"]
+            row["known_recurrent_state_bytes"] = row["recurrent_state_bytes"]
+            if result.weights_bytes is None or not placement_known:
+                row["weights_bytes"] = None
+            if result.attention_cache_bytes is None or not speculative.attention_known or not placement_known:
+                row["attention_cache_bytes"] = None
+            if result.recurrent_state_bytes is None or not speculative.recurrent_known or not placement_known:
+                row["recurrent_state_bytes"] = None
+            if result.kv_bytes is None or not placement_known:
+                row["kv_bytes"] = None
+            if result.projector_bytes is None:
+                row["projector_bytes"] = None
+        result.devices = list(rows.values())
+        selected_components_known = (result.weights_bytes is not None and result.kv_bytes is not None
+                                     and result.projector_bytes is not None and result.speculation_bytes is not None)
+        if placement_known and selected_components_known:
+            result.gpu_bytes = sum(row["known_total_bytes"] for row in result.devices if row["id"] != "Host")
+            result.ram_bytes = rows["Host"]["known_total_bytes"]
+            if not tensors and requested != 0:
+                result.gpu_bytes = None
+                result.ram_bytes = rows["Host"]["kv_bytes"] if not applied.get("kv_offload", True) else None
+        if not tensors and type(requested) is int and requested > 0:
+            result.unknown_reasons.append("Explicit layer placement requires the model's tensor names; weight placement is unavailable.")
+        if (single_gpu and not result.hardware.stale and requested in {None, -1, "auto", "all"}
+                and result.weights_bytes is not None and result.projector_disk_bytes == 0
+                and result.speculation_bytes == 0 and applied.get("kv_offload", True)
+                and projection.total is not None):
+            available = single_gpu.available_bytes
+            one_token = cache_projection(fields, 1, applied.get("cache_type_k", "f16"), applied.get("cache_type_v", "f16"),
+                parallel=result.effective_parallel, flash_attention=applied.get("flash_attn", "auto"))
+            rate = sum(one_token.attention.values()) if one_token.attention_known else None
+            if available is not None and rate:
+                gpu_row = rows[single_gpu.id]
+                weights = gpu_row["known_weights_bytes"] if tensors else result.weights_bytes
+                state = gpu_row["known_recurrent_state_bytes"]
+                marker = max(0, (available - weights - state) // rate)
+                result.context_marker = min(marker, result.context_maximum) if result.context_maximum else marker
                 result.context_marker_kind = "upper_bound"
-                result.assumptions.append("Context marker assumes all weights and cache on this GPU and excludes unknown overhead.")
-                if result.kv_bytes is not None:
-                    result.gpu_bytes = result.weights_bytes + result.kv_bytes
+                result.assumptions.append("Context marker assumes all eligible layers on this GPU and excludes unknown overhead; it does not verify a fit.")
 
     def _native_prediction(self, bundle, request, result):
         manifest = self.manager.runtime.current()
         executable = require_planner(manifest)
-        bags = resolve_bags(startup=request.startup)
+        bags = resolve_bags(startup=request.startup,
+                            startup_defaults={"ctx_size": initial_context_size(result.context_maximum)})
         selected = loading_startup_settings(bags)
         # Operational endpoints and aliases cannot affect allocation. They are
         # neither needed nor passed to the subprocess's real server parser.
         for key in ("host", "port", "alias"):
             selected.pop(key, None)
         identities = []
-        for file in bundle.files:
-            if not file.name.lower().endswith(".gguf"):
-                continue
+        projector = mmproj_companion(bundle)
+        selected_artifacts = [file for file in bundle.files if file.name.lower().endswith(".gguf")
+                              and file.role.value in {"primary_weights", "shard"}]
+        if projector:
+            selected_artifacts.append(projector)
+        for file in {item.path: item for item in selected_artifacts}.values():
             stat = Path(file.path).stat()
             if stat.st_size != file.size_bytes:
                 raise ValueError("Model files changed; verify them in Models before predicting memory.")
             identities.append((file.path, file.size_bytes, file.sha256, stat.st_mtime_ns))
         draft = selected.get("spec_draft_model")
         if draft:
-            from workbench_backend.inference.hashes import cached_sha256_file
+            from workbench_backend.inference.hashes import _cache_key
             path = Path(draft)
             if not path.is_file():
                 raise ValueError("The selected draft model is unavailable; its allocation is unknown.")
             stat = path.stat()
-            identities.append((str(path), stat.st_size, cached_sha256_file(path), stat.st_mtime_ns))
+            identities.append(_cache_key(path))
         key = json.dumps([manifest.executable, manifest.sha256, manifest.memory_planner_sha256,
                           manifest.memory_planner_native_fingerprint, identities, selected], sort_keys=True)
         with self._lock:
@@ -429,8 +712,9 @@ class MemoryEstimator:
             if not self._worker.acquire(timeout=0.1):
                 raise ValueError("Native memory prediction is busy; retry shortly.")
             try:
+                if not bundle.primary_path:
+                    raise ValueError("The model's primary GGUF is unavailable; its allocation is unknown.")
                 arguments = [str(executable), "-m", bundle.primary_path, *startup_cli_args(selected)]
-                projector = mmproj_companion(bundle)
                 if projector:
                     arguments.extend(["--mmproj", projector.path])
                 prediction = self._validate_native(json.loads(_bounded_native(arguments)), manifest)
@@ -449,7 +733,7 @@ class MemoryEstimator:
         result.completeness = prediction["completeness"]
         for key in ("effective_context", "effective_context_per_slot", "effective_parallel", "kv_unified", "context_maximum"):
             setattr(result, key, prediction[key])
-        result.plan_identity = loaded_model_identity(manifest, bundle, bags)
+        result.plan_identity = loaded_model_identity(manifest, bundle, bags, hash_external=False)
         result.weights_bytes = sum(row["weights_bytes"] for row in result.devices)
         result.kv_bytes = sum(row["kv_bytes"] for row in result.devices)
         result.runtime_overhead_bytes = sum(row["runtime_overhead_bytes"] for row in result.devices)
@@ -457,8 +741,8 @@ class MemoryEstimator:
         speculation_measured = prediction["components"]["speculation"] != "unavailable"
         result.projector_bytes = sum(row["projector_bytes"] for row in result.devices) if projector_measured else None
         result.speculation_bytes = sum(row["speculation_bytes"] for row in result.devices) if speculation_measured else None
-        if not speculation_measured:
-            result.weights_bytes = result.kv_bytes = result.runtime_overhead_bytes = None
+        # Failed speculation must not erase measured target components. Native
+        # total_bytes remains unknown while the target's rows stay inspectable.
         if result.completeness == "complete":
             result.gpu_bytes = sum(row["total_bytes"] for row in result.devices if row["id"] != "Host")
             result.ram_bytes = sum(row["total_bytes"] for row in result.devices if row["id"] == "Host")

@@ -10,6 +10,10 @@ const response = body => ({ ok: true, status: 200, json: async () => body });
 const text = node => typeof node === "string" ? node : (node?.children ?? []).map(text).join("");
 const settingRow = node => { let current = node; while (current && !String(current.props?.className ?? "").split(" ").includes("setting-row")) current = current.parent; assert.ok(current, "control sits in a shared setting row"); return current; };
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+const elementText = node => node == null ? "" : Array.isArray(node) ? node.map(elementText).join("") : typeof node === "object" ? elementText(node.props?.children) : String(node);
+const contextInput = renderer => renderer.root.findAllByType("input").find(node => node.props.id === "model-ctx-size");
+const ownerControl = (node, name) => { let current = node; while (current && current.type?.name !== name) current = current.parent; assert.ok(current, `expected ${name}`); return current; };
+const settingDetails = node => { const control = ownerControl(node, "SettingRow"); return elementText(control.props.provenance); };
 const bag = requested => ({ requested, applied: requested, unsupported: [], retired: [], overridden: [], unverified: [] });
 const originalFetch = globalThis.fetch;
 try {
@@ -52,18 +56,18 @@ async function draftCheckOwnership(Panel) {
   const results = () => renderer.root.findByProps({ className: "model-check-results" });
   try {
     await act(async () => { renderer = create(React.createElement(Panel, props())); await tick(); });
-    await act(async () => { button("Check settings").props.onClick(); await tick(); });
+    await act(async () => { button("Validate draft").props.onClick(); await tick(); });
     assert.match(text(results()), /first setup.*Loading settings.*Response settings/);
     assert.equal(calls.findLast(call => call.address.endsWith("/settings/preview")).body.startup.fit, "off");
     await act(async () => { renderer.root.findByProps({ "aria-label": "GPU layers" }).props.onChange({ target: { value: "auto" } }); await tick(); });
-    await act(async () => { renderer.root.findByProps({ id: "model-response-temperature" }).props.onChange(0.7); await tick(); });
+    await act(async () => { renderer.root.findAllByType("input").find(node => node.props.id === "model-response-temperature").props.onChange({ target: { value: "0.7" } }); await tick(); });
     assert.match(text(results()), /Out of date/, "editing marks the exact checked draft obsolete");
     rejectResponse = true;
-    await act(async () => { button("Check settings").props.onClick(); await tick(); });
+    await act(async () => { button("Validate draft").props.onClick(); await tick(); });
     assert.match(text(results()), /Unsupported response: invalid-response-marker/, "response validation is visible beside loading validation");
-    assert.equal(calls.findLast(call => call.address.endsWith("/settings/preview")).body.startup.fit, "on", "Automatic GPU enables required fitting even after a saved Off setting");
+    assert.equal(calls.findLast(call => call.address.endsWith("/settings/preview")).body.startup.fit, "off", "GPU Auto preserves independent memory-fitting settings");
     delay = true;
-    await act(async () => { button("Check settings").props.onClick(); await tick(); });
+    await act(async () => { button("Validate draft").props.onClick(); await tick(); });
     assert.match(text(results()), /Checking this setup/);
     await act(async () => { selected = "second"; renderer.update(React.createElement(Panel, props())); await tick(); });
     assert.ok(!text(results()).includes("invalid-response-marker"), "another setup cannot inherit the previous check result");
@@ -120,55 +124,54 @@ async function configurations(Panel) {
     assert.equal(lastPreview().editing_layer, 'conversation', 'Models preview uses the existing model-capable resolver boundary');
     assert.equal(lastPreview().project_id, null, 'Models preview excludes project selection');
     assert.equal(lastPreview().agent_setup_version_id, null, 'Models preview excludes agent selection');
-    assert.ok(text(renderer.root).includes('512'), 'the saved reply limit is displayed as its resolved value');
-    await act(async () => { renderer.root.findByProps({ id: 'model-response-max_tokens' }).props.onChange(-1); await tick(); });
+    assert.equal(renderer.root.findAllByType('input').find(node => node.props.id === 'model-response-max_tokens').props.value, 512, 'the saved reply limit appears as its actual value');
+    await act(async () => { renderer.root.findByProps({ 'aria-label': 'Maximum output tokens mode' }).props.onChange({ target: { value: 'unlimited' } }); await tick(); });
     assert.equal(lastPreview().overrides.per_request_overrides.max_tokens, -1, 'native Unlimited remains an explicit saved response value');
-    assert.match(text(renderer.root), /Unlimited.*Native output limit/, 'legacy unlimited value is labelled without showing negative tokens');
-    await act(async () => { button('Set budget').props.onClick(); await tick(); });
-    await act(async () => { renderer.root.findByProps({ id: 'model-response-max_tokens' }).props.onChange(512); await tick(); });
+    assert.equal(renderer.root.findByProps({ 'aria-label': 'Maximum output tokens mode' }).props.value, 'unlimited', 'Unlimited appears without a negative token sentinel');
+    await act(async () => { renderer.root.findByProps({ 'aria-label': 'Maximum output tokens mode' }).props.onChange({ target: { value: 'custom' } }); await tick(); });
+    await act(async () => { renderer.root.findAllByType('input').find(node => node.props.id === 'model-response-max_tokens').props.onChange({ target: { value: '512' } }); await tick(); });
 
-    assert.match(text(settingRow(renderer.root.findByProps({ id: 'model-ctx-size' }))), /8,192 tokens.*Configuration default/, 'startup control displays its resolved value and saved source');
-    await act(async () => { renderer.root.findByProps({ 'aria-label': 'Conversation capacity mode' }).props.onChange({ target: { value: 'full' } }); await tick(); });
+    assert.match(settingDetails(contextInput(renderer)), /8,192 tokens.*Configuration default/, 'startup control displays its resolved value and saved source');
+    await act(async () => { renderer.root.findByProps({ 'aria-label': 'Advanced context mode' }).props.onChange({ target: { value: 'full' } }); await tick(); });
     assert.equal(lastPreview().overrides.startup_overrides.ctx_size, 0, 'Full uses the native maximum directive rather than an exact numeric custom capacity');
-    assert.equal(renderer.root.findByProps({ id: 'model-ctx-size' }).props.value, 32768, 'Full displays the supported maximum rather than zero tokens');
-    await act(async () => { renderer.root.findByProps({ id: 'model-ctx-size' }).props.onChange({ target: { value: '32768' } }); await tick(); });
-    assert.equal(renderer.root.findByProps({ 'aria-label': 'Conversation capacity mode' }).props.value, 'custom', 'an exact maximum remains a custom request');
-    await act(async () => { renderer.root.findByProps({ id: 'model-ctx-size' }).props.onChange({ target: { value: '16384' } }); await tick(); });
+    assert.equal(contextInput(renderer).props["data-token-value"], 32768, 'Full displays the supported maximum rather than zero tokens');
+    await act(async () => { ownerControl(contextInput(renderer), "ContextSlider").props.onChange(32768); await tick(); });
+    assert.equal(renderer.root.findByProps({ 'aria-label': 'Advanced context mode' }).props.value, 'fixed', 'an exact maximum remains a fixed request');
+    await act(async () => { ownerControl(contextInput(renderer), "ContextSlider").props.onChange(16384); await tick(); });
     assert.equal(lastPreview().overrides.startup_overrides.ctx_size, 16384, 'staged launch changes reach the shared setup preview');
     const selectedOptions = calls.findLast(call => call.path.endsWith('/configuration-options'));
     assert.equal(selectedOptions.method, 'POST', 'draft-sensitive options use the read-only catalogue request');
     assert.equal(selectedOptions.body.configuration_id, 'default');
     assert.equal(selectedOptions.body.startup.ctx_size, 16384, 'configuration options follow the staged loading settings');
 
-    assert.match(text(settingRow(renderer.root.findByProps({ id: 'model-ctx-size' }))), /16,384 tokens.*This editor.*Unsaved change/, 'edited launch value and status replace stale saved readout');
-    await act(async () => { renderer.root.findByProps({ id: 'model-ctx-size' }).props.onChange({ target: { value: '8192' } }); await tick(); });
+    assert.match(settingDetails(contextInput(renderer)), /16,384 tokens.*This editor.*Unsaved change/, 'edited launch value and status replace stale saved readout');
+    await act(async () => { ownerControl(contextInput(renderer), "ContextSlider").props.onChange(8192); await tick(); });
     assert.deepEqual(lastPreview().overrides.startup_overrides, {}, 'returning to the saved startup value removes the preview override');
-    assert.match(text(settingRow(renderer.root.findByProps({ id: 'model-ctx-size' }))), /8,192 tokens.*Configuration default/, 'a reverted field follows the saved configuration again');
-    assert.ok(!text(settingRow(renderer.root.findByProps({ id: 'model-ctx-size' }))).includes('Unsaved change'), 'reverted field clears its dirty provenance');
-    assert.equal(renderer.root.findByProps({ className: 'badge model-edit-state' }).props['data-dirty'], false, 'reverted editor clears its dirty indicator');
-    await act(async () => { renderer.root.findByProps({ id: 'model-ctx-size' }).props.onChange({ target: { value: '16384' } }); await tick(); });
+    assert.match(settingDetails(contextInput(renderer)), /8,192 tokens.*Configuration default/, 'a reverted field follows the saved configuration again');
+    assert.ok(!settingDetails(contextInput(renderer)).includes('Unsaved change'), 'reverted field clears its dirty provenance');
+    assert.equal(renderer.root.findByProps({ className: 'model-edit-state' }).props['data-dirty'], false, 'reverted editor clears its dirty indicator');
+    await act(async () => { ownerControl(contextInput(renderer), "ContextSlider").props.onChange(16384); await tick(); });
     const numeric = label => {
       const ids = { Temperature: 'model-response-temperature', 'Reply limit': 'model-response-max_tokens' };
       return renderer.root.findAllByType('input').find(node => node.props.id === ids[label]);
     };
     await act(async () => { numeric('Temperature').props.onChange({ target: { value: '' } }); await tick(); });
     assert.equal(lastPreview().overrides.per_request_overrides.temperature, null, 'clearing a saved response setting explicitly resets the authoritative preview');
-    assert.equal(numeric('Temperature').props.value, '', 'empty input remains an inherited setting, not a saved default');
-    assert.equal(numeric('Temperature').props.placeholder, '0.8', 'the empty field previews the inherited value it will use');
+    assert.equal(numeric('Temperature').props.value, .8, 'clearing displays the inherited value without persisting it');
+    assert.equal(Object.hasOwn(lastPreview().overrides.per_request_overrides, 'temperature'), true, 'reset remains represented as an override removal in the preview');
     assert.equal(numeric('Temperature').props.max, undefined, 'exact entry is not capped by the slider range');
     assert.equal(numeric('Temperature').props.step, 'any', 'exact entry accepts any precision');
-    assert.match(text(settingRow(numeric('Temperature'))), /0\.8.*Model default/, 'resolved model default and its source are the visible readout');
-    assert.ok(!text(settingRow(numeric('Temperature'))).includes('Inherited'), 'default following is described by its actual value and source');
+    assert.match(settingDetails(numeric('Temperature')), /0\.8.*Model default/, 'resolved model default and its source are the visible readout');
+    assert.ok(!settingDetails(numeric('Temperature')).includes('Inherited'), 'default following is described by its actual value and source');
     await act(async () => { numeric('Reply limit').props.onChange({ target: { value: '' } }); await tick(); });
     assert.equal(lastPreview().overrides.per_request_overrides.max_tokens, null);
-    assert.match(text(settingRow(numeric('Reply limit'))), /Not reported/, 'unknown default is not invented from the saved value');
+    assert.equal(renderer.root.findByProps({ 'aria-label': 'Maximum output tokens mode' }).props.value, 'unlimited', 'omitted output uses native Unlimited');
     const choice = value => renderer.root.findAll(node => node.type === 'input' && node.props.type === 'radio' && node.props.value === value)[0];
     assert.notEqual(choice('off').props.disabled, true, 'cold Auto Thinking remains editable when its template default is unknown');
     await act(async () => { choice('off').props.onChange(); await tick(); });
     assert.equal(lastPreview().overrides.per_request_overrides.reasoning, 'off', 'explicit Off reaches the authoritative preview');
     const thinkingSwitch = choice('off');
-    const thinkingReset = settingRow(thinkingSwitch).findAllByType('button').find(node => text(node) === 'Reset');
-    await act(async () => { thinkingReset.props.onClick(); await tick(); });
+    await act(async () => { ownerControl(thinkingSwitch, 'SettingRow').props.onReset(); await tick(); });
     assert.equal(Object.hasOwn(lastPreview().overrides.per_request_overrides, 'reasoning'), false, 'Default restores native omission');
     await act(async () => { choice('off').props.onChange(); await tick(); });
     assert.notEqual(choice('drop').props.disabled, true, 'unknown thinking-history default does not block an explicit supported choice');
@@ -212,19 +215,19 @@ async function retainedModelDrafts(Panel) {
   const props = () => ({ selectedBundleId: selected, initialBundles: bundles, initialProfiles: profiles, onDirtyModelsChange: ids => { dirty = ids; } });
   try {
     await act(async () => { renderer = create(React.createElement(Panel, props())); await tick(); });
-    await act(async () => renderer.root.findByProps({ id: "model-ctx-size" }).props.onChange({ target: { value: "16384" } }));
+    await act(async () => ownerControl(contextInput(renderer), "ContextSlider").props.onChange(16384));
     assert.ok(dirty.has("first"), "an unsaved edit marks its model");
     await act(async () => { selected = "second"; renderer.update(React.createElement(Panel, props())); await tick(); });
     assert.ok(dirty.has("first"), "another model keeps the earlier unsaved marker");
     await act(async () => { selected = "first"; renderer.update(React.createElement(Panel, props())); await tick(); });
-    assert.equal(renderer.root.findByProps({ id: "model-ctx-size" }).props.value, "16384", "unsaved startup edit survives model switching");
+    assert.equal(contextInput(renderer).props["data-token-value"], 16384, "unsaved startup edit survives model switching");
     const configuration = () => renderer.root.findAllByType("select").find(node => node.findAllByType("option").some(option => option.props.value === "first-variant"));
     await act(async () => configuration().props.onChange({ target: { value: "first-variant" } }));
-    await act(async () => renderer.root.findByProps({ id: "model-ctx-size" }).props.onChange({ target: { value: "12288" } }));
+    await act(async () => ownerControl(contextInput(renderer), "ContextSlider").props.onChange(12288));
     await act(async () => configuration().props.onChange({ target: { value: "first-default" } }));
-    assert.equal(renderer.root.findByProps({ id: "model-ctx-size" }).props.value, "16384", "the first configuration keeps its draft");
+    assert.equal(contextInput(renderer).props["data-token-value"], 16384, "the first configuration keeps its draft");
     await act(async () => configuration().props.onChange({ target: { value: "first-variant" } }));
-    assert.equal(renderer.root.findByProps({ id: "model-ctx-size" }).props.value, "12288", "the second configuration keeps its own draft");
+    assert.equal(contextInput(renderer).props["data-token-value"], 12288, "the second configuration keeps its own draft");
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
 
@@ -273,7 +276,7 @@ async function configurationNavigationOwnership(Panel, navigateBack = false) {
   try {
     await act(async () => { renderer = create(React.createElement(Panel, props()), { createNodeMock: element => element.type === 'form' ? { reportValidity: () => true } : null }); await tick(); });
     const button = label => renderer.root.findAllByType('button').find(node => text(node) === label);
-    await act(async () => renderer.root.findByProps({ id: 'model-ctx-size' }).props.onChange({ target: { value: '16384' } }));
+    await act(async () => ownerControl(contextInput(renderer), "ContextSlider").props.onChange(16384));
     await act(async () => { renderer.root.findByProps({ id: "model-settings-form" }).props.onSubmit({ preventDefault() {} }); await tick(); });
     assert.ok(releasePreview, 'save waits at the actual preview receiver');
     await act(async () => { selected = 'second'; renderer.update(React.createElement(Panel, props())); await tick(); });
@@ -282,9 +285,9 @@ async function configurationNavigationOwnership(Panel, navigateBack = false) {
     assert.equal(saves.length, 1);
     assert.ok(saves[0].path.includes('/first/'), 'a pending save remains owned by its original model');
     assert.equal(saves[0].body.startup.ctx_size, 16384, 'navigation cannot remove staged edits from an already requested save');
-    const chooser = renderer.root.findAllByType('select').find(node => node.findAllByType('option').some(option => option.props.value === `${selected}-default`));
-    assert.equal(chooser.props.value, `${selected}-default`, 'old completion cannot replace the newly selected configuration');
-    if (navigateBack) assert.equal(Number(renderer.root.findByProps({ id: 'model-ctx-size' }).props.value), 16384, 'the saved revision is visible after returning');
+    assert.equal(renderer.root.findAllByType('select').some(node => node.props.id === 'model-configuration'), false, 'a single setup does not add a selector');
+    assert.equal(renderer.root.find(node => node.type?.name === 'DeploymentsPanel').props.selectedBundleId, selected, 'old completion cannot replace the newly selected model');
+    if (navigateBack) assert.equal(Number(contextInput(renderer).props["data-token-value"]), 16384, 'the saved revision is visible after returning');
     assert.equal(text(renderer.root).includes('Setup saved.'), false, 'old status is not shown as completion for the new model');
     assert.equal(text(renderer.root).includes('Checked launch settings'), false, 'old checked settings are not presented for the new model');
   } finally { if (renderer) await act(async () => renderer.unmount()); }
@@ -313,14 +316,14 @@ async function failedReloadFacts(Panel) {
   };
   try {
     await act(async () => { renderer = create(React.createElement(Panel, { selectedBundleId: 'model', initialBundles: [bundle], initialProfiles: [profile] })); await tick(); });
-    await act(async () => renderer.root.findByProps({ id: 'model-ctx-size' }).props.onChange({ target: { value: '16384' } }));
+    await act(async () => ownerControl(contextInput(renderer), "ContextSlider").props.onChange(16384));
     await act(async () => { renderer.root.findAllByType('button').find(node => text(node) === 'Load saved').props.onClick(); await tick(); });
     assert.ok(reads > 1, 'failed Apply refreshes the receiver state instead of retaining a stale healthy deployment');
     const badges = renderer.root.findAll(node => node.type === 'span' && String(node.props.className).startsWith('badge '));
     assert.equal(badges.some(node => text(node) === 'Ready'), false, 'a failed receiver is no longer labeled Ready');
     assert.ok(text(renderer.root).includes('Needs attention'));
     assert.ok(text(renderer.root).includes(originalError));
-    assert.equal(Number(renderer.root.findByProps({ id: 'model-ctx-size' }).props.value), 16384, 'failed reload refresh preserves staged edits');
+    assert.equal(Number(contextInput(renderer).props["data-token-value"]), 16384, 'failed reload refresh preserves staged edits');
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
 

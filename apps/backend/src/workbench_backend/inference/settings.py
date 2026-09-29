@@ -199,9 +199,36 @@ DEFAULT_GPU_PROFILE: dict[str, Any] = {
     "n_gpu_layers": "auto",
     "fit": "on",
     "flash_attn": "auto",
-    "parallel": 4,
+    "parallel": -1,
     "kv_unified": True,
 }
+
+# Pinned llama-server defaults, shared by resolution and presentation. The
+# server evaluates parallel Auto (-1) as four slots with unified KV.
+NATIVE_REQUEST_DEFAULTS: dict[str, Any] = {
+    "temperature": 0.8, "top_k": 40, "top_p": 0.95, "min_p": 0.05,
+    "typical_p": 1.0, "repeat_penalty": 1.0, "presence_penalty": 0.0,
+    "frequency_penalty": 0.0, "max_tokens": -1, "seed": -1,
+    "reasoning_format": "auto", "reasoning_budget_tokens": -1,
+}
+NATIVE_STARTUP_DEFAULTS: dict[str, Any] = {
+    **DEFAULT_GPU_PROFILE, "threads": -1, "threads_batch": -1,
+    "batch_size": 2048, "ubatch_size": 512, "load_mode": "auto",
+    "cache_type_k": "f16", "cache_type_v": "f16", "kv_offload": True,
+    "op_offload": True, "mmproj_use_gpu": True, "embedding": "off",
+    "spec_type": "none", "spec_draft_n_max": 3, "spec_draft_n_min": 0,
+    "spec_draft_p_min": 0.0, "spec_draft_p_split": 0.1,
+    "spec_draft_threads": -1, "spec_draft_threads_batch": -1,
+    "spec_draft_ngl": "auto", "spec_draft_cache_type_k": "f16",
+    "spec_draft_cache_type_v": "f16",
+}
+REQUEST_PATHS: dict[str, str] = {
+    key: key for key in PER_REQUEST_KEYS
+}
+REQUEST_PATHS.update({
+    "reasoning": "chat_template_kwargs.enable_thinking",
+    "reasoning_preserve": "chat_template_kwargs.preserve_reasoning",
+})
 
 DEFAULT_STARTUP: dict[str, Any] = {
     "host": "127.0.0.1",
@@ -213,15 +240,15 @@ DEFAULT_STARTUP: dict[str, Any] = {
 # ranges, not invented runtime limits. Native/model-specific constraints are
 # added by configuration_options using the exact selected model/template.
 CONTROL_FACTS: dict[str, dict[str, Any]] = {
-    "ctx_size": {"domain": "integer", "unit": "tokens", "control": "tokens", "section": "memory", "minimum": 0, "step": 1},
-    "n_gpu_layers": {"domain": "integer", "unit": "layers", "control": "choice", "section": "memory", "minimum": 0, "step": 1, "dependencies": ["fit"]},
+    "ctx_size": {"domain": "integer", "unit": "tokens", "control": "tokens", "section": "memory", "minimum": 0, "step": 1024},
+    "n_gpu_layers": {"domain": "integer", "unit": "layers", "control": "choice", "section": "memory", "minimum": 0, "step": 1},
     "threads": {"domain": "integer", "unit": "threads", "control": "number", "minimum": -1, "step": 1},
     "threads_batch": {"domain": "integer", "unit": "threads", "control": "number", "minimum": -1, "step": 1},
-    "parallel": {"domain": "integer", "unit": "requests", "control": "number", "minimum": 1, "step": 1, "suggested_maximum": 8, "dependencies": ["kv_unified"]},
+    "parallel": {"domain": "integer", "unit": "requests", "control": "number", "minimum": -1, "step": 1, "suggested_maximum": 8, "dependencies": ["kv_unified"]},
     "batch_size": {"domain": "integer", "unit": "tokens", "control": "number", "minimum": 1, "step": 1, "suggested_maximum": 8192, "dependencies": ["ubatch_size"]},
-    "ubatch_size": {"domain": "integer", "unit": "tokens", "control": "number", "minimum": 1, "step": 1, "suggested_maximum": 2048, "dependencies": ["batch_size"]},
+    "ubatch_size": {"domain": "integer", "unit": "tokens", "control": "number", "minimum": 0, "step": 1, "suggested_maximum": 2048, "dependencies": ["batch_size"]},
     "flash_attn": {"domain": "string", "dependencies": ["cache_type_v"]},
-    "fit": {"domain": "string", "dependencies": ["n_gpu_layers"]},
+    "fit": {"domain": "string"},
     "cache_type_k": {"domain": "string", "dependencies": ["cache_type_v"]},
     "cache_type_v": {"domain": "string", "dependencies": ["flash_attn", "cache_type_k"]},
     "kv_offload": {"domain": "boolean", "control": "switch"},
@@ -274,6 +301,8 @@ def control_facts(key: str, *, per_request: bool = False) -> dict[str, Any]:
              "apply_timing": "next_request" if per_request else "reload",
              "reset_value": None}
     facts.update(CONTROL_FACTS.get(key, {}))
+    if per_request:
+        facts["request_path"] = REQUEST_PATHS.get(key)
     return facts
 
 
@@ -439,12 +468,15 @@ def normalize_startup_requested(requested: dict[str, Any]) -> tuple[dict[str, An
     for key in STARTUP_INTS:
         if key not in cleaned:
             continue
+        if key == "ctx_size" and isinstance(cleaned[key], str) and cleaned[key].strip().lower() == "auto":
+            cleaned.pop(key)
+            continue
         normalized = normalize_int(cleaned[key], allow_negative=key in {"reasoning_budget", "threads", "threads_batch", "parallel", "spec_draft_threads", "spec_draft_threads_batch"})
         if key == "port" and normalized is not None and not 1 <= normalized <= 65535:
             normalized = None
         if key in {"threads", "threads_batch", "parallel", "spec_draft_threads", "spec_draft_threads_batch", "reasoning_budget"} and normalized is not None and normalized < -1:
             normalized = None
-        if key in {"parallel", "batch_size", "ubatch_size"} and normalized == 0:
+        if key in {"parallel", "batch_size"} and normalized == 0:
             normalized = None
         if normalized is None:
             invalid.append(key)
@@ -498,23 +530,9 @@ def normalize_startup_requested(requested: dict[str, Any]) -> tuple[dict[str, An
             del cleaned[key]
         else:
             cleaned[key] = normalized
-    if cleaned.get("n_gpu_layers", DEFAULT_GPU_PROFILE["n_gpu_layers"]) in {"auto", -1} and cleaned.get("fit") == "off":
-        invalid.append("fit")
-        cleaned.pop("fit", None)
     if cleaned.get("flash_attn") == "off" and str(cleaned.get("cache_type_v", "f16")).startswith(("q", "iq")):
         invalid.append("cache_type_v")
         cleaned.pop("cache_type_v", None)
-    if (type(cleaned.get("batch_size")) is int and type(cleaned.get("ubatch_size")) is int
-            and cleaned["ubatch_size"] > cleaned["batch_size"]):
-        invalid.append("ubatch_size")
-        cleaned.pop("ubatch_size", None)
-    if (type(cleaned.get("spec_draft_n_min")) is int and type(cleaned.get("spec_draft_n_max")) is int
-            and cleaned["spec_draft_n_min"] > cleaned["spec_draft_n_max"]):
-        invalid.append("spec_draft_n_min")
-        cleaned.pop("spec_draft_n_min", None)
-    if cleaned.get("n_gpu_layers") == 0:
-        for key, value in (("kv_offload", False), ("op_offload", False), ("mmproj_use_gpu", False), ("spec_draft_ngl", 0)):
-            cleaned.setdefault(key, value)
     return cleaned, invalid
 
 
@@ -688,8 +706,7 @@ def normalize_per_request_requested(requested: dict[str, Any]) -> tuple[dict[str
                 normalized = None
         if isinstance(normalized, int | float) and not isinstance(normalized, bool):
             if (facts.get("minimum") is not None and normalized < facts["minimum"]
-                    or facts.get("maximum") is not None and normalized > facts["maximum"]
-                    or key == "max_tokens" and normalized == 0):
+                    or facts.get("maximum") is not None and normalized > facts["maximum"]):
                 normalized = None
         if normalized is None:
             invalid.append(key)
@@ -778,14 +795,21 @@ def resolve_bags(
     per_request: dict[str, Any] | None = None,
     agent: dict[str, Any] | None = None,
     startup_overrides: dict[str, Any] | None = None,
+    startup_defaults: dict[str, Any] | None = None,
     per_request_defaults: dict[str, Any] | None = None,
 ) -> SettingsBags:
     loading, response = split_response_startup(startup or {}, per_request or {})
     startup_requested, invalid_enums = normalize_startup_requested(loading)
+    inherited_startup = {**DEFAULT_STARTUP, **(startup_defaults or {})}
+    # A deliberate native Auto is omission, distinct from resetting an override
+    # to the model's initial baseline.
+    for key, value in loading.items():
+        if key == "ctx_size" and isinstance(value, str) and value.strip().lower() == "auto":
+            inherited_startup.pop(key, None)
     startup_bag = resolve_bag(
         startup_requested,
         STARTUP_KEYS,
-        defaults=DEFAULT_STARTUP,
+        defaults=inherited_startup,
         overrides=startup_overrides,
     )
     startup_bag = startup_bag.model_copy(
@@ -802,7 +826,7 @@ def resolve_bags(
     )
     return SettingsBags(
         startup=startup_bag,
-        per_request=resolve_bag(response, PER_REQUEST_KEYS, defaults=per_request_defaults),
+        per_request=resolve_bag(response, PER_REQUEST_KEYS, defaults={"max_tokens": -1, **(per_request_defaults or {})}),
         agent=resolve_bag(
             agent or {},
             AGENT_KEYS,

@@ -1,76 +1,78 @@
-"""Accepted policy, persisted binding and transmitted allowance stay aligned."""
+"""Exact accepted generation values and native full-capacity profiles."""
 from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
 
-from workbench_backend.agents.helpers import freeze_settings
+from deepagents.middleware.summarization import create_summarization_middleware
+from langchain.agents.middleware.types import ModelRequest
+from langchain_core.messages import HumanMessage
+
+from tests.scripted_model import ScriptedChatModel
+from workbench_backend.agents.helpers import freeze_settings, require_accepted_model_identity
 from workbench_backend.agents.effective_setup import effective_setting_values
 from workbench_backend.agents.setup_schemas import SetupConfiguration
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.adapter import _direct_kwargs, _extra_body, _model_profile, _reasoning_replay_scope
-from workbench_backend.inference.response_budget import bind_output_budget, freeze_output_policy
 from workbench_backend.inference.schemas import Deployment, RunProfile, ServerProperties, SettingsBags
 from workbench_backend.inference.settings import resolve_bags
 
 
-def deployment(capacity=8192):
-    return Deployment(id="budget-child", display_name="Budget child", scope="managed", status="running", endpoint="http://127.0.0.1:9999/v1",
-        loaded_model_identity="exact-loaded-model", created_at="now", updated_at="now",
+def deployment(capacity=32768):
+    return Deployment(id="native-child", display_name="Native child", scope="managed", status="running",
+        endpoint="http://127.0.0.1:9999/v1", loaded_model_identity="exact-loaded-model", created_at="now", updated_at="now",
         server_props=ServerProperties(fetched="now", source_url="test", n_ctx=capacity,
             chat_template_caps={"supports_preserve_reasoning": True}))
 
 
-class ResponseBudgetTests(unittest.TestCase):
-    def test_auto_wire_and_compaction_share_once_bound_allowance(self):
-        dep = deployment()
-        for thinking, divisor in (("on", 2), ("off", 4), ("auto", 2)):
-            bag = bind_output_budget(dep, freeze_output_policy(resolve_bags(per_request={"reasoning": thinking}).per_request))
-            expected = (8192 - int(8192 * .08)) // divisor
-            self.assertEqual(_direct_kwargs(bag)["max_tokens"], expected)
-            self.assertEqual(_model_profile(dep, bag)["max_input_tokens"], 8192 - int(8192 * .08) - expected)
-            self.assertEqual(bag.output_budget_binding.total_tokens, expected)
-            # Reopening a run cannot re-tune its allowance from later capacity.
-            reopened = type(bag).model_validate(bag.model_dump(mode="json"))
-            self.assertEqual(bind_output_budget(deployment(16384), reopened).output_budget_binding, bag.output_budget_binding)
-            with self.assertRaises(HarnessError) as error:
-                bind_output_budget(deployment(expected), reopened)
-            self.assertEqual(error.exception.code, "response_budget_capacity_conflict")
+class NativeOutputDefaultsTests(unittest.TestCase):
+    def test_default_is_unlimited_and_thinking_never_changes_capacity_or_compaction(self):
+        for capacity in (8192, 32768, 98304, 131072):
+            for thinking in ("on", "off", "auto"):
+                with self.subTest(capacity=capacity, thinking=thinking):
+                    bag = resolve_bags(per_request={"reasoning": thinking}).per_request
+                    self.assertEqual(_direct_kwargs(bag)["max_tokens"], -1)
+                    self.assertEqual(_model_profile(deployment(capacity), bag)["max_input_tokens"], capacity)
+                    model = ScriptedChatModel([], profile={"max_input_tokens": capacity})
+                    native = create_summarization_middleware(model, backend=lambda _: None)
+                    request = ModelRequest(model=model, messages=[HumanMessage(content="hello")],
+                        tools=[], model_settings={"max_tokens": -1})
+                    threshold = int(capacity * .85)
+                    self.assertFalse(native._should_summarize(request.messages, threshold - 1))
+                    self.assertTrue(native._should_summarize(request.messages, threshold))
+                    self.assertEqual(native._lc_helper.keep, ("fraction", .10))
+                    self.assertEqual(native._input_budget(request), int(capacity * .95))
+                    self.assertEqual(int(capacity * .85), 27852 if capacity == 32768 else int(capacity * .85))
 
-    def test_explicit_and_publisher_caps_are_not_clamped_or_replaced(self):
-        explicit = bind_output_budget(deployment(), resolve_bags(per_request={"max_tokens": 701, "reasoning": "on"}).per_request)
-        publisher = bind_output_budget(deployment(), resolve_bags(per_request_defaults={"max_tokens": 901}).per_request)
-        self.assertEqual(explicit.output_budget_policy.mode, "explicit")
-        self.assertEqual(publisher.output_budget_policy.mode, "publisher")
-        self.assertEqual(_direct_kwargs(explicit)["max_tokens"], 701)
-        self.assertEqual(_direct_kwargs(publisher)["max_tokens"], 901)
-        with self.assertRaises(HarnessError):
-            bind_output_budget(deployment(512), explicit)
+    def test_explicit_finite_output_is_exact_and_sdk_reserves_it_once(self):
+        for value in (701, "701", -1):
+            bag = resolve_bags(per_request={"max_tokens": value}).per_request
+            self.assertEqual(_direct_kwargs(bag)["max_tokens"], int(value))
+            profile = _model_profile(deployment(), bag)
+            self.assertEqual(profile["max_input_tokens"], 32768)
+            model = ScriptedChatModel([], profile=profile)
+            native = create_summarization_middleware(model, backend=lambda _: None)
+            request = ModelRequest(model=model, messages=[HumanMessage(content="hello")], tools=[],
+                model_settings={"max_tokens": int(value), "max_completion_tokens": int(value)})
+            self.assertEqual(native._input_budget(request), int(32768 * .95) - max(0, int(value)))
 
-    def test_known_template_default_changes_policy_without_adding_a_request_override(self):
-        omitted = resolve_bags().per_request
-        accepted = freeze_output_policy(omitted, default_thinking=False)
-        self.assertNotIn("reasoning", accepted.requested)
-        self.assertNotIn("reasoning", accepted.applied)
-        self.assertFalse(accepted.output_budget_policy.thinking)
-        self.assertEqual(bind_output_budget(deployment(), accepted).applied["max_tokens"], 1884)
-        explicit = freeze_output_policy(resolve_bags(per_request={"reasoning": "on"}).per_request,
-            default_thinking=False)
-        self.assertTrue(explicit.output_budget_policy.thinking)
-
-    def test_chat_admission_freezes_selected_defaults_and_choices_not_child_defaults(self):
+    def test_chat_admission_freezes_selected_values_not_later_saved_or_child_defaults(self):
         profile = RunProfile(id="selected", display_name="Selected", created_at="now", updated_at="now",
-            bags=resolve_bags(per_request={"temperature": .31}, per_request_defaults={"top_p": .82}))
+            bags=resolve_bags(startup_defaults={"ctx_size": 32768}, per_request={"temperature": .31},
+                per_request_defaults={"top_p": .82}))
         manager = SimpleNamespace(get_profile=lambda _: profile,
             get_deployment=lambda _: deployment().model_copy(update={"settings": resolve_bags(per_request={"max_tokens": 123, "top_p": .2})}))
-        config = SetupConfiguration(profile_id="selected", deployment_id="budget-child", per_request_overrides={"reasoning": "off"})
+        config = SetupConfiguration(profile_id="selected", deployment_id="native-child",
+            startup_overrides={"n_gpu_layers": 12}, per_request_overrides={"reasoning": "off"})
         accepted = SettingsBags.model_validate(freeze_settings(manager, config))
         profile.bags.per_request.applied["top_p"] = .1
         self.assertEqual(accepted.per_request.applied["temperature"], .31)
         self.assertEqual(accepted.per_request.applied["top_p"], .82)
-        self.assertFalse(accepted.per_request.output_budget_policy.thinking)
-        self.assertNotIn("max_tokens", accepted.per_request.applied)
-        self.assertEqual(bind_output_budget(deployment(), accepted.per_request).applied["max_tokens"], 1884)
+        self.assertEqual(accepted.per_request.applied["max_tokens"], -1)
+        self.assertEqual(accepted.startup.applied["ctx_size"], 32768)
+        self.assertEqual(accepted.startup.applied["n_gpu_layers"], 12)
+        self.assertNotIn("output_budget_policy", accepted.per_request.model_dump())
+        self.assertNotIn("output_budget_binding", accepted.per_request.model_dump())
 
     def test_request_history_policy_matches_wire_and_replay(self):
         dep = deployment()
@@ -80,45 +82,31 @@ class ResponseBudgetTests(unittest.TestCase):
         self.assertEqual(_reasoning_replay_scope(dep, on), "full_history")
         self.assertEqual(_reasoning_replay_scope(dep, off), "current_turn")
 
-    def test_unknown_endpoint_capacity_does_not_invent_numeric_auto(self):
-        bag = bind_output_budget(deployment(None), resolve_bags().per_request)
-        self.assertIsNone(bag.output_budget_binding)
-        self.assertNotIn("max_tokens", _direct_kwargs(bag))
+    def test_unknown_capacity_uses_sdk_fallback_without_invented_cloud_limit(self):
+        bag = resolve_bags().per_request
+        profile = _model_profile(deployment(None), bag)
+        self.assertNotIn("max_input_tokens", profile)
+        model = ScriptedChatModel([], profile=profile)
+        native = create_summarization_middleware(model, backend=lambda _: None)
+        self.assertFalse(native._should_summarize([HumanMessage(content="hello")], 169999))
+        self.assertTrue(native._should_summarize([HumanMessage(content="hello")], 170000))
+        self.assertEqual(native._lc_helper.keep, ("messages", 6))
+        self.assertEqual(_direct_kwargs(bag)["max_tokens"], -1)
 
-    def test_cold_preview_labels_auto_and_preserves_publisher_allowance(self):
-        profile = RunProfile(id="selected", display_name="Selected", created_at="now", updated_at="now",
-            bags=resolve_bags())
+    def test_cold_preview_shows_actual_native_unlimited(self):
+        profile = RunProfile(id="selected", display_name="Selected", created_at="now", updated_at="now", bags=resolve_bags())
         manager = SimpleNamespace(store=SimpleNamespace(get_profile=lambda _: profile, get_deployment=lambda _: None))
-        config = SetupConfiguration(profile_id="selected")
-        auto = effective_setting_values(manager, config, {})["per_request.max_tokens"]
-        self.assertEqual(auto.source, "Workbench Auto")
-        self.assertFalse(auto.known)
-        self.assertIsNone(auto.value)
-        profile.bags = resolve_bags(per_request_defaults={"max_tokens": 901})
-        publisher = effective_setting_values(manager, config, {})["per_request.max_tokens"]
-        self.assertEqual(publisher.source, "Publisher recommendation")
-        self.assertEqual(publisher.value, 901)
-        self.assertTrue(publisher.known)
+        actual = effective_setting_values(manager, SetupConfiguration(profile_id="selected"), {})["per_request.max_tokens"]
+        self.assertEqual(actual.value, -1)
+        self.assertTrue(actual.known)
 
-    def test_saved_native_unlimited_and_numeric_strings_are_preserved(self):
-        unlimited = bind_output_budget(deployment(), resolve_bags(per_request={"max_tokens": -1}).per_request)
-        self.assertEqual(unlimited.output_budget_policy.mode, "explicit")
-        self.assertEqual(_direct_kwargs(unlimited)["max_tokens"], -1)
-        self.assertEqual(_model_profile(deployment(), unlimited)["max_input_tokens"], 8192 - int(8192 * .08))
-        numeric = bind_output_budget(deployment(), resolve_bags(per_request={"max_tokens": "701"}).per_request)
-        self.assertEqual(numeric.output_budget_policy.mode, "explicit")
-        self.assertEqual(_direct_kwargs(numeric)["max_tokens"], 701)
-
-    def test_runtime_binding_cannot_silently_move_to_another_exact_model(self):
-        bag = bind_output_budget(deployment(), resolve_bags().per_request)
-        changed = deployment().model_copy(update={"loaded_model_identity": "different-native-model"})
-        with self.assertRaises(HarnessError) as error:
-            bind_output_budget(changed, bag)
-        self.assertEqual(error.exception.code, "response_budget_model_conflict")
-        unknown_capacity = changed.model_copy(update={"server_props": None})
-        with self.assertRaises(HarnessError) as error:
-            bind_output_budget(unknown_capacity, bag)
-        self.assertEqual(error.exception.code, "response_budget_model_conflict")
+    def test_exact_model_identity_still_rejects_a_changed_model(self):
+        bags = resolve_bags()
+        bags.accepted_loading_identity = "exact-loaded-model"
+        require_accepted_model_identity(deployment(), bags)
+        with self.assertRaises(HarnessError) as caught:
+            require_accepted_model_identity(deployment().model_copy(update={"loaded_model_identity": "different-model"}), bags)
+        self.assertEqual(caught.exception.code, "accepted_model_identity_changed")
 
 
 if __name__ == "__main__":

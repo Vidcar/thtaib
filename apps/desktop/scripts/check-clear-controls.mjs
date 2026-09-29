@@ -5,157 +5,215 @@ import { createServer } from "vite";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.window = { setTimeout, clearTimeout };
-const vite = await createServer({ appType: "custom", server: { middlewareMode: true, hmr: false }, logLevel: "error" });
+const vite = await createServer({ appType: "custom", server: { middlewareMode: true, hmr: false }, optimizeDeps: { noDiscovery: true }, logLevel: "error" });
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 const text = node => typeof node === "string" ? node : (node?.children ?? []).map(text).join("");
+const elementText = node => node == null ? "" : Array.isArray(node) ? node.map(elementText).join("") : typeof node === "object" ? elementText(node.props?.children) : String(node);
+const elements = node => node == null ? [] : Array.isArray(node) ? node.flatMap(elements) : typeof node === "object" ? [node, ...elements(node.props?.children)] : [];
+const fact = value => ({ value, known: true, source: "gguf_template", default_value: value, default_source: "gguf_template" });
+const originalFetch = globalThis.fetch;
+let renderer;
 try {
   const { defaultSettingDisplay, settingValue } = await vite.ssrLoadModule("/src/renderer/effectiveSettings.ts");
   const { ResponseSettingsEditor } = await vite.ssrLoadModule("/src/renderer/ResponseSettingsEditor.tsx");
   const { SettingRow } = await vite.ssrLoadModule("/src/renderer/CompactControls.tsx");
-  const { ChoiceControl } = await vite.ssrLoadModule("/src/renderer/ModelControls.tsx");
+  const { ChoiceControl, ContextSlider, contextSliderValues, numberChoices } = await vite.ssrLoadModule("/src/renderer/ModelControls.tsx");
   const { ModelHardwareEstimate } = await vite.ssrLoadModule("/src/renderer/ModelHardwareEstimate.tsx");
-  const fact = { value: "off", known: true, source: "Turn overrides", inherited_value: "on", inherited_source: "Configuration: Balanced", default_value: "off", default_source: "gguf_template" };
-  assert.deepEqual(defaultSettingDisplay(fact, "configuration"), { value: "On", source: "Configuration default", label: "Use configuration default", title: "On · Configuration: Balanced" });
-  assert.equal(defaultSettingDisplay(fact, "model").value, "Off");
-  assert.equal(defaultSettingDisplay({ ...fact, inherited_value: "off", inherited_source: "gguf_template" }, "configuration").label, "Use configuration default", "following a configuration remains distinct even if its current default equals the template");
+  const native = { ...fact("off"), inherited_value: "on", inherited_source: "Configuration: Precise" };
+  assert.equal(defaultSettingDisplay(native, "configuration").value, "On");
+  assert.equal(defaultSettingDisplay(native, "model").value, "Off");
+  assert.equal(defaultSettingDisplay({ ...fact(-1), default_source: "pinned_runtime_default" }, "model", "max_tokens").title, "Unlimited · Runtime default", "reset targets use readable source labels");
+  assert.equal(settingValue(-1, "max_tokens"), "Unlimited");
+  assert.equal(settingValue(-1, "reasoning_budget_tokens"), "No separate limit");
   assert.equal(settingValue("all", "n_gpu_layers"), "All layers");
-  assert.equal(settingValue(-1, "n_gpu_layers"), "Automatic");
-  assert.equal(settingValue("off", "fit"), "Off");
-  assert.equal(settingValue("q4_0", "cache_type_k"), "q4_0");
-  assert.equal(settingValue(null, "ctx_size"), "Not reported");
+  for (const key of ["parallel", "threads", "threads_batch", "spec_draft_threads", "spec_draft_threads_batch"]) assert.equal(settingValue(-1, key), "Auto", `${key} help uses its named native mode`);
 
-  let renderer, requested = {}, writes = 0;
-  let resolved = 0.6;
-  const props = () => ({ part: "sampling", inheritance: "model", value: requested, facts: { "per_request.temperature": { value: Object.hasOwn(requested, "temperature") ? requested.temperature : resolved, known: true, source: "gguf_template", default_value: resolved, default_source: "gguf_template" } }, options: null, onChange: value => { writes++; requested = value; renderer.update(React.createElement(ResponseSettingsEditor, props())); } });
-  try {
-    await act(async () => { renderer = create(React.createElement(ResponseSettingsEditor, props())); });
-    const input = () => renderer.root.findAllByType("input").find(node => node.props.id === "model-response-temperature");
-    assert.equal(input().props.placeholder, "0.6");
-    assert.equal(writes, 0, "displaying defaults never creates an override");
-    resolved = 0.8;
-    await act(async () => renderer.update(React.createElement(ResponseSettingsEditor, props())));
-    assert.equal(input().props.placeholder, "0.8", "following controls update with changed defaults");
-    await act(async () => input().props.onChange({ target: { value: "0.67" } }));
-    resolved = 0.9;
-    await act(async () => renderer.update(React.createElement(ResponseSettingsEditor, { ...props(), loading: true })));
-    assert.equal(input().props.value, 0.67, "explicit selection survives future defaults");
-    assert.equal(input().props.disabled, false, "checking does not interrupt editing");
-    await act(async () => input().props.onChange({ target: { value: "" } }));
-    assert.deepEqual(requested, {}, "clearing restores omission");
-    assert.equal(input().props.placeholder, "0.9");
-    assert.ok(!text(renderer.root).includes("Inherited"));
-  } finally { if (renderer) await act(async () => renderer.unmount()); }
-
-  await stableModelsControls(SettingRow, ChoiceControl, ResponseSettingsEditor);
-
-  const originalFetch = globalThis.fetch;
-  const originalTimer = window.setTimeout;
-  const originalClear = window.clearTimeout;
-  const requests = [];
-  const pendingTimers = new Map(); let timerId = 0;
-  window.setTimeout = callback => { const id = ++timerId; pendingTimers.set(id, callback); return id; };
-  window.clearTimeout = id => pendingTimers.delete(id);
-  const flush = async () => { const timers = [...pendingTimers.values()]; pendingTimers.clear(); await act(async () => { timers.forEach(callback => callback()); await tick(); }); };
-  globalThis.fetch = async (_url, init) => { requests.push(JSON.parse(init.body)); return { ok: true, status: 200, json: async () => ({ hardware: { gpu_devices: [], ram_available_bytes: null, ram_total_bytes: null }, unknown_reasons: [], assumptions: [], estimated_at: new Date().toISOString() }) }; };
-  try {
-    await act(async () => { renderer = create(React.createElement(ModelHardwareEstimate, { selection: { bundle_id: "one", startup: {} } })); });
-    await flush();
-    await act(async () => renderer.root.findByProps({ "aria-label": "Refresh hardware estimate" }).props.onClick());
-    await flush();
-    await act(async () => renderer.update(React.createElement(ModelHardwareEstimate, { selection: { bundle_id: "one", startup: { ctx_size: 32768 } } })));
-    await flush();
-    assert.deepEqual(requests.map(request => request.refresh), [false, true, false], "manual Refresh bypasses the cache for one request only");
-    assert.ok(text(renderer.root).includes("Not reported"), "unknown GPU availability is explicit");
-  } finally { if (renderer) await act(async () => renderer.unmount()); globalThis.fetch = originalFetch; window.setTimeout = originalTimer; window.clearTimeout = originalClear; }
-} finally { await vite.close(); }
-console.log("Clear controls, live default following and one-request estimate refresh checks passed.");
-
-async function stableModelsControls(SettingRow, ChoiceControl, ResponseSettingsEditor) {
-  let renderer;
-  const mount = async element => { await act(async () => { renderer = create(element); }); };
-  const update = async element => { await act(async () => renderer.update(element)); };
-  const unmount = async () => { if (renderer) await act(async () => renderer.unmount()); renderer = null; };
+  let requested = {}, writes = 0, resolved = .6;
+  const sampling = () => React.createElement(ResponseSettingsEditor, { layout: "models", part: "sampling", inheritance: "model", value: requested,
+    facts: { "per_request.temperature": fact(Object.hasOwn(requested, "temperature") ? requested.temperature : resolved), "per_request.min_p": fact(0) }, options: null,
+    onChange: value => { writes++; requested = value; renderer.update(sampling()); } });
   const input = id => renderer.root.findAllByType("input").find(node => node.props.id === id);
-  const options = [{ value: "on", label: "On" }, { value: "off", label: "Off" }];
-  const choice = props => React.createElement(ChoiceControl, { id: "models-choice", label: "Placement", value: "", options, onChange: () => {}, custom: false, stable: true, ...props });
+  await act(async () => { renderer = create(sampling()); });
+  const temperature = input("model-response-temperature");
+  assert.equal(temperature.props.value, .6, "resolved default appears as the actual numeric value");
+  assert.equal(input("model-response-min_p").props.value, 0, "zero-valued publisher settings remain visible");
+  assert.equal(temperature.props.step, "any", "sampling accepts native decimal values between suggested increments");
+  assert.equal(input("model-response-presence_penalty").props.min, undefined);
+  assert.equal(input("model-response-presence_penalty").props.max, undefined, "suggested penalty spans are not runtime restrictions");
+  assert.equal(writes, 0, "displaying defaults never creates an override");
+  assert.equal(renderer.root.findAllByType("input").filter(node => node.props.type === "number").length, 7, "seven samplers are immediately visible");
+  assert.equal(renderer.root.findAllByType("input").filter(node => node.props.type === "range").length, 0, "sampling has no duplicate sliders");
+  resolved = .8;
+  await act(async () => renderer.update(sampling()));
+  assert.equal(input("model-response-temperature"), temperature, "updating defaults retains the mounted field");
+  assert.equal(temperature.props.value, .8);
+  await act(async () => temperature.props.onChange({ target: { value: "0.67" } }));
+  resolved = .9;
+  await act(async () => renderer.update(sampling()));
+  assert.equal(temperature.props.value, .67, "explicit selection survives a parent change");
+  await act(async () => temperature.props.onChange({ target: { value: "" } }));
+  assert.deepEqual(requested, {}, "clearing restores omission");
+  assert.equal(temperature.props.value, .9, "the actual inherited value returns");
+  await act(async () => renderer.unmount()); renderer = null;
+
+  const choices = [{ value: "on", label: "On" }, { value: "off", label: "Off" }];
+  const choice = resolvedValue => React.createElement(ChoiceControl, { id: "choice", label: "Flash attention", value: "", options: choices, custom: false, stable: true, resolvedValue, onChange: () => {} });
+  await act(async () => { renderer = create(choice("on")); });
+  const group = renderer.root.findByProps({ role: "radiogroup" });
+  assert.equal(group.findAllByType("input").find(node => node.props.checked).props.value, "on");
+  assert.ok(!text(group).includes("Default"));
+  await act(async () => renderer.update(choice("off")));
+  assert.equal(renderer.root.findByProps({ role: "radiogroup" }), group);
+  assert.equal(group.findAllByType("input").find(node => node.props.checked).props.value, "off");
+  await act(async () => renderer.unmount()); renderer = null;
+
+  let autoValue = "", autoResolved = -1, autoWrites = 0;
+  let autoOptions = [{ value: "-1", label: "Auto" }, ...numberChoices([1, 2, 4, 8])];
+  const autoChoice = () => React.createElement(ChoiceControl, { id: "cpu-threads", label: "CPU threads", value: autoValue, options: autoOptions, custom: true, stable: true, min: 0, resolvedValue: autoResolved, onChange: next => { autoWrites++; autoValue = next; renderer.update(autoChoice()); } });
+  await act(async () => { renderer = create(autoChoice()); });
+  const autoSelect = renderer.root.findByType("select");
+  const customThreads = renderer.root.findByProps({ "aria-label": "Custom cpu threads" });
+  assert.equal(autoSelect.props.value, "-1", "resolved numeric Auto remains a selected named mode");
+  assert.equal(text(autoSelect.findAllByType("option").find(node => node.props.value === "-1")), "Auto");
+  assert.equal(customThreads.props.value, ""); assert.equal(customThreads.props.disabled, true, "Auto never appears as a raw custom count");
+  assert.equal(autoWrites, 0, "showing inherited Auto does not create an override");
+  autoResolved = 8;
+  await act(async () => renderer.update(autoChoice()));
+  assert.equal(autoSelect.props.value, "8"); assert.equal(autoWrites, 0, "a resolved count refresh stays inherited");
+  await act(async () => autoSelect.props.onChange({ target: { value: "-1" } }));
+  assert.equal(autoValue, "-1", "explicit Auto keeps its native sentinel");
+  autoResolved = 16;
+  autoOptions = [...autoOptions, ...numberChoices([16])];
+  await act(async () => renderer.update(autoChoice()));
+  assert.equal(renderer.root.findByType("select"), autoSelect, "named-mode refresh retains the mounted select and focus target");
+  assert.equal(autoSelect.props.value, "-1", "explicit Auto survives a changed inherited count");
+  await act(async () => autoSelect.props.onChange({ target: { value: "custom" } }));
+  assert.equal(customThreads.props.disabled, false); assert.equal(customThreads.props.min, 0);
+  await act(async () => customThreads.props.onChange({ target: { value: "7" } }));
+  assert.equal(autoValue, "7"); assert.equal(customThreads.props.value, "7"); assert.equal(autoSelect.props.value, "custom");
+  autoOptions = autoOptions.map(option => ({ ...option }));
+  await act(async () => renderer.update(autoChoice()));
+  assert.equal(renderer.root.findByProps({ "aria-label": "Custom cpu threads" }), customThreads, "custom count refresh retains the mounted input and focus target");
+  assert.equal(customThreads.props.value, "7", "refresh does not replace a custom count with Auto");
+  await act(async () => renderer.unmount()); renderer = null;
+
+  for (const label of ["Prompt batch size", "Draft tokens"]) {
+    await act(async () => { renderer = create(React.createElement(ChoiceControl, { id: "native-count", label, value: "", options: numberChoices([0, 3, 6]), custom: true, stable: true, min: 0, resolvedValue: 0, onChange: () => {} })); });
+    assert.equal(renderer.root.findAllByType("select").length, 0, "ordinary numeric counts retain their compact numeric field");
+    assert.equal(input("native-count").props.type, "number"); assert.equal(input("native-count").props.min, 0); assert.equal(input("native-count").props.value, "0");
+    await act(async () => renderer.unmount()); renderer = null;
+  }
+
+  await act(async () => { renderer = create(React.createElement(ChoiceControl, { id: "draft-gpu", label: "Draft GPU layers", value: "", options: [{ value: "auto", label: "Auto" }, ...[0, 8, 16, 32].map(value => ({ value: String(value), label: String(value) }))], custom: true, stable: true, resolvedValue: "auto", onChange: () => {} })); });
+  assert.equal(renderer.root.findByType("select").props.value, "auto", "legitimate native Auto remains a selected mode alongside exact numeric choices");
+  assert.ok(renderer.root.findAllByType("input").every(node => node.props.value !== "auto"), "native modes are not rendered in invalid numeric inputs");
+  await act(async () => renderer.unmount()); renderer = null;
+
+  const values = contextSliderValues(33000, 32768);
+  assert.equal(values[0], 1024); assert.equal(values.at(-1), 33000);
+  assert.ok(values.slice(0, -1).every((value, index) => value === (index + 1) * 1024), "Context uses1024 increments plus the exact maximum");
+  assert.deepEqual(contextSliderValues(512, 512), [512], "small model maximum is respected");
+  let changed;
+  await act(async () => { renderer = create(React.createElement(ContextSlider, { id: "context", value: 32768, maximum: 33000, onChange: value => { changed = value; } })); });
+  assert.equal(renderer.root.findAllByType("input").length, 1, "Context has one control");
+  await act(async () => input("context").props.onChange({ target: { value: String(values.length - 1) } }));
+  assert.equal(changed, 33000, "the exact maximum endpoint can be selected");
+  const contextRange = input("context");
+  const contextSlider = (value, maximum = 262144) => React.createElement(ContextSlider, { id: "context", value, maximum, onChange: next => { changed = next; } });
+  await act(async () => renderer.update(contextSlider(32768)));
+  assert.equal(input("context"), contextRange, "updating Context retains the mounted range and focus");
+  assert.equal(contextRange.props.style["--range-fill"], `${31 / 255 * 100}%`, "32k in a 256k range fills to the thumb's actual position");
+  await act(async () => renderer.update(contextSlider(262144)));
+  assert.equal(contextRange.props.style["--range-fill"], "100%", "the maximum endpoint fills the whole track");
+  await act(async () => renderer.update(contextSlider(1024)));
+  assert.equal(contextRange.props.style["--range-fill"], "0%", "the minimum endpoint leaves the track unfilled");
+  await act(async () => renderer.update(contextSlider(null)));
+  assert.equal(contextRange.props.style["--range-fill"], "0%", "unknown context never inherits the global 50% track fill");
+  await act(async () => renderer.update(contextSlider(33000, 33000)));
+  assert.equal(contextRange.props.style["--range-fill"], "100%", "a non-1024 exact model maximum remains the final filled endpoint");
+  await act(async () => renderer.unmount()); renderer = null;
+
+  let value = { reasoning_budget_tokens: -1 }, pending = false;
+  const facts = { "per_request.reasoning": fact("on"), "per_request.reasoning_effort": fact("xhigh"), "per_request.reasoning_preserve": fact(true), "per_request.reasoning_budget_tokens": fact(-1), "per_request.max_tokens": { ...fact(-1), source: "pinned_runtime_default", default_source: "pinned_runtime_default" } };
+  const descriptors = { reasoning: { supported: true, request_path: "chat_template_kwargs.enable_thinking" }, reasoning_effort: { supported: true, request_path: "reasoning_effort", options: ["low", "medium", "xhigh"].map(value => ({ value, label: value })) }, reasoning_preserve: { supported: true, request_path: "chat_template_kwargs.preserve_reasoning" }, max_tokens: { supported: true, request_path: "max_tokens" }, reasoning_budget_tokens: { supported: true, request_path: "reasoning_budget" } };
+  const editor = () => React.createElement(ResponseSettingsEditor, { layout: "models", inheritance: "model", value, facts: pending ? {} : facts, presentationFacts: facts, options: { per_request_defaults: descriptors }, loading: pending, onChange: next => { value = next; renderer.update(editor()); } });
+  await act(async () => { renderer = create(editor()); });
+  const thinking = renderer.root.findAllByProps({ role: "radiogroup" })[0], history = renderer.root.findAllByProps({ role: "radiogroup" })[1];
+  assert.equal(thinking.findAllByType("input").find(node => node.props.checked).props.value, "xhigh", "known Thinking selects its real level");
+  assert.equal(history.findAllByType("input").find(node => node.props.checked).props.value, "keep");
+  assert.ok(!text(renderer.root).includes("Default"));
+  assert.equal(renderer.root.findByProps({ "aria-label": "Maximum output tokens mode" }).props.value, "unlimited");
+  assert.ok(!text(renderer.root).includes("half") && !text(renderer.root).includes("8%"));
+  const thinkingRow = renderer.root.findAllByType(SettingRow).find(node => node.props.label === "Thinking");
+  assert.match(elementText(thinkingRow.props.help), /chat_template_kwargs\.enable_thinking.*reasoning_effort/);
+  assert.equal(renderer.root.findAllByProps({ className: "setting-row-readout" }).length, 0, "provenance has no permanent column");
+  const outputDetails = () => elements(renderer.root.findAllByType(SettingRow).find(node => node.props.label === "Maximum output tokens").find(node => node.type?.name === "HoverHelp").props.children);
+  assert.equal(elementText(outputDetails().find(node => node.props?.className === "setting-help-source")), "Unlimited · Runtime default", "help shows the resolved value and readable source once");
+  assert.ok(!outputDetails().some(node => node.type === "small"), "Reset does not repeat the default value and source below the action");
+  assert.ok(!elementText(outputDetails()).includes("pinned_runtime_default"));
+  assert.equal(outputDetails().find(node => node.type === "code").props.children, "max_tokens", "native request path stays in help");
+  assert.ok(elementText(outputDetails()).includes("Applies to future messages."));
+  const outputReset = () => outputDetails().find(node => node.type === "button");
+  assert.equal(outputReset().props.disabled, true);
+  assert.equal(outputReset().props.title, undefined, "disabled Reset has no duplicated target tooltip");
+  const limit = input("response-thinking-budget-model"), format = renderer.root.findByProps({ id: "model-response-reasoning-format" });
+  pending = true;
+  await act(async () => renderer.update(editor()));
+  assert.equal(renderer.root.findAllByProps({ role: "radiogroup" })[0], thinking);
+  assert.equal(renderer.root.findAllByProps({ role: "radiogroup" })[1], history);
+  assert.equal(input("response-thinking-budget-model"), limit); assert.equal(renderer.root.findByProps({ id: "model-response-reasoning-format" }), format);
+  assert.equal(thinking.findAllByType("input").find(node => node.props.checked).props.value, "xhigh", "presentation survives pending resolution without another default position");
+  await act(async () => history.findAllByType("input").find(node => node.props.value === "drop").props.onChange());
+  assert.equal(value.reasoning_preserve, false, "Drop persists explicit false");
+  await act(async () => renderer.root.findByProps({ "aria-label": "Maximum output tokens mode" }).props.onChange({ target: { value: "custom" } }));
+  assert.equal(value.max_tokens, 2048, "switching from Unlimited still starts with a useful finite limit");
+  await act(async () => input("model-response-max_tokens").props.onChange({ target: { value: "6789" } }));
+  assert.equal(value.max_tokens, 6789); assert.equal(input("model-response-max_tokens").props.value, 6789);
+  assert.equal(input("model-response-max_tokens").props.placeholder, undefined, "finite output has no misleading No limit accessibility hint");
+  const outputField = input("model-response-max_tokens");
+  await act(async () => outputField.props.onChange({ target: { value: "0" } }));
+  assert.equal(value.max_tokens, 0, "native zero output remains an explicit value");
+  assert.equal(outputField.props.value, 0, "zero is displayed rather than an empty No limit field");
+  assert.equal(outputField.props.placeholder, undefined, "zero has no No limit placeholder in its accessible description");
+  assert.equal(outputField.props.min, 0, "custom output accepts the native nonnegative domain");
+  assert.equal(outputField.props.disabled, false);
+  assert.equal(renderer.root.findByProps({ "aria-label": "Maximum output tokens mode" }).props.value, "custom");
+  await act(async () => renderer.root.findByProps({ "aria-label": "Maximum output tokens mode" }).props.onChange({ target: { value: "custom" } }));
+  assert.equal(value.max_tokens, 0, "selecting Limit retains a configured zero");
+  await act(async () => renderer.update(editor()));
+  assert.equal(input("model-response-max_tokens"), outputField);
+  assert.equal(outputField.props.value, 0, "pending resolution retains the mounted zero value");
+  assert.equal(outputReset().props.disabled, false);
+  assert.equal(outputReset().props.title, "Unlimited · Runtime default");
+  await act(async () => outputReset().props.onClick());
+  assert.equal(Object.hasOwn(value, "max_tokens"), false, "help Reset restores inheritance without changing stored defaults");
+  assert.equal(renderer.root.findByProps({ "aria-label": "Maximum output tokens mode" }).props.value, "unlimited");
+  facts["per_request.max_tokens"] = { ...facts["per_request.max_tokens"], value: 0 };
+  pending = false;
+  await act(async () => renderer.update(editor()));
+  assert.equal(outputField.props.value, 0, "a resolved zero is also shown directly");
+  assert.equal(Object.hasOwn(value, "max_tokens"), false, "displaying a resolved zero does not create an override");
+  pending = true;
+  await act(async () => renderer.update(editor()));
+  assert.equal(outputField.props.value, 0, "a resolved zero survives a pending refresh");
+  await act(async () => renderer.root.findByProps({ "aria-label": "Maximum output tokens mode" }).props.onChange({ target: { value: "unlimited" } }));
+  assert.equal(value.max_tokens, -1, "Unlimited remains the distinct native -1 value");
+  assert.equal(outputField.props.value, ""); assert.equal(outputField.props.disabled, true); assert.equal(outputField.props.placeholder, "No limit");
+  await act(async () => renderer.unmount()); renderer = null;
+
+  const originalTimer = window.setTimeout, originalClear = window.clearTimeout;
+  const requests = [], timers = new Map(); let timerId = 0;
+  window.setTimeout = callback => { const id = ++timerId; timers.set(id, callback); return id; }; window.clearTimeout = id => timers.delete(id);
+  const flush = async () => { const callbacks = [...timers.values()]; timers.clear(); await act(async () => { callbacks.forEach(callback => callback()); await tick(); }); };
+  globalThis.fetch = async (_url, init) => { requests.push(JSON.parse(init.body)); return { ok: true, status: 200, json: async () => ({ hardware: { gpu_devices: [], ram_available_bytes: null, ram_total_bytes: null }, source: "metadata", unknown_reasons: [], assumptions: [], estimated_at: new Date().toISOString() }) }; };
   try {
-    await mount(choice({ resolvedLabel: "An exceptionally long model default description" }));
-    const group = renderer.root.findByProps({ role: "radiogroup" });
-    await update(choice({ resolvedLabel: "On" }));
-    assert.equal(renderer.root.findByProps({ role: "radiogroup" }), group, "a resolved label's length cannot replace the mounted control kind");
-    assert.equal(text(group).includes("Model default"), false, "the value/source column owns dynamic defaults");
-    await unmount();
-
-    await mount(choice({ custom: true, value: "on" }));
-    const custom = renderer.root.findByProps({ "aria-label": "Custom placement" });
-    assert.equal(custom.props.disabled, true);
-    await update(choice({ custom: true, value: "custom" }));
-    assert.equal(renderer.root.findByProps({ "aria-label": "Custom placement" }), custom, "Custom enables an existing exact-entry slot");
-    assert.equal(custom.props.disabled, false);
-    await unmount();
-
-    const row = props => React.createElement(SettingRow, { layout: "models", label: "Stable row", help: "Setting help", ...props }, React.createElement("input", { value: "" }));
-    await mount(row({ hint: "A long explanation belongs in accessible help.", provenance: "Before" }));
-    const reset = renderer.root.findAllByType("button").find(node => text(node) === "Reset");
-    assert.equal(reset.props.disabled, true);
-    assert.equal(renderer.root.findAllByProps({ className: "setting-row-hint" }).length, 0, "variable prose leaves the row's flow");
-    const status = renderer.root.findByProps({ className: "setting-row-status" });
-    await update(row({ provenance: "After", onReset: () => {}, status: "Checking…" }));
-    assert.equal(renderer.root.findAllByType("button").find(node => text(node) === "Reset"), reset, "Reset availability retains its mounted slot");
-    assert.equal(reset.props.disabled, false);
-    assert.equal(renderer.root.findByProps({ className: "setting-row-status" }), status, "pending status uses a reserved slot");
-    await unmount();
-
-    const fact = value => ({ value, known: true, source: "gguf_template", default_value: value, default_source: "gguf_template" });
-    const facts = {
-      "per_request.reasoning": fact("on"), "per_request.reasoning_preserve": fact(true),
-      "per_request.reasoning_budget_tokens": fact(-1), "per_request.max_tokens": fact(4096),
-    };
-    const descriptors = { reasoning: { supported: true }, reasoning_preserve: { supported: true }, reasoning_budget_tokens: { supported: true }, max_tokens: { supported: true }, reasoning_format: { supported: true, options: [{ value: "auto", label: "Automatic" }, { value: "none", label: "No separation" }] } };
-    let value = { reasoning_budget_tokens: -1 };
-    let pending = false;
-    const editor = extra => React.createElement(ResponseSettingsEditor, {
-      layout: "models", inheritance: "model", value, options: { per_request_defaults: descriptors },
-      facts: pending ? {} : facts, presentationFacts: facts, loading: pending,
-      onChange: next => { value = next; renderer.update(editor()); }, ...extra,
-    });
-    await mount(editor());
-    const thinking = renderer.root.findAllByProps({ role: "radiogroup" })[0];
-    const history = renderer.root.findAllByProps({ role: "radiogroup" })[1];
-    const limit = input("response-thinking-budget-model");
-    const format = renderer.root.findByProps({ id: "model-response-reasoning-format" });
-    assert.equal(limit.props.value, "", "unlimited thinking has a named mode instead of a visible numeric sentinel");
-    assert.equal(limit.props.placeholder, "No limit");
-    assert.equal(renderer.root.findByProps({ "aria-label": "Thinking limit mode" }).props.value, "unlimited");
-    assert.equal(renderer.root.findAllByType("button").some(node => String(node.props.title).startsWith("-1")), false, "reset help also names the unlimited default");
-    pending = true;
-    await update(editor());
-    assert.equal(renderer.root.findAllByProps({ role: "radiogroup" })[0], thinking, "Thinking remains mounted when authoritative facts are pending");
-    assert.equal(renderer.root.findAllByProps({ role: "radiogroup" })[1], history, "history does not flip from a switch to a selector during checks");
-    assert.equal(input("response-thinking-budget-model"), limit);
-    assert.equal(renderer.root.findByProps({ id: "model-response-reasoning-format" }), format);
-    assert.ok(text(renderer.root).includes("Checking…"));
-    assert.ok(text(renderer.root).includes("Last checked"), "a retained presentation value does not claim current authority");
-
-    await act(async () => renderer.root.findByProps({ "aria-label": "Thinking limit mode" }).props.onChange({ target: { value: "custom" } }));
-    assert.equal(value.reasoning_budget_tokens, 1024);
-    await act(async () => limit.props.onChange({ target: { value: "" } }));
-    assert.equal(Object.hasOwn(value, "reasoning_budget_tokens"), false, "clearing restores canonical omission");
-    assert.equal(limit.props.disabled, false, "clearing to Default leaves the mounted number entry focused and usable");
-    await act(async () => limit.props.onChange({ target: { value: "3456" } }));
-    assert.equal(value.reasoning_budget_tokens, 3456);
-    await act(async () => format.props.onChange({ target: { value: "none" } }));
-    assert.equal(value.reasoning_format, "none", "format uses the canonical response owner");
-    await act(async () => history.findAllByType("input").find(node => node.props.value === "drop").props.onChange());
-    assert.equal(value.reasoning_preserve, false, "Drop persists explicit false rather than omitting history");
-    const budget = input("model-response-max_tokens");
-    await act(async () => budget.props.onChange({ target: { value: "6789" } }));
-    assert.equal(input("model-response-max_tokens").props.value, 6789, "authoring remains immediate while the resolver is delayed");
-    assert.ok(text(renderer.root).includes("6789"));
-    assert.equal(Object.hasOwn(value, "reasoning_budget"), false, "editing never reintroduces the startup alias");
-
-    await update(editor({ options: { per_request_defaults: { ...descriptors, reasoning_budget_tokens: { supported: false, description: "Unsupported by the current template." } } } }));
-    assert.equal(input("response-thinking-budget-model"), limit, "current unavailability disables rather than removes the input");
-    assert.equal(limit.props.disabled, true, "presentation snapshots cannot override the current descriptor's support");
-  } finally { await unmount(); }
-}
+    await act(async () => { renderer = create(React.createElement(ModelHardwareEstimate, { selection: { bundle_id: "one", startup: {} } })); }); await flush();
+    await act(async () => renderer.root.findByProps({ "aria-label": "Refresh hardware estimate" }).props.onClick()); await flush();
+    await act(async () => renderer.root.findAllByType("button").find(node => text(node) === "Check with native engine").props.onClick()); await flush();
+    await act(async () => renderer.update(React.createElement(ModelHardwareEstimate, { selection: { bundle_id: "one", startup: { ctx_size: 32768 } } }))); await flush();
+    assert.deepEqual(requests.map(request => request.method), ["metadata", "metadata", "native", "metadata"], "ordinary edits use metadata; native runs only after an explicit request");
+    assert.deepEqual(requests.map(request => request.refresh), [false, true, true, false], "refresh applies to one request");
+    assert.ok(text(renderer.root).includes("Not reported"), "unknown GPU availability stays explicit");
+  } finally { if (renderer) await act(async () => renderer.unmount()); renderer = null; window.setTimeout = originalTimer; window.clearTimeout = originalClear; }
+} finally { if (renderer) await act(async () => renderer.unmount()); globalThis.fetch = originalFetch; await vite.close(); }
+console.log("Compact resolved controls, Context endpoints, stable editing and explicit native memory checks passed.");

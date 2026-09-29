@@ -4,7 +4,7 @@ import "./ModelInspector.css";
 
 export type ModelInspectorView = "presets" | "checks" | "memory" | "runtime" | "card" | "files" | "setup";
 export type ModelInspectorConnection = { view: ModelInspectorView | null; target: HTMLElement | null; open: (view: ModelInspectorView) => void; close: () => void };
-const titles: Record<ModelInspectorView, string> = { presets: "Model-card presets", checks: "Checked setup", memory: "Memory details", runtime: "Loaded model", card: "Model card", files: "Files & model information", setup: "Manage saved setup" };
+const titles: Record<ModelInspectorView, string> = { presets: "Model card", checks: "Checked setup", memory: "Memory details", runtime: "Loaded model", card: "Read model card", files: "Files & model information", setup: "Manage saved setup" };
 
 export function ModelInspector({ view, onClose, onTarget, content, children }: {
   view: ModelInspectorView | null; onClose: () => void; onTarget: (target: HTMLDivElement | null) => void; content?: ReactNode; children: ReactNode;

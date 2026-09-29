@@ -7,18 +7,159 @@ GGUFWriter.
 from __future__ import annotations
 
 import gc
+from collections import OrderedDict
+from copy import deepcopy
+from dataclasses import dataclass
+import math
+import struct
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 from gguf import GGUFReader
+from gguf.constants import GGMLQuantizationType, GGML_QUANT_SIZES
 
 from workbench_backend.errors import ManagerError
 from workbench_backend.inference.hashes import sha256_file
+from workbench_backend.inference.hashes import _cache_key
 from workbench_backend.inference.schemas import GgufRuntimeMetadata, InspectReport, InspectTensor
 
 OMIT_PREFIXES = ("tokenizer.ggml.tokens", "tokenizer.ggml.scores", "tokenizer.ggml.merges")
 MAX_FIELD_CHARS = 4000
 READER_MODE = "r"
+MAX_METADATA_BYTES = 16 * 1024 * 1024
+_DIRECTORY_CACHE: OrderedDict[tuple, tuple["GgufFields", int | None]] = OrderedDict()
+_DIRECTORY_LOCK = RLock()
+
+
+@dataclass(frozen=True)
+class GgufTensorMetadata:
+    """A directory entry; never maps or reads the tensor's weight bytes."""
+
+    name: str
+    shape: tuple[int, ...]
+    tensor_type: int
+    n_bytes: int | None
+
+
+class GgufFields(dict[str, Any]):
+    """GGUF values with non-wire directory facts for allocation previews."""
+
+    tensors: tuple[GgufTensorMetadata, ...]
+
+    def __init__(self, values=None, *, tensors=()) -> None:
+        super().__init__(values or {})
+        self.tensors = tuple(tensors)
+
+
+def tensor_metadata(name: str, shape: tuple[int, ...], kind: int) -> GgufTensorMetadata:
+    size = None
+    try:
+        block, item_size = GGML_QUANT_SIZES[GGMLQuantizationType(kind)]
+        if shape and all(0 < item <= 2**40 for item in shape) and shape[0] % block == 0:
+            size = math.prod(shape) // block * item_size
+    except (ValueError, KeyError):
+        pass
+    return GgufTensorMetadata(name, shape, kind, size)
+
+
+class IncompleteMetadata(ValueError):
+    pass
+
+
+def parse_gguf_directory(payload: bytes) -> tuple[dict[str, Any], int | None]:
+    """Bounded structural inspection; use gguf's quant block sizes, not guessed bits."""
+    offset = 0
+    endian = "<"
+
+    def take(size: int) -> bytes:
+        nonlocal offset
+        if size < 0 or size > MAX_METADATA_BYTES or offset + size > MAX_METADATA_BYTES:
+            raise ValueError("GGUF metadata exceeds the inspection budget")
+        if offset + size > len(payload):
+            raise IncompleteMetadata("More GGUF metadata is required")
+        result = payload[offset:offset + size]
+        offset += size
+        return result
+
+    def number(fmt: str):
+        return struct.unpack(endian + fmt, take(struct.calcsize(fmt)))[0]
+
+    def string(*, keep: bool = True):
+        size = number("Q")
+        raw = take(size)
+        return raw.decode("utf-8") if keep else None
+
+    def value(kind: int, *, keep: bool = True):
+        formats = {0: "B", 1: "b", 2: "H", 3: "h", 4: "I", 5: "i", 6: "f", 7: "?", 10: "Q", 11: "q", 12: "d"}
+        if kind in formats:
+            result = number(formats[kind])
+            return result if keep else None
+        if kind == 8:
+            return string(keep=keep)
+        if kind == 9:
+            element, count = number("I"), number("Q")
+            if count > MAX_METADATA_BYTES or element == 9:
+                raise ValueError("Unsupported GGUF metadata array")
+            if element in formats:
+                raw = take(struct.calcsize(formats[element]) * count)
+                return list(struct.unpack(endian + str(count) + formats[element], raw)) if keep else None
+            if keep:
+                return [value(element) for _ in range(count)]
+            for _ in range(count):
+                value(element, keep=False)
+            return None
+        raise ValueError("Unknown GGUF metadata type")
+
+    if take(4) != b"GGUF":
+        raise ValueError("Not a GGUF file")
+    raw_version = take(4)
+    version = struct.unpack("<I", raw_version)[0]
+    if version not in {2, 3}:
+        endian = ">"
+        version = struct.unpack(">I", raw_version)[0]
+    if version not in {2, 3}:
+        raise ValueError("Unsupported GGUF version")
+    tensor_count, field_count = number("Q"), number("Q")
+    if tensor_count > 1000000 or field_count > 1000000:
+        raise ValueError("Invalid GGUF directory count")
+    fields = GgufFields()
+    for _ in range(field_count):
+        name = string()
+        if len(name) > 1024:
+            raise ValueError("Invalid GGUF metadata key")
+        kind = number("I")
+        keep = not name.startswith("tokenizer.") or name == "tokenizer.chat_template"
+        entry = value(kind, keep=keep)
+        if keep:
+            fields[name] = entry
+    total = 0
+    known = True
+    tensors = []
+    for _ in range(tensor_count):
+        name = string()
+        dimensions = number("I")
+        if not 1 <= dimensions <= 4:
+            raise ValueError("Invalid GGUF tensor dimensions")
+        shape = [number("Q") for _ in range(dimensions)]
+        kind, _tensor_offset = number("I"), number("Q")
+        tensor = tensor_metadata(name, tuple(shape), kind)
+        tensors.append(tensor)
+        if tensor.n_bytes is None:
+            known = False
+        else:
+            total += tensor.n_bytes
+    fields.tensors = tuple(tensors)
+    return fields, total if known else None
+
+
+def invalidate_gguf_metadata(path: Path) -> None:
+    """An explicit refresh invalidates just this file's cached directory."""
+    identity = str(path.resolve())
+    with _DIRECTORY_LOCK:
+        for key in list(_DIRECTORY_CACHE):
+            if key[0] == identity:
+                del _DIRECTORY_CACHE[key]
 
 
 class _RuntimeMetadataReader(GGUFReader):
@@ -32,10 +173,14 @@ class _RuntimeMetadataReader(GGUFReader):
     """
 
     def _build_tensors(self, _offset: int, fields: list[Any]) -> None:
-        # Names are in the GGUF directory; no tensor data or type decoding is needed.
-        self.has_mtp_tensors = any(
-            bytes(field.parts[1]).decode("utf-8", errors="replace").endswith(".nextn.eh_proj.weight")
+        # Preserve names/shapes without constructing tensors or decoding newer types.
+        self.tensor_metadata = tuple(
+            tensor_metadata(bytes(field.parts[1]).decode("utf-8", errors="replace"),
+                            tuple(int(value) for value in field.parts[3]), int(field.parts[4][0]))
             for field in fields
+        )
+        self.has_mtp_tensors = any(
+            tensor.name.endswith(".nextn.eh_proj.weight") for tensor in self.tensor_metadata
         )
 
 
@@ -139,16 +284,7 @@ def read_gguf_runtime_metadata(path: Path) -> GgufRuntimeMetadata:
             code="gguf_missing",
             status_code=404,
         )
-    reader = _RuntimeMetadataReader(str(path), READER_MODE)
-    try:
-        fields = {
-            name: _jsonable(field.contents())
-            for name, field in reader.fields.items()
-            if name in {"general.architecture", "general.name", "tokenizer.chat_template"}
-            or name.endswith((".context_length", ".block_count", ".nextn_predict_layers"))
-        }
-    finally:
-        _close_reader(reader)
+    fields, _ = read_gguf_directory(path)
     architecture = _as_str(fields.get("general.architecture"))
     prefix = f"{architecture}." if architecture else None
     context_length = _as_int(fields.get(f"{prefix}context_length")) if prefix else None
@@ -160,8 +296,47 @@ def read_gguf_runtime_metadata(path: Path) -> GgufRuntimeMetadata:
         block_count=block_count if block_count is not None and block_count > 0 else None,
         chat_template=_as_str(fields.get("tokenizer.chat_template")),
         nextn_predict_layers=_as_int(fields.get(f"{prefix}nextn_predict_layers")) if prefix else None,
-        has_mtp_tensors=reader.has_mtp_tensors,
+        has_mtp_tensors=any(tensor.name.endswith(".nextn.eh_proj.weight") for tensor in fields.tensors),
     )
+
+
+def read_gguf_directory(path: Path, *, refresh: bool = False) -> tuple[GgufFields, int | None]:
+    """Cache detached metadata by lightweight file identity, not whole-file hashes."""
+    if refresh:
+        invalidate_gguf_metadata(path)
+    identity = _cache_key(path)
+    with _DIRECTORY_LOCK:
+        cached = _DIRECTORY_CACHE.get(identity)
+        if cached is not None:
+            _DIRECTORY_CACHE.move_to_end(identity)
+            return deepcopy(cached)
+        # The stock reader builds many numpy objects for a large vocabulary even
+        # when tensors are disabled. The existing bounded directory parser skips
+        # those token arrays; ordinary previews do not need their contents.
+        try:
+            with path.open("rb") as handle:
+                fields, weights = parse_gguf_directory(handle.read(MAX_METADATA_BYTES))
+        except (IncompleteMetadata, ValueError) as exc:
+            if not isinstance(exc, IncompleteMetadata) and "exceeds the inspection budget" not in str(exc):
+                raise
+            # Large metadata remains usable through the installed upstream reader.
+            reader = _RuntimeMetadataReader(str(path), READER_MODE)
+            try:
+                fields = GgufFields({
+                    name: _jsonable(field.contents()) for name, field in reader.fields.items()
+                    if not name.startswith(("GGUF.", "tokenizer.")) or name == "tokenizer.chat_template"
+                }, tensors=reader.tensor_metadata)
+                weights = (sum(tensor.n_bytes for tensor in fields.tensors)
+                           if all(tensor.n_bytes is not None for tensor in fields.tensors) else None)
+            finally:
+                _close_reader(reader)
+        if _cache_key(path) != identity:
+            raise ValueError("Model files changed during metadata inspection. Refresh to retry.")
+        cached = fields, weights
+        _DIRECTORY_CACHE[identity] = cached
+        while len(_DIRECTORY_CACHE) > 32:
+            _DIRECTORY_CACHE.popitem(last=False)
+        return deepcopy(cached)
 
 
 def _close_reader(reader: GGUFReader) -> None:

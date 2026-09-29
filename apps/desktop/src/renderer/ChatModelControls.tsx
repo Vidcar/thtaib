@@ -3,8 +3,9 @@ import { api } from "./api";
 import { Icon } from "./Icon";
 import { MenuPopover } from "./MenuPopover";
 import { Notice } from "./Notice";
-import { CompactSlider, CompactSwitch, SegmentedChoice, SettingRow } from "./CompactControls";
-import { tokenLabel } from "./ModelControls";
+import { SettingRow } from "./CompactControls";
+import { ContextSlider, tokenLabel } from "./ModelControls";
+import { ResponseSettingsEditor } from "./ResponseSettingsEditor";
 import { ModelHardwareEstimate } from "./ModelHardwareEstimate";
 import { mergedStartup } from "./deploymentSettings";
 import { errorMessage } from "./errors";
@@ -146,17 +147,18 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   const preview = useSetupPreview(previewConfiguration, projectId, agentSetupVersionId, "conversation", "", tuningOpen);
   const facts = preview.data?.effective_values ?? {};
   const optionStartup = JSON.stringify(previewConfiguration.startup_overrides ?? {});
-  const optionKey = JSON.stringify([selectedBundleId, selectedProfile?.id, selectedProfile?.revision, selectedDeployment?.id, optionStartup]);
-  const [optionsResult, setOptionsResult] = useState<{ key: string; data: BundleConfigurationOptions } | null>(null);
+  const optionOwnerKey = JSON.stringify([selectedBundleId, selectedProfile?.id, selectedProfile?.revision, selectedDeployment?.id]);
+  const optionKey = JSON.stringify([optionOwnerKey, optionStartup]);
+  const [optionsResult, setOptionsResult] = useState<{ key: string; ownerKey: string; data: BundleConfigurationOptions } | null>(null);
   useEffect(() => {
     if (!tuningOpen || (!selectedBundleId && !selectedDeployment?.id)) return;
     let cancelled = false;
     const request = selectedBundleId ? api.modelConfiguration(selectedBundleId, selectedDeployment?.id, false, { configuration_id: selectedProfile?.id, startup: JSON.parse(optionStartup) as Record<string, unknown> })
       : api.deploymentConfiguration(selectedDeployment!.id);
-    void request.then(data => { if (!cancelled) setOptionsResult({ key: optionKey, data }); }).catch(failure => { if (!cancelled) setError(errorMessage(failure)); });
+    void request.then(data => { if (!cancelled) setOptionsResult({ key: optionKey, ownerKey: optionOwnerKey, data }); }).catch(failure => { if (!cancelled) setError(errorMessage(failure)); });
     return () => { cancelled = true; };
   }, [tuningOpen, optionKey, selectedBundleId, selectedDeployment?.id]);
-  const options = optionsResult?.key === optionKey ? optionsResult.data : null;
+  const options = optionsResult?.ownerKey === optionOwnerKey ? optionsResult.data : null;
   function preferredConfiguration(bundle: ModelBundle): RunProfile | undefined {
     return profiles.find(item => item.bundle_id === bundle.id && item.id === selectedProfile?.id)
       ?? profiles.find(item => item.bundle_id === bundle.id && item.id === remembered(configuration)[bundle.id]?.model_configuration_id)
@@ -267,27 +269,22 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   }
   const baseContext = facts["startup.ctx_size"]?.inherited_value;
   const contextSupported = Boolean(selectedProfile?.bundle_id) && options?.context_size.supported !== false;
-  const modes = options?.per_request_defaults.reasoning;
-  const efforts = options?.per_request_defaults.reasoning_effort;
   const tuningChanged = context !== incomingContext;
-  const defaults = (key: string, target: "configuration" | "model" = "configuration") => defaultSettingDisplay(facts["per_request." + key], target, key);
   const contextDefault = defaultSettingDisplay(facts["startup.ctx_size"], "configuration", "ctx_size");
   const thinkingFacts = residency.data?.effective_values ?? facts;
-  const effectiveThinking = thinking.reasoning ?? thinkingFacts["per_request.reasoning"]?.value;
-  const thinkingLevels = (efforts?.options ?? []).filter(item => typeof item.value === "string" && !["default", "auto"].includes(String(item.value)));
-  const thinkingChoice = thinking.reasoning === "off" ? "off" : String(thinking.reasoning_effort ?? "");
   const loadedContext = selectedDeployment?.server_props?.n_ctx;
   const selectedContext = typeof baseContext === "number" ? baseContext : selectedProfile?.bags.startup.requested.ctx_size;
   const contextMaximum = options?.context_size.maximum;
-  const capacitySteps = (options?.context_size.options ?? []).map(item => Number(item.value)).filter(item => Number.isSafeInteger(item) && item > 0 && (!contextMaximum || item <= contextMaximum));
-  if (capacitySteps.length < 2) { for (let size = 2048; size <= (contextMaximum ?? 131072); size *= 2) capacitySteps.push(size); if (contextMaximum && !capacitySteps.includes(contextMaximum)) capacitySteps.push(contextMaximum); }
   const capacityLabel = (size: unknown) => size === 0 ? contextMaximum ? `Full · ${tokenLabel(contextMaximum)} tokens` : "Full model capacity" : typeof size === "number" && size > 0 ? `${tokenLabel(size)} tokens` : "Auto";
   const displayedContext = context === 0 ? contextMaximum ?? null : context ?? (selectedContext === 0 ? contextMaximum ?? null : typeof selectedContext === "number" ? selectedContext : null);
   const needsReload = tuningChanged || !runtimeBusy && selectedState.tone !== "ready";
   const term = search.trim().toLocaleLowerCase();
   const visibleBundles = availableBundles.filter(item => (item.status === "ready" || item.disk_matches) && [modelLabel(item, availableBundles), modelDetails(item), ...profiles.filter(profile => profile.bundle_id === item.id).map(profile => profile.display_name)].join(" ").toLocaleLowerCase().includes(term));
   const visibleConnected = connectedChoices.filter(item => item.display_name.toLocaleLowerCase().includes(term));
-  const visibleKeys = [...visibleBundles.flatMap(bundle => [preferredConfiguration(bundle)?.id ?? bundle.id, ...profiles.filter(profile => profile.bundle_id === bundle.id).map(profile => `${profile.id}:variant`)]), ...visibleConnected.map(item => item.id)];
+  const visibleKeys = [...visibleBundles.flatMap(bundle => {
+    const variants = profiles.filter(profile => profile.bundle_id === bundle.id);
+    return [preferredConfiguration(bundle)?.id ?? bundle.id, ...(variants.length > 1 ? variants.map(profile => `${profile.id}:variant`) : [])];
+  }), ...visibleConnected.map(item => item.id)];
   const visibleKeySignature = visibleKeys.join("|");
   useEffect(() => {
     if (!pickerOpen) return;
@@ -312,7 +309,7 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
             const variants = profiles.filter(item => item.bundle_id === bundle.id);
             return <div key={bundle.id} className="chat-model-row">
               <div className="chat-model-primary">{choiceRow(profile ?? null, null, modelLabel(bundle, availableBundles), close, "chat-model-choice", modelDescription(bundle), [modelDetails(bundle), profile?.display_name].filter(Boolean).join(" · "))}</div>
-              {variants.length ? <div className="chat-model-variants" role="group" aria-label={"Settings for " + modelLabel(bundle, availableBundles)}>{variants.map(item => choiceRow(item, null, item.display_name, close, "chat-model-choice chat-model-variant", "", modelDetails(bundle)))}</div> : null}
+              {variants.length > 1 ? <div className="chat-model-variants" role="group" aria-label={"Settings for " + modelLabel(bundle, availableBundles)}>{variants.map(item => choiceRow(item, null, item.display_name, close, "chat-model-choice chat-model-variant", "", modelDetails(bundle)))}</div> : null}
             </div>;
           })}
           {visibleConnected.map(item => choiceRow(null, item, item.display_name.replace(/^connected:/, ""), close, "chat-model-choice", "Connected server"))}
@@ -325,23 +322,21 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
     <MenuPopover label="Tune model" trigger={<Icon name="tune" size={16} />} className="chat-tuning" panelClassName="chat-model-controls-panel chat-tuning-panel" disabled={disabled || (!selectedProfile && !selectedDeployment)} onOpenChange={setTuningOpen}>
       {close => <>
         <div className="chat-tuning-body">
-        <header className="chat-tuning-heading"><strong>This chat</strong><span className="hint">Thinking applies to the next message</span></header>
+        <header className="chat-tuning-heading"><strong>This chat</strong></header>
         <div className="setting-rows chat-thinking-settings">
-          {efforts?.supported && thinkingLevels.length ? <SegmentedChoice label="Thinking" value={thinkingChoice} meta={thinking.reasoning != null || thinking.reasoning_effort != null ? "This chat" : defaults("reasoning_effort").source} description="Only levels effective for the selected model template are offered. Saved sampling settings stay in place." options={[{ value: "", label: "Default" }, ...(modes?.supported ? [{ value: "off", label: "Off" }] : []), ...thinkingLevels.map(item => ({ value: String(item.value), label: item.label }))]} disabled={busy} onChange={choice => { const next = { ...thinking }; delete next.reasoning; delete next.reasoning_effort; if (choice === "off") next.reasoning = "off"; else if (choice) { if (modes?.supported) next.reasoning = "on"; next.reasoning_effort = choice; } void applyThinking(next); }} hint={thinkingChoice ? undefined : `${defaults("reasoning_effort").value} · ${defaults("reasoning_effort").source}`} /> : modes?.supported && effectiveThinking == null ? <SegmentedChoice label="Thinking" value={String(thinking.reasoning ?? "")} options={[{ value: "", label: "Default" }, { value: "on", label: "On" }, { value: "off", label: "Off" }]} disabled={busy} meta={thinking.reasoning == null ? defaults("reasoning").source : "This chat"} description="The next accepted message uses this choice. Active and already queued work keep their settings." hint="The template's default is not reported. Choose On or Off to set it explicitly." onChange={choice => { const next = { ...thinking }; delete next.reasoning; delete next.reasoning_effort; if (choice) next.reasoning = choice; void applyThinking(next); }} /> : modes?.supported ? <CompactSwitch label="Thinking" checked={effectiveThinking === "on" || effectiveThinking === true} disabled={busy} onChange={enabled => void applyThinking({ ...thinking, reasoning: enabled ? "on" : "off" })} meta={thinking.reasoning == null ? defaults("reasoning").source : "This chat"} description="The next accepted message uses this choice. Active and already queued work keep their settings." hint={Object.keys(thinking).length ? <button type="button" className="text-button" disabled={busy} onClick={() => void applyThinking({})} title={defaults("reasoning").title}>Reset to setup</button> : undefined} /> : options ? <span className="hint">Thinking {modes?.supported === false ? "unavailable for this template" : "not yet verified"}</span> : <span className="hint">Checking Thinking controls…</span>}
+          <ResponseSettingsEditor part="thinking-only" layout="models" value={thinking} facts={facts} presentationFacts={thinkingFacts} options={options} loading={preview.loading} disabled={busy} onChange={next => void applyThinking(next)} />
         </div>
-        <section className="chat-capacity-settings" aria-label="Conversation capacity">
-          <SettingRow label="Conversation capacity" help="Total conversation capacity in tokens. Simultaneous requests share the pool. A deliberate reload changes loading settings; current and queued work retain their accepted settings." provenance={context === null ? contextDefault.source : "This chat"} onReset={context !== null && !busy ? () => stageContext(null) : undefined} resetLabel="Reset" resetTitle={contextDefault.title}>
-            <div className="model-context-control"><select aria-label="Chat capacity mode" value={context === null ? "setup" : context === 0 ? "full" : "custom"} disabled={busy || !contextSupported} onChange={event => stageContext(event.target.value === "setup" ? null : event.target.value === "full" ? 0 : Number(selectedContext) || 32768)}><option value="setup">From setup · {capacityLabel(selectedContext)}</option><option value="full" disabled={!contextMaximum}>Full · {capacityLabel(contextMaximum)}</option><option value="custom">Custom</option></select><div className="slider-field"><CompactSlider hideHeading label="Chat capacity slider" value={displayedContext} values={capacitySteps} formatValue={capacityLabel} inherited={context === null} disabled={busy || !contextSupported} onChange={stageContext} /><span className="number-field"><input aria-label="Chat context" type="number" min={1} max={contextMaximum ?? undefined} step={1} value={context === 0 ? contextMaximum ?? "" : context ?? ""} placeholder={selectedContext === 0 ? "Full" : typeof selectedContext === "number" ? String(selectedContext) : "Auto"} title={context === null ? contextDefault.title : undefined} disabled={busy || !contextSupported} onChange={event => stageContext(event.target.value ? Number(event.target.value) : null)} /><span className="field-unit">tokens</span></span></div></div>
+        <section className="chat-capacity-settings" aria-label="Context">
+          <SettingRow layout="models" label="Context" help={<>Total shared context in tokens. Reload changes loading settings; current and queued work keep their accepted settings.<code>{options?.context_size.flag ?? "--ctx-size"}</code></>} provenance={context === null ? contextDefault.source : "This chat"} onReset={context !== null && !busy ? () => stageContext(null) : undefined} resetLabel="Reset" resetTitle={contextDefault.title}>
+            <ContextSlider label="Chat context" value={displayedContext} maximum={contextMaximum ?? null} disabled={busy || !contextSupported} onChange={stageContext} />
           </SettingRow>
           <dl className="chat-capacity-state"><div><dt>Selected</dt><dd>{capacityLabel(incomingContext ?? selectedContext)}</dd></div><div><dt title="Maximum tokens for one request on the loaded model. Simultaneous requests share its context pool.">Loaded per request</dt><dd>{loadedContext == null ? "Not reported" : capacityLabel(loadedContext)}</dd></div>{tuningChanged || runtimeBusy && incomingContext !== null && incomingContext !== loadedContext ? <div data-pending="true"><dt>Pending</dt><dd>{capacityLabel(context ?? selectedContext)}</dd></div> : null}</dl>
-          <p className="hint">Simultaneous requests share this context pool.</p>
-          {runtimeBusy && tuningChanged ? <p className="hint">Stage this capacity for the next submission. Current and queued work keep their settings.</p> : tuningChanged ? <p className="hint">Review the proposed capacity, then reload this chat's model.</p> : null}
           {contextSupported && selectedProfile && context !== null && Number.isSafeInteger(context) && context >= 0 ? <ModelHardwareEstimate active={tuningOpen} selection={{ bundle_id: selectedBundleId, startup: mergedStartup(selectedProfile.bags.startup.requested, previewConfiguration.startup_overrides ?? {}) }} /> : null}
           {!contextSupported ? <span className="hint">{selectedDeployment?.scope === "connected" ? "Context is managed by this connection." : "Context control unavailable."}</span> : null}
         </section>
         {error || preview.error ? <Notice tone="error">{error || preview.error}</Notice> : null}
         </div>
-        <div className="actions chat-model-controls-actions"><button type="button" className="primary-button" disabled={!contextSupported || !needsReload || busy || preview.loading || !preview.data || Boolean(preview.error) || (context !== null && (!Number.isInteger(context) || context < 0 || Boolean(contextMaximum && context > contextMaximum)))} onClick={() => void applyTuning(close)}>{busy ? "Applying…" : runtimeBusy ? "Stage for next message" : "Reload"}</button></div>
+        <div className="actions chat-model-controls-actions"><button type="button" className="primary-button" disabled={!contextSupported || !needsReload || busy || preview.loading || !preview.data || Boolean(preview.error) || (context !== null && (!Number.isInteger(context) || context < 0))} onClick={() => void applyTuning(close)}>{busy ? "Applying…" : runtimeBusy ? "Stage for next message" : "Reload"}</button></div>
       </>}
     </MenuPopover>
   </>;
