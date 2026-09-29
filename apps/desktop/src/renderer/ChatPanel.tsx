@@ -8,7 +8,7 @@ import { HoverHelp } from "./HoverHelp";
 
 import { api, ApiError, request } from "./api";
 import { workspaceApi, type ProjectRecord, type AgentSetup, type SetupConfiguration, type ResolvedSetupSelection, type ChatReadiness } from "./workspaceApi";
-import { browserToolNames, defaultNextTurnTools, setupOverrides, sparseChatSetup, type ChatWorkspaceLaunch } from "./chatSetup";
+import { browserToolNames, buildChatConfiguration, creationConfiguration, defaultNextTurnTools, executionConfiguration, setupOverrides, type ChatWorkspaceLaunch } from "./chatSetup";
 import { ApprovalModeControl, approvalModeLabel, approvalModeOf, type ApprovalMode } from "./ApprovalModeControl";
 import { Icon } from "./Icon";
 import type { ChatLaunch, ConversationListActions, HistoryNotice } from "./WorkbenchSidebar";
@@ -520,27 +520,6 @@ function ChatInteractionStreamContent(props: {
   );
 }
 
-function knowledgePayload(entries: KnowledgeEntry[], selectedVersionIds: string[]) {
-  const selected = entries.filter((entry) => selectedVersionIds.includes(entry.current_version_id));
-  const memoryVersionRefs = selected
-    .filter((entry) => entry.kind === "memory")
-    .map((entry) => entry.current_version_id);
-  const skillVersionRefs = selected
-    .filter((entry) => entry.kind === "skill")
-    .map((entry) => entry.current_version_id);
-  const protectedInstructionVersionRefs = selected
-    .filter((entry) => entry.kind === "protected_instruction")
-    .map((entry) => entry.current_version_id);
-  return {
-    // The backend resolves kinds for earlier explicit versions too. Omitting
-    // them here would silently replace a selected memory when Knowledge updates.
-    knowledge_version_refs: [...selectedVersionIds],
-    memory_version_refs: memoryVersionRefs,
-    skill_version_refs: skillVersionRefs,
-    protected_instruction_version_refs: protectedInstructionVersionRefs,
-  };
-}
-
 function messageRoleLabel(role: ChatMessage["role"]): string {
   switch (role) {
     case "user":
@@ -1021,44 +1000,26 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }
 
   function chatConfiguration(): Record<string, unknown> {
-    const layered = Boolean(hasApplicationDefaults || projectId || agentSetupVersionId || conversation?.agent_setup_version_id || conversation?.project_id);
-    const selectedKnowledge = knowledgePayload(knowledgeEntries, selectedKnowledgeIds);
-    const values = sparseChatSetup({
-      deployment_id: deploymentId,
-      model_configuration_id: profileId || null,
-      startup_overrides: startupOverrides,
-      embedding_deployment_id: embeddingDeploymentId || null,
-      ...(setupEditedFields.current.has("presented_tools") ? { presented_tools: selectedTools } : {}),
-      ...(setupEditedFields.current.has("desktop_access") ? { desktop_access: desktopAccess } : {}),
-      ...(setupEditedFields.current.has("approval_mode") ? { approval_mode: approvalMode } : {}),
-      per_request_overrides: perRequestOverrides,
-      work_mode: workMode,
-      helper_agent_ids: helperAgentIds,
-      review,
-      ...(inputPolicy ? { input_policy: inputPolicy } : {}),
-      ...(localInstructions !== null ? { instructions: localInstructions } : {}),
-      ...selectedKnowledge,
-    }, setupEditedFields.current, layered);
-    // Editable intent names records; backend admission owns the exact versions.
-    delete values.knowledge_version_refs; delete values.memory_version_refs; delete values.skill_version_refs; delete values.protected_instruction_version_refs;
-    return { ...values, model_overrides: modelOverrides, inherited_model_configuration: inheritedModelConfiguration,
-      memory_entry_ids: contextEntryIds.filter(id => contextKinds[id] !== "instruction" && !knowledgeEntries.some(item => item.id === id && item.kind === "protected_instruction")),
-      protected_instruction_entry_ids: contextEntryIds.filter(id => contextKinds[id] === "instruction" || knowledgeEntries.some(item => item.id === id && item.kind === "protected_instruction")),
-      skill_entry_ids: messageSkillIds, shortcut_ids: shortcutIds, project_file_refs: projectFileRefs,
-      ...(documentAssetIds !== null ? { document_asset_ids: documentAssetIds } : {}), ...(projectId ? { project_id: projectId } : {}),
-      ...(agentSetupId ? { agent_setup_id: agentSetupId } : agentSetupVersionId ? { agent_setup_version_id: agentSetupVersionId } : { agent_setup_id: null }),
-      ...(!projectId ? { project_path: projectPath.trim() || null } : {}),
-      ...(!projectId || conversation?.workspace_id ? { workspace_id: conversation?.workspace_id ?? null } : {}) };
+    return buildChatConfiguration({
+      hasApplicationDefaults, projectId, agentSetupVersionId, agentSetupId,
+      conversationAgentSetupVersionId: conversation?.agent_setup_version_id,
+      conversationProjectId: conversation?.project_id,
+      conversationWorkspaceId: conversation?.workspace_id,
+      knowledgeEntries, selectedKnowledgeIds, editedFields: setupEditedFields.current,
+      deploymentId, profileId, startupOverrides, embeddingDeploymentId, selectedTools,
+      desktopAccess, approvalMode, perRequestOverrides, workMode, helperAgentIds, review,
+      inputPolicy, localInstructions, modelOverrides, inheritedModelConfiguration,
+      contextEntryIds, contextKinds, messageSkillIds, shortcutIds, projectFileRefs,
+      documentAssetIds, projectPath,
+    });
   }
 
   function chatExecutionConfiguration(): Record<string, unknown> {
-    const { model_overrides: _models, inherited_model_configuration: _inherited, ...selection } = chatConfiguration();
-    return selection;
+    return executionConfiguration(chatConfiguration());
   }
 
   function chatCreationConfiguration(): Record<string, unknown> {
-    const { shortcut_ids: _shortcuts, project_file_refs: _files, document_asset_ids: _documents, ...selection } = chatExecutionConfiguration();
-    return selection;
+    return creationConfiguration(chatConfiguration());
   }
 
   function applyResolvedSetup(selection: ResolvedSetupSelection, memoryRefs: string[] | null = null) {
