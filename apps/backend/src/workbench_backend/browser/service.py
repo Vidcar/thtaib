@@ -449,6 +449,55 @@ class BrowserSessionService:
 
         session.idle_task = asyncio.create_task(expire())
 
+    def _reject_browser_arguments(self, name: str, arguments: dict[str, Any]) -> None:
+        if "filename" in arguments:
+            raise ToolException("Browser file output is controlled by Workbench; omit filename.")
+        if name == "browser_navigate" and not _allowed_url(str(arguments.get("url", ""))):
+            raise ToolException("Browser navigation requires an HTTP(S) URL without embedded credentials.")
+        if name == "browser_tabs" and arguments.get("action") == "new" and arguments.get("url") and not _allowed_url(str(arguments["url"])):
+            raise ToolException("A new tab requires an HTTP(S) URL without embedded credentials.")
+        if name == "browser_tabs" and arguments.get("action") not in {"list", "new", "close", "select"}:
+            raise ToolException("Choose list, new, close, or select for browser tabs.")
+        if name == "browser_wait_for" and float(arguments.get("time") or 0) > 30:
+            raise ToolException("Wait for no more than 30 seconds per browser call.")
+        if name == "browser_resize" and not (240 <= arguments.get("width", 0) <= 3840 and 240 <= arguments.get("height", 0) <= 2160):
+            raise ToolException("Choose a viewport between 240–3840 pixels wide and 240–2160 pixels tall.")
+
+    async def _retain_browser_screenshot(self, session: _Session, run, name: str, result, before: set, text_result):
+        created = await asyncio.to_thread(lambda: [path for path in session.output_dir.iterdir() if path not in before and path.is_file() and path.suffix.lower() in _IMAGE_SUFFIXES])
+        if len(created) != 1:
+            raise ToolException("The browser did not produce exactly one controlled screenshot.")
+        path = created[0]
+        page_source = result
+        try:
+            page_source = await session.tools["browser_snapshot"].coroutine()
+        except Exception:
+            # A screenshot can still be retained if the page text cannot
+            # be read. Never substitute an earlier URL.
+            page_source = result
+        observed_url = self._observed_url(result) or self._observed_url(page_source)
+        target = observed_url or "browser page (URL unavailable)"
+        session.last_url = observed_url
+        page = await asyncio.to_thread(present_page, page_source, session.output_dir)
+        if self.capture_publisher is None:
+            return text_result(f"Screenshot saved to {path}.\n{page}")
+        try:
+            published = await asyncio.to_thread(self.capture_publisher,
+                run, path, source_tool_name=name, source_tool_call_id=CURRENT_TOOL_CALL.get() or None,
+                target=target, controlled_root=session.output_dir,
+            )
+            if inspect.isawaitable(published):
+                published = await published
+        except Exception:
+            raise ToolException("The browser captured an image, but Workbench could not retain it. The temporary capture was removed; try again after checking the conversation and asset store.") from None
+        finally:
+            # The retained asset service has its own copy. This output
+            # directory is only a transient handoff from MCP.
+            await asyncio.to_thread(path.unlink, missing_ok=True)
+        virtual_path = published[1] if isinstance(published, tuple) else published
+        message = f"Screenshot captured from {target}.\n{page}\nSaved screenshot: {virtual_path}"
+        return text_result(message)
+
     def _bind_tool(self, run, session: _Session, original: BaseTool, *, observation: bool = False) -> BaseTool:
         name = original.name
 
@@ -460,18 +509,7 @@ class BrowserSessionService:
         async def invoke(**arguments):
             if self._sessions.get(session.thread_id) is not session:
                 raise ToolException("This browser session expired or was reset. Start a new message with a fresh session.")
-            if "filename" in arguments:
-                raise ToolException("Browser file output is controlled by Workbench; omit filename.")
-            if name == "browser_navigate" and not _allowed_url(str(arguments.get("url", ""))):
-                raise ToolException("Browser navigation requires an HTTP(S) URL without embedded credentials.")
-            if name == "browser_tabs" and arguments.get("action") == "new" and arguments.get("url") and not _allowed_url(str(arguments["url"])):
-                raise ToolException("A new tab requires an HTTP(S) URL without embedded credentials.")
-            if name == "browser_tabs" and arguments.get("action") not in {"list", "new", "close", "select"}:
-                raise ToolException("Choose list, new, close, or select for browser tabs.")
-            if name == "browser_wait_for" and float(arguments.get("time") or 0) > 30:
-                raise ToolException("Wait for no more than 30 seconds per browser call.")
-            if name == "browser_resize" and not (240 <= arguments.get("width", 0) <= 3840 and 240 <= arguments.get("height", 0) <= 2160):
-                raise ToolException("Choose a viewport between 240–3840 pixels wide and 240–2160 pixels tall.")
+            self._reject_browser_arguments(name, arguments)
             if name.startswith("browser_mouse_") and name != "browser_mouse_wheel" and self.screenshot_reader is not None:
                 if not await asyncio.to_thread(self.screenshot_reader, run):
                     raise ToolException("Coordinate interaction requires verified screenshot reading for this model. Use page structure and element controls instead.")
@@ -522,39 +560,7 @@ class BrowserSessionService:
                     return text_result(await asyncio.to_thread(present_page, result, session.output_dir))
                 if name != "browser_take_screenshot":
                     return result
-                created = await asyncio.to_thread(lambda: [path for path in session.output_dir.iterdir() if path not in before and path.is_file() and path.suffix.lower() in _IMAGE_SUFFIXES])
-                if len(created) != 1:
-                    raise ToolException("The browser did not produce exactly one controlled screenshot.")
-                path = created[0]
-                page_source = result
-                try:
-                    page_source = await session.tools["browser_snapshot"].coroutine()
-                except Exception:
-                    # A screenshot can still be retained if the page text cannot
-                    # be read. Never substitute an earlier URL.
-                    page_source = result
-                observed_url = self._observed_url(result) or self._observed_url(page_source)
-                target = observed_url or "browser page (URL unavailable)"
-                session.last_url = observed_url
-                page = await asyncio.to_thread(present_page, page_source, session.output_dir)
-                if self.capture_publisher is None:
-                    return text_result(f"Screenshot saved to {path}.\n{page}")
-                try:
-                    published = await asyncio.to_thread(self.capture_publisher,
-                        run, path, source_tool_name=name, source_tool_call_id=CURRENT_TOOL_CALL.get() or None,
-                        target=target, controlled_root=session.output_dir,
-                    )
-                    if inspect.isawaitable(published):
-                        published = await published
-                except Exception:
-                    raise ToolException("The browser captured an image, but Workbench could not retain it. The temporary capture was removed; try again after checking the conversation and asset store.") from None
-                finally:
-                    # The retained asset service has its own copy. This output
-                    # directory is only a transient handoff from MCP.
-                    await asyncio.to_thread(path.unlink, missing_ok=True)
-                virtual_path = published[1] if isinstance(published, tuple) else published
-                message = f"Screenshot captured from {target}.\n{page}\nSaved screenshot: {virtual_path}"
-                return text_result(message)
+                return await self._retain_browser_screenshot(session, run, name, result, before, text_result)
 
         return original.model_copy(update={
             "args_schema": _without_filename(original),

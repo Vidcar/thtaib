@@ -703,16 +703,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         self._require_dispatch_allowed()
         return self._with_outline(request.override(tools=self._presented(request.tools)))
 
-    def _capture(
-        self,
-        request: ModelRequest,
-        http_payload: dict[str, Any] | None,
-        *,
-        http_payloads: list[dict[str, Any]] | None = None,
-        handler_returned: bool = False,
-        failure: Exception | None = None,
-    ) -> None:
-        setup = self.run.effective_setup
+    def _capture_gaps(self, setup, http_payload, attempts, failure) -> tuple[list[str], bool]:
         gaps = list(setup.gaps) if setup is not None else [RAG_GAP]
         if setup is None:
             if not self.run.memory_version_refs:
@@ -721,29 +712,24 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 gaps.append(SKILL_GAP)
         if http_payload is None:
             gaps.append("http payload not observed for this model call")
-        attempts = list(http_payloads or ([] if http_payload is None else [http_payload]))
         response_observed = any(item.get("response_received") is True for item in attempts)
         if failure is not None and response_observed:
             gaps.append("model call failed after transport response was observed")
         elif failure is not None:
             gaps.append("model call failed before response was observed")
-        applied = dict(setup.bags.per_request.applied) if setup is not None else {}
-        generation = dict(applied)
-        generation.update(request.model_settings or {})
-        settings = (
-            self._settings_provider()
-            if self._settings_provider is not None
-            else ContextCaptureSettings()
-        )
+        return gaps, response_observed
+
+    def _capture_tool_schemas(self, request: ModelRequest) -> tuple[list[Any], dict[str, str]]:
         from langchain_core.utils.function_calling import convert_to_openai_tool
         presented_names = {name for name in _tool_names(request.tools)
             if name in self.run.presented_tools or (name == "read_file" and self.run.framework_read_paths)}
         tool_schemas = [convert_to_openai_tool(tool) for tool in request.tools if tool_name(tool) in presented_names]
         schema_text = {schema["function"]["name"]: json.dumps(schema, ensure_ascii=False, sort_keys=True)
             for schema in tool_schemas}
-        from workbench_backend.knowledge.costs import content_token_estimate, TOKEN_ESTIMATE_METHOD
+        return tool_schemas, schema_text
+
+    def _known_instruction_text(self, setup) -> dict[str, str]:
         from workbench_backend.agents.input_sources import WORKBENCH_CORE_INSTRUCTIONS, instruction_source_id
-        instructions = _captured_instructions(request, http_payload)
         known_text = {"workbench_core": WORKBENCH_CORE_INSTRUCTIONS}
         if setup is not None:
             known_text.update({instruction_source_id(layer): layer.content for layer in setup.instruction_layers})
@@ -753,6 +739,10 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         policy = self.run.input_policy
         if policy is not None and policy.instruction_override is not None:
             known_text["agent_instructions" if self.run.agent_setup_version_id else "conversation_instructions"] = policy.instruction_override
+        return known_text
+
+    def _observed_input_sources(self, schema_text: dict[str, str], known_text: dict[str, str], instructions: str | None) -> list[Any]:
+        from workbench_backend.knowledge.costs import content_token_estimate, TOKEN_ESTIMATE_METHOD
         source_rows = []
         for row in self.run.input_sources:
             if row.tool_name in schema_text:
@@ -765,6 +755,31 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 source_rows.append(row.model_copy(update={"content": known_text[row.id], "observed": True}))
             else:
                 source_rows.append(row.model_copy(deep=True))
+        return source_rows
+
+    def _capture(
+        self,
+        request: ModelRequest,
+        http_payload: dict[str, Any] | None,
+        *,
+        http_payloads: list[dict[str, Any]] | None = None,
+        handler_returned: bool = False,
+        failure: Exception | None = None,
+    ) -> None:
+        setup = self.run.effective_setup
+        attempts = list(http_payloads or ([] if http_payload is None else [http_payload]))
+        gaps, response_observed = self._capture_gaps(setup, http_payload, attempts, failure)
+        applied = dict(setup.bags.per_request.applied) if setup is not None else {}
+        generation = dict(applied)
+        generation.update(request.model_settings or {})
+        settings = (
+            self._settings_provider()
+            if self._settings_provider is not None
+            else ContextCaptureSettings()
+        )
+        tool_schemas, schema_text = self._capture_tool_schemas(request)
+        instructions = _captured_instructions(request, http_payload)
+        source_rows = self._observed_input_sources(schema_text, self._known_instruction_text(setup), instructions)
         captured = apply_capture_policy(
             ModelRequestCapture(
                 purpose=current_request_purpose(),
