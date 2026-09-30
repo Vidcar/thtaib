@@ -2537,6 +2537,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/system/resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** System Resources */
+        get: operations["system_resources_v1_system_resources_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/window-testing/conversations/{conversation_id}/scope": {
         parameters: {
             query?: never;
@@ -5239,15 +5256,31 @@ export interface components {
             name: string;
             /** Total Bytes */
             total_bytes?: number | null;
+            /** Used Bytes */
+            used_bytes?: number | null;
         };
         /** HardwareMemoryObservation */
         HardwareMemoryObservation: {
             /** Gpu Devices */
             gpu_devices?: components["schemas"]["HardwareDeviceMemory"][];
+            /** Gpu Observed At */
+            gpu_observed_at?: string | null;
+            /**
+             * Gpu Stale
+             * @default false
+             */
+            gpu_stale: boolean;
             /** Observed At */
             observed_at: string;
             /** Ram Available Bytes */
             ram_available_bytes?: number | null;
+            /** Ram Observed At */
+            ram_observed_at?: string | null;
+            /**
+             * Ram Stale
+             * @default false
+             */
+            ram_stale: boolean;
             /** Ram Total Bytes */
             ram_total_bytes?: number | null;
             /** Reasons */
@@ -14374,6 +14407,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkbenchInteractionMetadata"];
+                };
+            };
+        };
+    };
+    system_resources_v1_system_resources_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HardwareMemoryObservation"];
                 };
             };
         };

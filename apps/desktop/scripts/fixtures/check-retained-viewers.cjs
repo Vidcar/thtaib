@@ -11,6 +11,7 @@ app.whenReady().then(async () => {
   const ready = predicate => js(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){if(${predicate})return resolve(true);if(performance.now()-start>5000)return reject(Error(${JSON.stringify('Timed out: ' + predicate)}));requestAnimationFrame(poll)}poll()})`);
   try {
     await win.loadURL(process.argv[2]);
+    win.webContents.setZoomFactor(1);
     await ready(`document.querySelectorAll('.source-reference-link').length===2`);
     for (const theme of ['light', 'dark']) for (const width of [1280, 794, 600]) {
       win.setContentSize(width, 900);
@@ -175,7 +176,27 @@ app.whenReady().then(async () => {
       assert.equal(geometry.list,0,`${width}px Models hides the Chat-only list`);
       assert.ok(Math.abs(geometry.mainLeft-54)<=1 && geometry.mainWidth>=geometry.viewport-55,`${width}px Models receives the remaining viewport width: ${JSON.stringify(geometry)}`);
     }
-    console.log('Sidebar title, action hit targets and persistent rail/list native geometry checks passed.');
+    await ready(`document.querySelectorAll('.system-resource-metric[role="meter"]').length===2`);
+    // Combine short windows and zoom at usable content heights (at least 360px).
+    for (const theme of ['dark', 'light']) for (const [height, zoom] of [[900,1], [500,1], [360,1], [600,1.5], [900,2]]) {
+      win.setContentSize(1000, height); win.webContents.setZoomFactor(zoom);
+      await js(`document.documentElement.dataset.theme='${theme}';new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+      const geometry = await js(`(()=>{const rect=n=>{const r=n.getBoundingClientRect();return {top:r.top,bottom:r.bottom,width:r.width,height:r.height}};const rail=document.querySelector('.destination-rail'),settings=rail.querySelector('[aria-label="Settings"]'),nav=rail.querySelector('.side-tabs'),s=settings.getBoundingClientRect();return {height:innerHeight,rail:rect(rail),settings:rect(settings),settingsHit:document.elementFromPoint(s.x+s.width/2,s.y+s.height/2)?.closest('button')===settings,dot:rect(rail.querySelector('.status-dot')),nav:{height:nav.clientHeight,scroll:nav.scrollHeight},rings:[...rail.querySelectorAll('.system-resource-ring')].map(n=>({rect:rect(n),text:rect(n.querySelector('.system-resource-percent'))}))}})()`);
+      assert.equal(geometry.rail.width,54,'short and scaled windows keep the 54px rail');
+      assert.ok(geometry.settings.top>=0 && geometry.settings.bottom<=geometry.height && geometry.settingsHit,`Settings remains reachable: ${JSON.stringify({theme,zoom,height,geometry})}`);
+      for (const ring of geometry.rings) {
+        assert.equal(ring.rect.width,36); assert.equal(ring.rect.height,36);
+        assert.ok(ring.rect.top>=geometry.settings.bottom && ring.rect.bottom<=geometry.height,`rings stay below Settings and inside the viewport: ${JSON.stringify({theme,zoom,height,geometry})}`);
+        assert.ok(ring.text.width<=36 && ring.text.height<=36,'percentages fit the rings');
+      }
+      assert.equal(geometry.rings.length,2); assert.ok(geometry.dot.bottom<=geometry.height,'service dot stays visible');
+      if (geometry.nav.scroll>geometry.nav.height) {
+        await js(`document.querySelector('.side-tabs').scrollTop=document.querySelector('.side-tabs').scrollHeight`);
+        assert.ok(await js(`(()=>{const b=document.querySelector('.side-tabs [aria-label="Lab"]'),r=b.getBoundingClientRect();return document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.closest('button')===b})()`),'scrolling keeps the final destination reachable');
+      }
+    }
+    win.webContents.setZoomFactor(1);
+    console.log('Sidebar title, action hit targets, resource rings and persistent rail/list native geometry checks passed.');
     win.setContentSize(1280, 900);
     await js(`window.fixture.showFileTree()`);
     const fileButton = name => `Array.from(document.querySelectorAll('.project-file-row button')).find(button=>button.textContent.trim().replace(/^[▸▾]\\s*/, '')===${JSON.stringify(name)})`;
@@ -239,5 +260,5 @@ app.whenReady().then(async () => {
     assert.equal(await js(`document.querySelector('.bubble-assistant .message-body code').textContent`),'code');
     console.log('Native literal user paths, backticks, whitespace and model-only context checks passed.');
     console.log('Source reference native geometry, exact range, failure and keyboard checks passed.');
-  } finally { win.destroy(); app.quit(); }
+  } finally { win.webContents.setZoomFactor(1); win.destroy(); app.quit(); }
 }).catch(error => { console.error(error); app.exit(1); });

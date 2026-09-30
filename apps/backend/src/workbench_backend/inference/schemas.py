@@ -238,6 +238,7 @@ class HardwareDeviceMemory(BaseModel):
     name: str
     total_bytes: int | None = None
     available_bytes: int | None = None
+    used_bytes: int | None = None
 
 
 class HardwareMemoryObservation(BaseModel):
@@ -248,6 +249,10 @@ class HardwareMemoryObservation(BaseModel):
     ram_available_bytes: int | None = None
     reasons: list[str] = Field(default_factory=list)
     stale: bool = False
+    gpu_observed_at: str | None = None
+    gpu_stale: bool = False
+    ram_observed_at: str | None = None
+    ram_stale: bool = False
 
 
 class ModelEstimateRequest(BaseModel):

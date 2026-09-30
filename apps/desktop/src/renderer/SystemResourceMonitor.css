@@ -1,0 +1,11 @@
+.system-resource-monitor {display: grid; justify-items: center; gap: var(--space-tight); width: 40px; flex: 0 0 auto; padding-block: var(--space-tight);}
+.system-resource-metric {display: grid; justify-items: center; gap: 0; width: 100%; font-size: var(--text-small); line-height: var(--leading-tight);}
+.system-resource-label {color: var(--muted); font-weight: var(--weight-medium);}
+.system-resource-ring {display: grid; width: 36px; height: 36px; place-items: center;}
+.system-resource-ring svg, .system-resource-percent {grid-area: 1 / 1;}
+.system-resource-ring svg {width: 100%; height: 100%; overflow: visible;}
+.system-resource-ring circle {fill: none; stroke-width: 2.5;}
+.system-resource-track {stroke: var(--border);}
+.system-resource-fill {stroke: currentColor; transition: stroke-dasharray 150ms ease;}
+.system-resource-percent {font-variant-numeric: tabular-nums; font-size: var(--text-small); font-weight: var(--weight-medium); white-space: nowrap;}
+@media (prefers-reduced-motion: reduce) {.system-resource-fill {transition: none;}}

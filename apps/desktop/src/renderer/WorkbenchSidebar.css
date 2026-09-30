@@ -147,11 +147,11 @@
 .app.app-nav-collapsed {grid-template-columns: 54px minmax(0, 1fr);}
 .workbench-navigation {display: flex; position: relative; height: 100%; min-height: 0; min-width: 0; background: var(--bg-nav);}
 .destination-rail {display: flex; flex-direction: column; align-items: center; gap: var(--space-tight); width: 54px; flex: 0 0 54px; padding: var(--pad-compact) 6px; box-sizing: border-box; border-right: var(--line-hairline) solid var(--border);}
-.destination-rail .side-tabs {width: 100%; margin-top: var(--space-compact);}
+.destination-rail .side-tabs {width: 100%; margin-top: var(--space-compact); flex: 0 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto;}
 .destination-rail .tab {display: flex; align-items: center; justify-content: center; width: 40px; min-height: 36px; padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); position: relative;}
 .destination-rail .tab:hover, .destination-rail .destination-current, .destination-rail .tab.active {background: var(--bg-raised); color: var(--text);}
 .destination-rail .attention-count {position: absolute; top: 1px; right: 1px; left: auto;}
-.rail-bottom {margin-top: auto; display: grid; justify-items: center;}
+.rail-bottom {margin-top: auto; display: grid; justify-items: center; flex: 0 0 auto;}
 .rail-bottom .service-indicator {padding: 4px;}
 .chat-navigation {flex: 1 1 auto; min-width: 0; align-items: stretch;}
 .chat-navigation[hidden] {display: none;}
