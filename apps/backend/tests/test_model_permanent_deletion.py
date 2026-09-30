@@ -43,6 +43,10 @@ class PermanentModelDeletionTests(unittest.TestCase):
             created_at=now, updated_at=now)
         store.put_deployment(deployment)
         store.put_capability_evidence({'id': 'model-proof', 'deployment_id': deployment.id, 'tested_at': now})
+        store.put_capability_evidence({'id': 'replaced-proof', 'deployment_id': 'old-deployment',
+            'tested_at': now, 'setup': {'bundle_id': self.bundle.id}})
+        store.put_capability_evidence({'id': 'other-proof', 'deployment_id': 'other-deployment',
+            'tested_at': now, 'setup': {'bundle_id': 'other-model'}})
         keys = [f'model-verification:{self.bundle.id}', f'model-inspection:{self.bundle.id}:runtime',
                 f'model-inspection:{self.bundle.id}:full', f'import_job.{self.imported.id}.copy_files']
         for key in keys:
@@ -72,6 +76,7 @@ class PermanentModelDeletionTests(unittest.TestCase):
         self.assertIsNone(store.get_deployment(deployment.id))
         self.assertIsNone(store.get_job(self.imported.id))
         self.assertEqual(store.list_capability_evidence(deployment.id), [])
+        self.assertEqual([item['id'] for item in store.list_capability_evidence()], ['other-proof'])
         self.assertTrue(all(store.get_setting(key) is None for key in keys))
         historical = self.app.state.app_store.get_run('historical-run')
         self.assertEqual(historical.deployment_id, deployment.id)

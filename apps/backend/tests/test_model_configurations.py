@@ -25,11 +25,13 @@ class ModelConfigurationTests(unittest.TestCase):
         self.manager = ModelManager(self.paths)
         file = write_tiny_gguf(Path(self.tmp.name) / "model.gguf")
         self.bundle_id = self.manager.import_local(LocalImportRequest(source_path=str(file))).bundle_id
+        self.assertEqual(self.manager.list_model_configurations(self.bundle_id), [])
+        self.initial = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(display_name="Saved setup"))
 
     def deployment(self, **startup):
         return self.manager.create_managed(ManagedDeploymentRequest(bundle_id=self.bundle_id, startup=startup, auto_start=False))
 
-    def test_clean_default_and_repeated_deployment_lookup_are_idempotent(self):
+    def test_named_setup_and_repeated_deployment_lookup_are_idempotent(self):
         first = self.deployment(ctx_size=8192)
         self.assertEqual(first.id, self.deployment(ctx_size=8192).id)
         profiles = self.manager.list_model_configurations(self.bundle_id)
@@ -38,7 +40,7 @@ class ModelConfigurationTests(unittest.TestCase):
         self.assertEqual(self.manager.store.get_bundle(self.bundle_id).default_configuration_id, profiles[0].id)
         self.assertEqual(self.manager.get_deployment(first.id).settings, first.settings)
 
-    def test_fresh_default_preserves_publisher_and_template_defaults(self):
+    def test_named_empty_setup_preserves_publisher_and_template_defaults(self):
         import numpy as np
         from gguf import GGUFWriter
         from workbench_backend.inference.schemas import HuggingFaceConfiguration
@@ -54,8 +56,9 @@ class ModelConfigurationTests(unittest.TestCase):
         bundle = self.manager.store.get_bundle(bundle_id)
         self.manager.store.put_bundle(bundle.model_copy(update={"huggingface_configuration":
             HuggingFaceConfiguration(generation_defaults={"reasoning_effort": "xhigh", "reasoning": "off", "temperature": 0.6})}))
-        profile = self.manager.list_model_configurations(bundle_id)[0]
-        self.assertEqual(profile.display_name, "Default")
+        self.assertEqual(self.manager.list_model_configurations(bundle_id), [])
+        profile = self.manager.save_model_configuration(bundle_id, ModelConfigurationWriteRequest(display_name="Native setup"))
+        self.assertEqual(profile.display_name, "Native setup")
         self.assertEqual(profile.bags.per_request.requested, {})
         self.assertEqual(profile.bags.per_request.applied["reasoning_effort"], "xhigh")
         self.assertEqual(profile.bags.per_request.applied["temperature"], 0.6)
@@ -68,7 +71,7 @@ class ModelConfigurationTests(unittest.TestCase):
             configuration_id=profile.id, display_name="Deep choice", per_request={"reasoning_effort": "xhigh"}))
         self.assertEqual(self.manager.list_model_configurations(bundle_id)[0].bags.per_request.requested, saved.bags.per_request.requested)
 
-    def test_fresh_default_does_not_invent_thinking_or_response_limits(self):
+    def test_empty_named_setup_does_not_invent_thinking_or_response_limits(self):
         profile = self.manager.list_model_configurations(self.bundle_id)[0]
         self.assertEqual(profile.bags.per_request.requested, {})
         self.assertEqual(profile.bags.per_request.applied["max_tokens"], -1)
@@ -92,7 +95,7 @@ class ModelConfigurationTests(unittest.TestCase):
             configuration_id=profile.id, display_name=profile.display_name, startup={}))
         self.assertNotIn("ctx_size", reset.bags.startup.applied)
 
-    def test_new_default_uses_one_matching_card_recipe_without_limiting_output(self):
+    def test_native_baseline_uses_matching_card_facts_without_creating_a_setup(self):
         import numpy as np
         from gguf import GGUFWriter
         from workbench_backend.inference.schemas import HuggingFaceConfiguration, ResponseRecipe
@@ -116,12 +119,15 @@ class ModelConfigurationTests(unittest.TestCase):
                                   per_request={**samplers, "temperature": 0.7}, **common)]
         self.manager.store.put_bundle(bundle.model_copy(update={"huggingface_configuration":
             HuggingFaceConfiguration(generation_defaults={"temperature": 0.6, "max_tokens": 128}, response_recipes=recipes)}))
+        self.assertEqual(self.manager.list_model_configurations(bundle_id), [])
+        self.manager.save_model_configuration(bundle_id, ModelConfigurationWriteRequest(display_name="Native setup"))
         profiles = self.manager.list_model_configurations(bundle_id)
         self.assertEqual(len(profiles), 1)
         profile = profiles[0]
         self.assertEqual(profile.bags.per_request.requested, {})
-        for key, value in samplers.items():
-            self.assertEqual(profile.bags.per_request.applied[key], value)
+        self.assertEqual(profile.bags.per_request.applied["temperature"], .6)
+        self.assertEqual(profile.bags.per_request.applied["top_k"], 40)
+        self.assertEqual(profile.bags.per_request.applied["min_p"], .05)
         self.assertEqual(profile.bags.per_request.applied["frequency_penalty"], 0)
         self.assertEqual(profile.bags.per_request.applied["max_tokens"], -1)
         self.assertEqual(profile.bags.per_request.applied["reasoning_effort"], "xhigh")
@@ -129,10 +135,10 @@ class ModelConfigurationTests(unittest.TestCase):
         self.assertIs(profile.bags.per_request.applied["reasoning_preserve"], True)
         changed = self.manager.save_model_configuration(bundle_id, ModelConfigurationWriteRequest(
             configuration_id=profile.id, display_name=profile.display_name, per_request={"reasoning": "off"}))
-        self.assertEqual(changed.bags.per_request.applied["temperature"], 1)
-        self.assertEqual(changed.bags.per_request.applied["min_p"], 0)
+        self.assertEqual(changed.bags.per_request.applied["temperature"], .6)
+        self.assertEqual(changed.bags.per_request.applied["min_p"], .05)
         deployment = self.manager.create_managed(ManagedDeploymentRequest(bundle_id=bundle_id, profile_id=profile.id, auto_start=False))
-        self.assertEqual(deployment.settings.per_request.applied["temperature"], 1)
+        self.assertEqual(deployment.settings.per_request.applied["temperature"], .6)
         self.assertEqual(deployment.settings.per_request.applied["max_tokens"], -1)
 
     def test_suggested_context_and_gpu_bounds_do_not_block_native_choices(self):
@@ -474,9 +480,10 @@ class ModelConfigurationTests(unittest.TestCase):
 
     def test_model_selection_uses_default_and_never_binds_another_variant(self):
         first = self.deployment(ctx_size=8192)
-        second = self.deployment(ctx_size=16384)
         selected = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
             display_name="16k", startup={"ctx_size": 16384}))
+        second = self.manager.create_managed(ManagedDeploymentRequest(
+            bundle_id=self.bundle_id, profile_id=selected.id, auto_start=False))
         default = self.manager.store.get_bundle(self.bundle_id).default_configuration_id
         with open_application_store(self.paths) as store:
             service = SetupService(store, self.manager)

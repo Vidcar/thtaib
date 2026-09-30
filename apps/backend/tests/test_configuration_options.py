@@ -253,8 +253,7 @@ class BundleConfigurationOptionsTests(unittest.TestCase):
             self.assertEqual(report.context_size.minimum, floor)
             self.assertEqual(report.context_size.step, 1024)
 
-    def test_card_initialization_requires_one_compatible_mode_recommendation(self) -> None:
-        from workbench_backend.inference.configuration_options import preferred_response_recipe
+    def test_card_recommendations_do_not_silently_replace_native_or_generation_defaults(self) -> None:
         from workbench_backend.inference.schemas import HuggingFaceConfiguration, ResponseRecipe
         metadata = GgufRuntimeMetadata(chat_template="""
             {% if enable_thinking|default(true) %}think{% endif %}
@@ -265,13 +264,19 @@ class BundleConfigurationOptionsTests(unittest.TestCase):
         thinking = ResponseRecipe(id="thinking", name="Thinking", reasoning="on", per_request={"temperature": 1}, **origin)
         non_thinking = thinking.model_copy(update={"id": "non-thinking", "reasoning": "off", "name": "Non-thinking"})
         config = HuggingFaceConfiguration(response_recipes=[thinking, non_thinking])
-        self.assertEqual(preferred_response_recipe(metadata, config), thinking)
-        self.assertIsNone(preferred_response_recipe(GgufRuntimeMetadata(), config))
+        baseline = bundle_configuration_options("bundle", metadata)
+        report = bundle_configuration_options("bundle", metadata, huggingface_configuration=config)
+        self.assertEqual(report.per_request_defaults["temperature"].default_value,
+            baseline.per_request_defaults["temperature"].default_value)
         coding = thinking.model_copy(update={"id": "coding", "name": "Coding", "per_request": {"temperature": 0.6}})
         ambiguous = config.model_copy(update={"response_recipes": [thinking, coding, non_thinking]})
-        self.assertIsNone(preferred_response_recipe(metadata, ambiguous))
+        report = bundle_configuration_options("bundle", metadata, huggingface_configuration=ambiguous)
+        self.assertEqual(report.per_request_defaults["temperature"].default_value,
+            baseline.per_request_defaults["temperature"].default_value)
         incompatible = thinking.model_copy(update={"per_request": {"reasoning_effort": "medium", "temperature": 0.5}})
-        self.assertIsNone(preferred_response_recipe(metadata, config.model_copy(update={"response_recipes": [incompatible]})))
+        report = bundle_configuration_options("bundle", metadata, huggingface_configuration=config.model_copy(update={
+            "response_recipes": [incompatible], "generation_defaults": {"temperature": .7}}))
+        self.assertEqual(report.per_request_defaults["temperature"].default_value, .7)
 
     def test_mtp_head_and_thinking_template_are_read_from_file_directory(self) -> None:
         path = self.root / "model-with-head.gguf"

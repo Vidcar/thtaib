@@ -16,11 +16,11 @@ from workbench_backend.inference.bundles import BundleService
 from workbench_backend.inference.import_jobs import ImportJobRunner
 from workbench_backend.inference.configuration_options import bundle_configuration_options
 from workbench_backend.inference.configurations import (
-    deployment_for_configuration, duplicate_saved_profile, ensure_model_configurations,
+    deployment_for_configuration, duplicate_saved_profile, migrate_model_configurations,
     find_compatible_deployment, has_response_startup_defaults, list_saved_configurations,
     list_saved_profiles, loaded_model_identity, loading_startup_settings, model_default_values,
     rename_saved_profile, requested_identity, require_profile_bundle, resolved_profile,
-    saved_profile, set_bundle_default_configuration, validate_profile_bundle,
+    saved_profile, set_bundle_default_configuration, validate_profile_bundle, validate_configuration_name,
 )
 from workbench_backend.inference.deployments import DeploymentService
 from workbench_backend.inference.hf_fetch import HuggingFaceFetcher, PUBLISHER_DIR, REPOSITORY_TEMPLATE_DIR
@@ -109,7 +109,15 @@ class ModelManager:
         )
         from workbench_backend.inference.memory_estimates import MemoryEstimator
         self.memory_estimator = MemoryEstimator(self)
+        from workbench_backend.inference.capability_checks import CapabilityCheckCoordinator
+        self.capability_checks = CapabilityCheckCoordinator(self)
         self.validate_chat_reconfiguration = None
+        if self.store.get_setting("models-workspace-records-version") != "1":
+            generated = [profile for profile in self.store.list_profiles()
+                if profile.id == f"config_{profile.bundle_id}" or profile.id.startswith("config_import_")]
+            protected = {profile.id for profile in generated
+                if any(consumer.live for consumer in self._profile_consumers(profile.id))}
+            migrate_model_configurations(self.store, protected_profile_ids=protected)
 
     def describe_paths(self) -> dict[str, str]:
         return self.paths.as_public_dict()
@@ -136,7 +144,6 @@ class ModelManager:
         return job
 
     def list_bundles(self) -> list[ModelBundle]:
-        ensure_model_configurations(self.store)
         return [self.bundles.verify_bundle(bundle, use_cache=True) for bundle in self.store.list_bundles()]
 
     def get_bundle(self, bundle_id: str) -> ModelBundle:
@@ -144,6 +151,16 @@ class ModelManager:
         if bundle is None:
             raise ManagerError("Unknown bundle", code="bundle_missing", status_code=404)
         return self.bundles.verify_bundle(bundle)
+
+    def rename_bundle(self, bundle_id: str, display_name: str) -> ModelBundle:
+        name = display_name.strip()
+        if not name:
+            raise ManagerError("Name this model.", code="bundle_name_required", status_code=400)
+        with self.store.configuration_lock():
+            bundle = self.store.get_bundle(bundle_id)
+            if bundle is None:
+                raise ManagerError("Unknown bundle", code="bundle_missing", status_code=404)
+            return self.store.put_bundle(bundle.model_copy(update={"display_name": name}))
 
     def bundle_projectors(self, bundle_id: str) -> BundleProjectors:
         bundle = self.store.get_bundle(bundle_id)
@@ -422,36 +439,7 @@ class ModelManager:
         return {"bundle_id": bundle.id, "repo_id": card.repo_id, "revision": card.revision,
             "sha256": card.sha256, "markdown": card.markdown, "origin": card.origin}
 
-    def set_response_recipe_visibility(self, bundle_id: str, recipe_id: str, *, visible: bool) -> ModelBundle:
-        """Hide only the list choice; its record remains usable by saved origins."""
-        with self.store.configuration_lock():
-            bundle = self.store.get_bundle(bundle_id)
-            if bundle is None:
-                raise ManagerError("Unknown model.", code="bundle_missing", status_code=404)
-            source = bundle.source
-            if source.kind.value != "huggingface" or not source.repo_id or not source.resolved_revision:
-                raise ManagerError("Response presets are available for revision-pinned Hugging Face models.",
-                    code="recipe_source", status_code=400)
-            if re.fullmatch(r"[0-9a-fA-F]{40}", source.resolved_revision) is None:
-                raise ManagerError("This model has no immutable Hugging Face card revision.",
-                    code="model_card_revision", status_code=409)
-            config = bundle.huggingface_configuration
-            recipe = next((item for item in config.response_recipes if item.id == recipe_id), None) if config else None
-            if recipe is None or recipe.source_repo_id != source.repo_id or recipe.source_revision != source.resolved_revision:
-                raise ManagerError("This preset no longer matches the pinned model card. Refresh the card and choose again.",
-                    code="recipe_stale", status_code=409)
-            assert config is not None
-            hidden = list(dict.fromkeys(config.hidden_response_recipe_ids))
-            if visible:
-                hidden = [item for item in hidden if item != recipe_id]
-            elif recipe_id not in hidden:
-                hidden.append(recipe_id)
-            if hidden == config.hidden_response_recipe_ids:
-                return bundle
-            updated = config.model_copy(update={"hidden_response_recipe_ids": hidden})
-            return self.store.put_bundle(bundle.model_copy(update={"huggingface_configuration": updated}))
-
-    def refresh_response_recipes(self, bundle_id: str, *, restore_hidden: bool = False) -> ModelBundle:
+    def refresh_response_recipes(self, bundle_id: str) -> ModelBundle:
         """Refresh only a pinned model card; weights and saved setups stay untouched."""
         bundle = self.store.get_bundle(bundle_id)
         if bundle is None:
@@ -477,7 +465,6 @@ class ModelManager:
             else:
                 unsupported.pop("README.md", None)
             updated = config.model_copy(update={"response_recipes": [ResponseRecipe.model_validate(item) for item in recipes],
-                "hidden_response_recipe_ids": [] if restore_hidden else config.hidden_response_recipe_ids,
                 "metadata_refreshed_at": utc_now(), "unsupported": unsupported})
             return self.store.put_bundle(current.model_copy(update={"huggingface_configuration": updated}))
 
@@ -502,16 +489,12 @@ class ModelManager:
 
     def save_model_configuration(self, bundle_id: str, request: ModelConfigurationWriteRequest) -> RunProfile:
         with self.store.configuration_lock():
-            self.list_model_configurations(bundle_id)
-            name = request.display_name.strip()
-            if not name:
-                raise ManagerError("Name this configuration.", code="configuration_name_required", status_code=400)
+            self._require_profile_bundle(bundle_id)
             existing = self.canonical_configuration(request.configuration_id) if request.configuration_id else None
             if existing is not None:
                 self._validate_profile_bundle(existing, bundle_id)
-            if any(profile.bundle_id == bundle_id and profile.id != (existing.id if existing else None)
-                    and profile.display_name.strip().casefold() == name.casefold() for profile in self.store.list_profiles()):
-                raise ManagerError("This model already has a configuration with that name. Choose a different name.", code="configuration_name_conflict", status_code=409)
+            name = validate_configuration_name(self.store, request.display_name, bundle_id, excluding=existing.id if existing else None)
+            first_saved = not any(profile.bundle_id == bundle_id for profile in self.store.list_profiles())
             # Optional model-authored guidance is a visible input source. An
             # ordinary response/settings save must not erase it implicitly.
             agent = request.agent if "agent" in request.model_fields_set else (
@@ -537,7 +520,7 @@ class ModelManager:
                 profile = self.create_profile(body)
             if profile.recipe_origin != recipe_origin:
                 profile = self.store.put_profile(profile.model_copy(update={"recipe_origin": recipe_origin}))
-            if request.make_default:
+            if request.make_default or first_saved:
                 self.set_default_configuration(bundle_id, profile.id)
             return profile
 
@@ -547,9 +530,9 @@ class ModelManager:
     def configuration_deployment(self, configuration_id: str) -> Deployment | None:
         return deployment_for_configuration(self.store, self.runtime.current(), configuration_id)
 
-    def compatible_deployment(self, bundle_id: str, bags: SettingsBags) -> Deployment | None:
+    def compatible_deployment(self, bundle_id: str, bags: SettingsBags, *, require_named_origin: bool = False) -> Deployment | None:
         """Find an exact native plan without using setup or response identity."""
-        return find_compatible_deployment(self.store, self.runtime.current(), bundle_id, bags)
+        return find_compatible_deployment(self.store, self.runtime.current(), bundle_id, bags, require_named_origin=require_named_origin)
 
     def get_profile(self, profile_id: str) -> RunProfile:
         return saved_profile(self.store, profile_id)
@@ -643,26 +626,12 @@ class ModelManager:
             profile = self.get_profile(profile_id)
             consumers = self._profile_consumers(profile.id)
             blockers = [consumer for consumer in consumers if consumer.live]
-            bundles = self.store.list_bundles()
-            restrictions: list[LifecycleConsumer] = []
-            for bundle in bundles:
-                if bundle.default_configuration_id == profile.id:
-                    restrictions.append(LifecycleConsumer(kind="setup_defaults", id=bundle.id,
-                        label="Choose another model default before deleting this setup.",
-                        future_use=True, effect="default_configuration_required"))
-            if profile.bundle_id in {bundle.id for bundle in bundles} and not any(
-                other.bundle_id == profile.bundle_id and other.id != profile.id for other in self.store.list_profiles()
-            ):
-                restrictions.append(LifecycleConsumer(kind="profile", id=profile.id,
-                    label="Keep one saved setup for this model. Reset this setup instead.",
-                    future_use=True, effect="last_configuration_required"))
             return DeletePreview(
                 target_kind="profile",
                 target_id=profile.id,
                 target_label=profile.display_name,
-                summary=restrictions[-1].label if restrictions else None,
-                blockers=[*blockers, *restrictions],
-                consumers=[*consumers, *restrictions],
+                blockers=blockers,
+                consumers=consumers,
                 retained=[
                     "Historical deployments, Chat conversations, Lab cases and runs keep their saved profile id/configuration."
                 ],
@@ -674,14 +643,12 @@ class ModelManager:
                 preview = self.profile_delete_preview(profile_id)
                 if any(blocker.live for blocker in preview.blockers):
                     raise self._blocked_error("profile_delete_blocked", preview.blockers)
-                for code in ("default_configuration_required", "last_configuration_required"):
-                    restriction = next((blocker for blocker in preview.blockers if blocker.effect == code), None)
-                    if restriction is not None:
-                        raise ManagerError(restriction.label or "Keep this saved setup.", code=code, status_code=409,
-                            details={"blockers": [blocker.model_dump(mode="json") for blocker in preview.blockers]})
                 if preview.blockers:
                     raise self._blocked_error("profile_delete_blocked", preview.blockers)
                 self.store.delete_profile(profile_id)
+                for bundle in self.store.list_bundles():
+                    if bundle.default_configuration_id == profile_id:
+                        self.store.put_bundle(bundle.model_copy(update={"default_configuration_id": None}))
                 return preview
 
     def resolve_preview(
@@ -748,13 +715,13 @@ class ModelManager:
             if invalid_response:
                 raise ManagerError("Correct invalid response controls before preparing this setup.", code="configuration_values_invalid", status_code=422,
                                    details={"keys": invalid_response})
-            existing = self.compatible_deployment(request.bundle_id, wanted)
+            existing = self.compatible_deployment(request.bundle_id, wanted, require_named_origin=profile is not None)
             if existing is None:
                 existing = self.deployments.create_managed(request.model_copy(update={"auto_start": False}))
                 existing = self.store.put_deployment(existing.model_copy(update={
                     "loaded_model_identity": loaded_model_identity(self.runtime.current(), bundle, existing.settings),
                 }))
-        return self.start_deployment(existing.id) if request.auto_start else existing
+        return self.start_deployment(existing.id, configuration_id=request.profile_id) if request.auto_start else existing
 
     def attach_connected(self, request: ConnectedDeploymentRequest) -> Deployment:
         return self.deployments.attach_connected(request)
@@ -784,12 +751,14 @@ class ModelManager:
             )
         return deployment
 
-    def start_deployment(self, deployment_id: str) -> Deployment:
+    def start_deployment(self, deployment_id: str, *, configuration_id: str | None = None) -> Deployment:
         deployment = self.get_deployment(deployment_id)
         if deployment.bundle_id:
             self._require_deployable_bundle(deployment.bundle_id)
         self._require_current_loaded_identity(deployment)
-        return self.deployments.start(deployment_id)
+        ready = self.deployments.start(deployment_id)
+        self.capability_checks.start(ready.id, configuration_id or deployment.profile_id)
+        return ready
 
     def prepare_lab_deployment(self, configuration_id: str, startup: dict, *, owner: str,
                                concurrent: bool, deployment_id: str | None = None,
@@ -862,7 +831,7 @@ class ModelManager:
 
     def stop_deployment(self, deployment_id: str) -> Deployment:
         deployment = self.get_deployment(deployment_id)
-        with self.lifecycle.mutate(
+        with self.capability_checks.suspend(deployment_id, deployment.bundle_id), self.lifecycle.mutate(
             "stop_deployment",
             deployment_ids={deployment.id},
             profile_ids={deployment.profile_id} if deployment.profile_id else set(),
@@ -884,6 +853,7 @@ class ModelManager:
         Keep this purpose on the existing lifecycle owner so every lower-level
         guard rechecks active work without granting concurrent callers a bypass.
         """
+        self.capability_checks.stop_all()
         managed = [item for item in self.store.list_deployments() if item.scope == ManagementScope.managed]
         deployment_ids = {item.id for item in managed}
         profile_ids = {item.profile_id for item in managed if item.profile_id}
@@ -974,7 +944,7 @@ class ModelManager:
 
     def reload_deployment(self, deployment_id: str) -> Deployment:
         deployment = self.get_deployment(deployment_id)
-        with self.lifecycle.mutate(
+        with self.capability_checks.suspend(deployment_id, deployment.bundle_id), self.lifecycle.mutate(
             "reload_deployment",
             deployment_ids={deployment.id},
             profile_ids={deployment.profile_id} if deployment.profile_id else set(),
@@ -1003,7 +973,9 @@ class ModelManager:
                         "health": None, "server_props": None, "status": DeploymentStatus.stopped,
                         "reconfiguration": None, "updated_at": utc_now()})
                     self.store.put_deployment(restored)
-            return self.deployments.start(deployment.id)
+            ready = self.deployments.start(deployment.id)
+        self.capability_checks.start(ready.id, ready.profile_id)
+        return ready
 
     def _guard_reconfigure(self, deployment: Deployment, request: ReconfigureDeploymentRequest) -> None:
         if deployment.reconfiguration and deployment.reconfiguration.get("phase") == "recovery_required":
@@ -1141,7 +1113,7 @@ class ModelManager:
         from workbench_backend.inference.deployments import _require_valid_managed_startup, managed_argv
 
         deployment = self.get_deployment(deployment_id)
-        with self.lifecycle.mutate("reconfigure_deployment", deployment_ids={deployment.id},
+        with self.capability_checks.suspend(deployment_id, deployment.bundle_id), self.lifecycle.mutate("reconfigure_deployment", deployment_ids={deployment.id},
             bundle_ids={deployment.bundle_id} if deployment.bundle_id else set()):
             deployment = self.get_deployment(deployment_id)
             self._guard_reconfigure(deployment, request)
@@ -1153,9 +1125,9 @@ class ModelManager:
             managed_argv(executable, bundle, bags.startup.applied)
             self._guard_shrinking_conversation_context(deployment, request, requested, profile, bags)
             reused, deployment = self._store_identical_running_launch(deployment, request, requested, bags, profile)
-            if reused is not None:
-                return reused
-            return self._replace_managed_process(deployment, request, requested, bags, profile, bundle)
+            ready = reused if reused is not None else self._replace_managed_process(deployment, request, requested, bags, profile, bundle)
+        self.capability_checks.start(ready.id, profile.id if profile else ready.profile_id)
+        return ready
 
     def deployment_health(self, deployment_id: str) -> Deployment:
         return self.deployments.health(deployment_id)
@@ -1180,6 +1152,7 @@ class ModelManager:
                 return deployment
             if deployment.status == DeploymentStatus.running and deployment.endpoint:
                 if deployment.health is None or deployment.health.healthy:
+                    self.capability_checks.start(deployment.id, deployment.profile_id)
                     return deployment
             if deployment.status in {DeploymentStatus.failed, DeploymentStatus.stopped}:
                 raise ManagerError(
@@ -1321,6 +1294,7 @@ class ModelManager:
                         self.store.delete_profile(consumer.id)
                     elif consumer.kind == "deployment":
                         self.store.delete_deployment(consumer.id)
+                self.store.delete_bundle_capability_evidence(bundle_id, deployment_ids)
             self.store.delete_bundle(bundle_id)
             return preview
 

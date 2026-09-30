@@ -18,6 +18,28 @@ def info(*names):
 
 
 class HubSelectionTests(unittest.TestCase):
+    def test_search_metadata_counts_complete_primary_variants_without_filename_capability_guesses(self):
+        item = info("Q4/model-00001-of-00002.gguf", "Q4/model-00002-of-00002.gguf", "Q8/model-00001-of-00002.gguf", "mmproj.gguf", "MTP/mtp.gguf")
+        item.id = "org/model"
+        item.pipeline_tag = "text-generation"
+        item.tags = []
+        item.card_data = {"model_name": "Thinking image model"}
+        with patch("workbench_backend.inference.hf_fetch.HfApi") as api:
+            api.return_value.list_models.return_value = [item]
+            rows = HuggingFaceFetcher().search("model")
+        self.assertEqual(rows[0].complete_variants, 1)
+        self.assertEqual(rows[0].advertised_capabilities, ["text"])
+        self.assertIn("publisher metadata", rows[0].metadata_source)
+        api.return_value.model_info.assert_not_called()
+
+    def test_search_publisher_modalities_and_unknown_listing_remain_distinct(self):
+        item = SimpleNamespace(id="org/model", pipeline_tag="image-text-to-text", card_data={"reasoning": True, "input_modalities": ["video"]}, tags=[])
+        with patch("workbench_backend.inference.hf_fetch.HfApi") as api:
+            api.return_value.list_models.return_value = [item]
+            row = HuggingFaceFetcher().search("model")[0]
+        self.assertIsNone(row.complete_variants)
+        self.assertEqual(row.advertised_capabilities, ["image", "reasoning", "text", "video"])
+
     def test_exact_blob_and_resolve_links_preserve_file_and_revision(self):
         for route in ("blob", "resolve"):
             with self.subTest(route=route), patch("workbench_backend.inference.hf_fetch.HfApi") as api:

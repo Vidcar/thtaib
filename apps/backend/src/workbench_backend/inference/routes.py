@@ -6,7 +6,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Request, Query
 
-from workbench_backend.errors import manager_error_handler
+from workbench_backend.errors import ManagerError, manager_error_handler
 from workbench_backend.inference.schemas import (
     ConnectedDeploymentRequest,
     HuggingFaceImportRequest,
@@ -21,11 +21,10 @@ from workbench_backend.inference.schemas import (
     DefaultConfigurationRequest,
     ResponseRecipeConfigurationRequest,
     ResponseRecipeConfigurationResult,
-    ResponseRecipeRefreshRequest,
-    ResponseRecipeVisibilityRequest,
     ReconfigureDeploymentRequest,
     SettingsPreviewRequest,
     RenameProfileRequest,
+    RenameBundleRequest,
     DeletePreview,
     DeploymentProfileChanges,
     ImportJob,
@@ -88,6 +87,18 @@ router = APIRouter(prefix="/v1")
 
 def get_manager(request: Request) -> ModelManager:
     return request.app.state.manager
+
+
+def _require_named_setup(manager: ModelManager, bundle_id: str | None, profile_id: str | None) -> None:
+    if not profile_id:
+        raise ManagerError("Save a named setup in Models before loading this model.",
+            code="configuration_required", status_code=409)
+    profile = manager.get_profile(profile_id)
+    if profile.bundle_id != bundle_id or bundle_id is None:
+        raise ManagerError("Choose a saved setup belonging to this model.",
+            code="profile_bundle_mismatch", status_code=400)
+    if not profile.display_name.strip():
+        raise ManagerError("Name this setup before loading the model.", code="configuration_name_required", status_code=409)
 
 
 @router.get("/paths")
@@ -181,6 +192,11 @@ def get_bundle(request: Request, bundle_id: str) -> object:
     return get_manager(request).get_bundle(bundle_id)
 
 
+@router.patch("/bundles/{bundle_id}", response_model=ModelBundle)
+def rename_bundle(request: Request, bundle_id: str, body: RenameBundleRequest) -> ModelBundle:
+    return get_manager(request).rename_bundle(bundle_id, body.display_name)
+
+
 @router.get("/bundles/{bundle_id}/model-card", response_model=ModelCardResponse)
 def get_model_card(request: Request, bundle_id: str) -> object:
     return get_manager(request).get_model_card(bundle_id)
@@ -250,18 +266,8 @@ def model_configurations(request: Request, bundle_id: str):
 
 
 @router.post("/bundles/{bundle_id}/response-recipes/refresh", response_model=ModelBundle)
-def refresh_response_recipes(
-    request: Request, bundle_id: str, body: ResponseRecipeRefreshRequest | None = None,
-) -> ModelBundle:
-    return get_manager(request).refresh_response_recipes(bundle_id,
-        restore_hidden=body.restore_hidden if body is not None else False)
-
-
-@router.put("/bundles/{bundle_id}/response-recipes/{recipe_id}/visibility", response_model=ModelBundle)
-def set_response_recipe_visibility(
-    request: Request, bundle_id: str, recipe_id: str, body: ResponseRecipeVisibilityRequest,
-) -> ModelBundle:
-    return get_manager(request).set_response_recipe_visibility(bundle_id, recipe_id, visible=body.visible)
+def refresh_response_recipes(request: Request, bundle_id: str) -> ModelBundle:
+    return get_manager(request).refresh_response_recipes(bundle_id)
 
 
 @router.post("/bundles/{bundle_id}/response-recipes/configurations", response_model=ResponseRecipeConfigurationResult)
@@ -363,7 +369,10 @@ def list_deployments(request: Request) -> object:
 
 @router.post("/deployments/managed", response_model=Deployment)
 def create_managed(request: Request, body: ManagedDeploymentRequest) -> object:
-    return get_manager(request).create_managed(body)
+    manager = get_manager(request)
+    if body.auto_start:
+        _require_named_setup(manager, body.bundle_id, body.profile_id)
+    return manager.create_managed(body)
 
 
 @router.post("/deployments/connected", response_model=Deployment)
@@ -378,7 +387,11 @@ def get_deployment(request: Request, deployment_id: str) -> object:
 
 @router.post("/deployments/{deployment_id}/start", response_model=Deployment)
 def start_deployment(request: Request, deployment_id: str) -> object:
-    return get_manager(request).start_deployment(deployment_id)
+    manager = get_manager(request)
+    deployment = manager.get_deployment(deployment_id)
+    if deployment.scope.value == "managed":
+        _require_named_setup(manager, deployment.bundle_id, deployment.profile_id)
+    return manager.start_deployment(deployment_id)
 
 
 @router.post("/deployments/{deployment_id}/stop", response_model=Deployment)
@@ -388,12 +401,20 @@ def stop_deployment(request: Request, deployment_id: str) -> object:
 
 @router.post("/deployments/{deployment_id}/reload", response_model=Deployment)
 def reload_deployment(request: Request, deployment_id: str) -> object:
-    return get_manager(request).reload_deployment(deployment_id)
+    manager = get_manager(request)
+    deployment = manager.get_deployment(deployment_id)
+    if deployment.scope.value == "managed":
+        _require_named_setup(manager, deployment.bundle_id, deployment.profile_id)
+    return manager.reload_deployment(deployment_id)
 
 
 @router.post("/deployments/{deployment_id}/reconfigure", response_model=Deployment)
 def reconfigure_deployment(request: Request, deployment_id: str, body: ReconfigureDeploymentRequest):
-    return get_manager(request).reconfigure_deployment(deployment_id, body)
+    manager = get_manager(request)
+    deployment = manager.get_deployment(deployment_id)
+    if deployment.scope.value == "managed":
+        _require_named_setup(manager, deployment.bundle_id, body.model_configuration_id or deployment.profile_id)
+    return manager.reconfigure_deployment(deployment_id, body)
 
 
 @router.get("/deployments/{deployment_id}/profile-changes", response_model=DeploymentProfileChanges)

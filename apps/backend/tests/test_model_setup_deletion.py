@@ -1,4 +1,4 @@
-"""Setup deletion previews and commits share default, last-setup and active-use guards."""
+"""Zero setups are legal while deletion preserves active-use and history guards."""
 
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
@@ -20,7 +20,11 @@ from workbench_backend.state.migrate import open_application_store
 
 class ModelSetupDeletionTests(unittest.TestCase):
     setUp = recipe_tests.RecipeWorkflowTests.setUp
-    tearDown = recipe_tests.RecipeWorkflowTests.tearDown
+
+    def tearDown(self):
+        if getattr(self, "reopened", None) is not None:
+            self.reopened.imports.close()
+        recipe_tests.RecipeWorkflowTests.tearDown(self)
 
     def extra(self):
         return self.manager.store.put_profile(self.base.model_copy(update={
@@ -32,28 +36,29 @@ class ModelSetupDeletionTests(unittest.TestCase):
             display_name="Selected model load", bundle_id=self.bundle.id, profile_id=profile_id,
             scope=ManagementScope.managed, status=status, created_at=now, updated_at=now, **fields))
 
-    def test_default_and_last_setup_restrictions_are_visible_before_confirmation(self):
+    def test_preferred_last_setup_can_be_deleted_without_recreation(self):
         app = FastAPI()
         app.state.manager = self.manager
         app.include_router(router)
         app.add_exception_handler(ManagerError, manager_error_handler)
-        before = self.manager.store.get_bundle(self.bundle.id)
         with TestClient(app) as client:
             preview = client.get(f"/v1/profiles/{self.base.id}/delete-preview")
             self.assertEqual(preview.status_code, 200)
-            self.assertEqual({item["effect"] for item in preview.json()["blockers"]},
-                {"default_configuration_required", "last_configuration_required"})
-            self.assertIn("Reset this setup", preview.json()["summary"])
-            self.assertTrue(all(not item["live"] and item["future_use"] for item in preview.json()["blockers"]))
+            self.assertEqual(preview.json()["blockers"], [])
             deletion = client.delete(f"/v1/profiles/{self.base.id}")
-            self.assertEqual((deletion.status_code, deletion.json()["code"]), (409, "default_configuration_required"))
-        self.assertEqual(self.manager.store.get_bundle(self.bundle.id), before)
-        self.assertEqual(self.manager.store.list_profiles(), [self.base])
+            self.assertEqual(deletion.status_code, 200)
+        self.assertIsNone(self.manager.store.get_bundle(self.bundle.id).default_configuration_id)
+        self.assertEqual(self.manager.list_model_configurations(self.bundle.id), [])
+        self.assertEqual(self.manager.list_bundles()[0].default_configuration_id, None)
+        reopened = type(self.manager)(self.paths)
+        self.reopened = reopened
+        self.assertEqual(reopened.list_model_configurations(self.bundle.id), [])
+        self.assertTrue(self.weight.is_file())
 
     def test_replacement_default_allows_deletion_and_retains_historical_consumers(self):
         alternative = self.extra()
         preview = self.manager.profile_delete_preview(self.base.id)
-        self.assertEqual([item.effect for item in preview.blockers], ["default_configuration_required"])
+        self.assertEqual(preview.blockers, [])
         self.manager.set_default_configuration(self.bundle.id, alternative.id)
         now = utc_now()
         run = AgentRun(id="historical_run", profile_id=self.base.id, deployment_id="old_load",
@@ -75,16 +80,23 @@ class ModelSetupDeletionTests(unittest.TestCase):
             self.assertEqual(store.get_conversation(chat.id).profile_id, self.base.id)
         self.assertTrue(self.weight.is_file())
 
-    def test_last_setup_is_guarded_even_if_its_default_pointer_is_missing(self):
+    def test_last_setup_can_be_deleted_if_its_preferred_pointer_is_missing(self):
         initial = self.bundle.model_copy(update={"default_configuration_id": None})
         self.manager.store.put_bundle(initial)
         preview = self.manager.profile_delete_preview(self.base.id)
-        self.assertEqual([item.effect for item in preview.blockers], ["last_configuration_required"])
-        with self.assertRaises(ManagerError) as raised:
-            self.manager.delete_profile(self.base.id)
-        self.assertEqual((raised.exception.code, raised.exception.status_code), ("last_configuration_required", 409))
+        self.assertEqual(preview.blockers, [])
+        self.manager.delete_profile(self.base.id)
         self.assertEqual(self.manager.store.get_bundle(self.bundle.id), initial)
-        self.assertEqual(self.manager.store.list_profiles(), [self.base])
+        self.assertEqual(self.manager.store.list_profiles(), [])
+
+    def test_deleting_preferred_with_other_setups_clears_pointer_without_substitution(self):
+        alternative = self.extra()
+        self.manager.delete_profile(self.base.id)
+        self.assertEqual(self.manager.store.list_profiles(), [alternative])
+        self.assertIsNone(self.manager.store.get_bundle(self.bundle.id).default_configuration_id)
+        self.manager.list_bundles()
+        self.manager.list_model_configurations(self.bundle.id)
+        self.assertIsNone(self.manager.store.get_bundle(self.bundle.id).default_configuration_id)
 
     def test_active_or_unreaped_model_load_blocks_preview_and_deletion(self):
         alternative = self.extra()

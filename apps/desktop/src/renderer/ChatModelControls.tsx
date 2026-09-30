@@ -180,7 +180,7 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
     return profiles.find(item => item.bundle_id === bundle.id && item.id === selectedProfile?.id)
       ?? profiles.find(item => item.bundle_id === bundle.id && item.id === remembered(configuration)[bundle.id]?.model_configuration_id)
       ?? profiles.find(item => item.id === bundle.default_configuration_id)
-      ?? profiles.find(item => item.bundle_id === bundle.id);
+;
   }
   const connectedChoices = deployments.filter(item => item.scope === "connected");
   const compatibilityContext = JSON.stringify([conversationId, projectId, agentSetupVersionId, configuration]);

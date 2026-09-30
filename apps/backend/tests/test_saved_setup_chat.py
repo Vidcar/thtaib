@@ -23,7 +23,7 @@ class SavedSetupChatTests(unittest.TestCase):
             model = Path(directory) / 'fixture.gguf'
             write_tiny_gguf(model)
             bundle = manager.import_local(LocalImportRequest(source_path=str(model), copy_files=False))
-            profile = manager.create_profile(ProfileWriteRequest(display_name='Preset', startup={'ctx_size': 4096}))
+            profile = manager.create_profile(ProfileWriteRequest(display_name='Preset', bundle_id=bundle.bundle_id, startup={'ctx_size': 4096}))
             # The production desktop serializer is exercised by check-model-settings.mjs:
             # selecting its untouched preset submits profile identity + an empty map.
             saved = manager.create_managed(ManagedDeploymentRequest(bundle_id=bundle.bundle_id, profile_id=profile.id, startup={}, auto_start=False))
@@ -42,7 +42,7 @@ class SavedSetupChatTests(unittest.TestCase):
             self.assertNotIn('ctx_size', automatic.applied_startup)
             for deployment in (saved, cleared, automatic):
                 self.assertFalse(manager.deployment_profile_changes(deployment.id).has_pending_startup_changes)
-            manager.update_profile(profile.id, ProfileWriteRequest(display_name='Preset', startup={'ctx_size': 8192}))
+            manager.update_profile(profile.id, ProfileWriteRequest(display_name='Preset', bundle_id=bundle.bundle_id, startup={'ctx_size': 8192}))
             self.assertTrue(manager.deployment_profile_changes(saved.id).has_pending_startup_changes)
             self.assertFalse(manager.deployment_profile_changes(cleared.id).has_pending_startup_changes)
             self.assertFalse(manager.deployment_profile_changes(automatic.id).has_pending_startup_changes)

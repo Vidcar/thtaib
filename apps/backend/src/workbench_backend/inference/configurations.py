@@ -1,9 +1,11 @@
-"""Model configuration identity and default creation."""
+"""Named model configuration identity, resolution and record migration."""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -109,7 +111,7 @@ def loaded_model_identity(runtime: RuntimeManifest | None, bundle: ModelBundle, 
 
 def model_default_values(store: RecordStore, bundle: ModelBundle, *, startup: dict[str, Any] | None = None
                          ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Read the shared native/template/card baseline without creating overrides."""
+    """Read the shared native/template/generation baseline without creating overrides."""
     from workbench_backend.inference.configuration_options import (
         bundle_configuration_options, response_default_values,
     )
@@ -148,32 +150,53 @@ def model_default_values(store: RecordStore, bundle: ModelBundle, *, startup: di
     return {}, response_default_values(options)
 
 
-def ensure_model_configurations(store: RecordStore) -> None:
-    """Create one fresh default for a bundle that has no valid default.
+def migrate_model_configurations(store: RecordStore, *, protected_profile_ids: set[str] | None = None) -> None:
+    """One-time removal of untouched generated setups and retired product UI state.
 
-    Existing configurations and accepted deployment snapshots keep their
-    identity. Reading a model never rewrites requested settings.
+    Native settings, instructions and historical deployment snapshots are not
+    rewritten. Missing future references remain missing rather than being
+    silently pointed at another setup.
     """
+    version_key = "models-workspace-records-version"
     with store.configuration_lock():
+        if store.get_setting(version_key) == "1":
+            return
+        backup_path = store.paths.state / "models-workspace-records-v1.backup.json"
+        if not backup_path.exists():
+            with closing(sqlite3.connect(store.application_db)) as connection:
+                jobs = [json.loads(row[0]) for row in connection.execute("SELECT payload FROM import_jobs")]
+            snapshot = {"version": 1, "created_at": utc_now(),
+                "bundles": json.loads(store.bundles_path.read_text(encoding="utf-8")) if store.bundles_path.exists() else [],
+                "profiles": json.loads(store.profiles_path.read_text(encoding="utf-8")) if store.profiles_path.exists() else [],
+                "import_jobs": jobs}
+            store._write_json(backup_path, snapshot)
+        protected = protected_profile_ids or set()
+        for profile in store.list_profiles():
+            generated_default = profile.id == f"config_{profile.bundle_id}" and profile.display_name == "Default"
+            generated_import = profile.id.startswith("config_import_") and profile.display_name == "Import settings"
+            untouched = (profile.revision == 1 and profile.recipe_origin is None
+                and not profile.bags.startup.requested and not profile.bags.per_request.requested
+                and not profile.bags.agent.requested)
+            if (generated_default or generated_import) and untouched and profile.id not in protected:
+                store.delete_profile(profile.id)
+                continue
+            retired = {"tools_enabled", "max_iterations"}
+            if retired.intersection(profile.bags.agent.requested):
+                bags = profile.bags.model_copy(deep=True)
+                bags.agent = resolve_bags(agent={key: value for key, value in bags.agent.requested.items()
+                    if key not in retired}).agent
+                store.put_profile(profile.model_copy(update={"bags": bags}))
         for bundle in store.list_bundles():
             current = store.get_profile(bundle.default_configuration_id) if bundle.default_configuration_id else None
-            if current is not None and current.bundle_id == bundle.id:
-                continue
-            now = utc_now()
-            startup_defaults, response_defaults = model_default_values(store, bundle)
-            default_id = f"config_{bundle.id}"
-            default = store.get_profile(default_id)
-            if default is None:
-                default = store.put_profile(RunProfile(
-                    id=default_id, bundle_id=bundle.id, display_name="Default",
-                    bags=resolve_bags(startup_defaults=startup_defaults, per_request_defaults=response_defaults),
-                    settings_schema_version=2,
-                    created_at=now, updated_at=now,
-                ))
-            elif default.bundle_id != bundle.id:
-                raise ManagerError("Model configuration ID belongs to another bundle.",
-                                   code="configuration_identity_conflict", status_code=409)
-            store.put_bundle(bundle.model_copy(update={"default_configuration_id": default.id}))
+            if bundle.default_configuration_id and (current is None or current.bundle_id != bundle.id):
+                bundle = bundle.model_copy(update={"default_configuration_id": None})
+            # Serialising the current schema removes retired preset visibility.
+            store.put_bundle(bundle)
+        # Imports retain their pinned file and recipe choices. Retired preview
+        # tuning fields cannot silently become hidden setup overrides on retry.
+        for job in store.list_jobs():
+            store.put_job(job)
+        store.put_setting(version_key, "1")
 
 
 def require_profile_bundle(store: RecordStore, bundle_id: str | None) -> None:
@@ -222,7 +245,6 @@ def saved_profile(store: RecordStore, profile_id: str) -> RunProfile:
 
 
 def list_saved_profiles(store: RecordStore) -> list[RunProfile]:
-    ensure_model_configurations(store)
     defaults = {bundle.default_configuration_id for bundle in store.list_bundles()}
     profiles = [resolved_profile(store, profile) for profile in store.list_profiles()]
     profiles.sort(key=lambda profile: (profile.id in defaults, profile.updated_at, profile.id), reverse=True)
@@ -247,10 +269,22 @@ def set_bundle_default_configuration(store: RecordStore, bundle_id: str, configu
 
 def rename_saved_profile(store: RecordStore, profile_id: str, request: RenameProfileRequest | str) -> RunProfile:
     display_name = request if isinstance(request, str) else request.display_name
-    existing = saved_profile(store, profile_id)
-    return store.put_profile(
-        existing.model_copy(update={"display_name": display_name, "updated_at": utc_now(), "revision": existing.revision + 1})
-    )
+    with store.configuration_lock():
+        existing = saved_profile(store, profile_id)
+        name = validate_configuration_name(store, display_name, existing.bundle_id, excluding=existing.id)
+        return store.put_profile(existing.model_copy(update={"display_name": name,
+            "updated_at": utc_now(), "revision": existing.revision + 1}))
+
+
+def validate_configuration_name(store: RecordStore, display_name: str, bundle_id: str | None, *, excluding: str | None = None) -> str:
+    name = display_name.strip()
+    if not name:
+        raise ManagerError("Name this configuration.", code="configuration_name_required", status_code=400)
+    if any(profile.bundle_id == bundle_id and profile.id != excluding
+            and profile.display_name.strip().casefold() == name.casefold() for profile in store.list_profiles()):
+        raise ManagerError("This model already has a configuration with that name. Choose a different name.",
+            code="configuration_name_conflict", status_code=409)
+    return name
 
 
 def duplicate_saved_profile(
@@ -258,21 +292,20 @@ def duplicate_saved_profile(
     profile_id: str,
     request: DuplicateProfileRequest | None = None,
 ) -> RunProfile:
-    existing = saved_profile(store, profile_id)
-    now = utc_now()
-    display_name = request.display_name if request and request.display_name else f"{existing.display_name} copy"
-    duplicate = existing.model_copy(
-        update={
-            "id": new_id("profile"),
-            "display_name": display_name,
-            "created_at": now,
-            "updated_at": now,
-            "revision": 1,
-            "recipe_origin": None,
-        },
-        deep=True,
-    )
-    return store.put_profile(duplicate)
+    with store.configuration_lock():
+        existing = saved_profile(store, profile_id)
+        now = utc_now()
+        display_name = request.display_name if request and request.display_name is not None else f"{existing.display_name} copy"
+        if not request or request.display_name is None:
+            names = {profile.display_name.strip().casefold() for profile in store.list_profiles() if profile.bundle_id == existing.bundle_id}
+            index = 2
+            while display_name.casefold() in names:
+                display_name = f"{existing.display_name} copy {index}"
+                index += 1
+        display_name = validate_configuration_name(store, display_name, existing.bundle_id)
+        duplicate = existing.model_copy(update={"id": new_id("profile"), "display_name": display_name,
+            "created_at": now, "updated_at": now, "revision": 1, "recipe_origin": None}, deep=True)
+        return store.put_profile(duplicate)
 
 
 def find_compatible_deployment(
@@ -280,6 +313,7 @@ def find_compatible_deployment(
     runtime: RuntimeManifest | None,
     bundle_id: str,
     bags: SettingsBags,
+    *, require_named_origin: bool = False,
 ) -> Deployment | None:
     """Find an exact native plan without using setup or response identity."""
     bundle = store.get_bundle(bundle_id)
@@ -290,6 +324,10 @@ def find_compatible_deployment(
     for deployment in store.list_deployments():
         if deployment.benchmark_owner or deployment.scope != ManagementScope.managed or deployment.bundle_id != bundle_id or has_response_startup_defaults(deployment.settings):
             continue
+        if require_named_origin:
+            origin = store.get_profile(deployment.profile_id or "")
+            if origin is None or origin.bundle_id != bundle_id or not origin.display_name.strip():
+                continue
         if deployment.loaded_model_identity is not None:
             compatible = deployment.loaded_model_identity == selected_identity
         else:
@@ -308,4 +346,4 @@ def deployment_for_configuration(
     configuration_id: str,
 ) -> Deployment | None:
     profile = saved_profile(store, configuration_id)
-    return find_compatible_deployment(store, runtime, profile.bundle_id or "", profile.bags)
+    return find_compatible_deployment(store, runtime, profile.bundle_id or "", profile.bags, require_named_origin=True)

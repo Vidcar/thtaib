@@ -6,7 +6,9 @@ import base64
 import json
 import re
 import struct
+import threading
 import zlib
+from collections.abc import Callable
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -14,17 +16,19 @@ from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.constants import TAG_NOSTREAM
 from openai import BadRequestError
 
-from workbench_backend.errors import HarnessError
+from workbench_backend.errors import HarnessError, ManagerError
 from workbench_backend.inference.adapter import chat_model_for_deployment
 from workbench_backend.inference.capabilities import (
     CapabilityEvidence,
     CapabilityProbeRequest,
     capability_support,
+    proof_fingerprint,
+    proof_scope,
     setup_fingerprint,
     setup_identity,
 )
 from workbench_backend.inference.ids import new_id, utc_now
-from workbench_backend.inference.settings import PER_REQUEST_KEYS, resolve_bag
+from workbench_backend.inference.capability_context import require_current_probe_template, resolve_probe_bag, selected_configuration
 
 PROBE_SCHEMA = {
     "title": "probe_answer",
@@ -38,6 +42,57 @@ PROBE_TOOL = {
         "parameters": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"], "additionalProperties": False},
     },
 }
+_PROBE_LOCKS_LOCK = threading.Lock()
+_PROBE_LOCKS: dict[tuple[str, str, str], threading.RLock] = {}
+
+
+class _ProbeCancelled(ManagerError):
+    def __init__(self):
+        super().__init__("Capability checks were stopped.", code="capability_checks_cancelled", status_code=409)
+
+
+class _CancellableProbeModel:
+    """Check cancellation between native calls; never start another exchange."""
+    def __init__(self, model, cancelled):
+        self.model, self.cancelled = model, cancelled
+
+    def __getattr__(self, name):
+        return getattr(self.model, name)
+
+    def check(self):
+        if self.cancelled():
+            raise _ProbeCancelled()
+
+    def invoke(self, *args, **kwargs):
+        self.check()
+        result = self.model.invoke(*args, **kwargs)
+        self.check()
+        return result
+
+    def stream(self, *args, **kwargs):
+        self.check()
+        for chunk in self.model.stream(*args, **kwargs):
+            self.check()
+            yield chunk
+        self.check()
+
+    def bind(self, *args, **kwargs):
+        return _CancellableProbeModel(self.model.bind(*args, **kwargs), self.cancelled)
+
+    def bind_tools(self, *args, **kwargs):
+        return _CancellableProbeModel(self.model.bind_tools(*args, **kwargs), self.cancelled)
+
+
+def _latest_evidence(manager: Any, deployment: Any, bag: Any, capability: str) -> CapabilityEvidence | None:
+    fingerprint = setup_fingerprint(deployment, bag)
+    scoped = proof_scope(setup_identity(deployment, bag))
+    for raw in reversed(manager.store.list_capability_evidence()):
+        if raw.get("capability") != capability:
+            continue
+        setup = raw.get("setup")
+        if raw.get("fingerprint") == fingerprint or isinstance(setup, dict) and proof_scope(setup) == scoped:
+            return CapabilityEvidence.model_validate(raw)
+    return None
 
 
 def _image_fixture(colour: str = "red") -> str:
@@ -56,7 +111,7 @@ def ensure_tool_image_support(manager: Any, deployment_id: str, per_request: Any
     """
 
     if probe is None:
-        probe = run_capability_probe
+        probe = lambda owner, identifier, request: run_capability_probe(owner, identifier, request, only_missing=True)
     deployment = manager.get_deployment(deployment_id)
     settings = getattr(per_request, "applied", None) if per_request is not None and not isinstance(per_request, dict) else per_request
 
@@ -91,11 +146,36 @@ def ensure_tool_image_support(manager: Any, deployment_id: str, per_request: Any
     return current("tool_image") == "passed"
 
 
-def run_capability_probe(manager: Any, deployment_id: str, request: CapabilityProbeRequest, *, model_factory=chat_model_for_deployment) -> CapabilityEvidence:
+def run_capability_probe(manager: Any, deployment_id: str, request: CapabilityProbeRequest, *,
+                         model_factory=chat_model_for_deployment, only_missing: bool = False,
+                         cancelled: Callable[[], bool] | None = None) -> CapabilityEvidence:
+    if request.configuration_id and request.expected_configuration_revision is None:
+        profile = selected_configuration(manager, request.configuration_id)
+        request = request.model_copy(update={"expected_configuration_revision": profile.revision})
+    deployment = manager.get_deployment(deployment_id) if callable(getattr(manager, "get_deployment", None)) else manager.deployment
+    bag = resolve_probe_bag(manager, deployment, request)
+    before = _latest_evidence(manager, deployment, bag, request.capability)
+    key = (str(manager.store.application_db), proof_fingerprint(deployment, bag), request.capability)
+    with _PROBE_LOCKS_LOCK:
+        lock = _PROBE_LOCKS.setdefault(key, threading.RLock())
+    with lock:
+        if cancelled is not None and cancelled():
+            raise ManagerError("Capability checks were stopped.", code="capability_checks_cancelled", status_code=409)
+        # A concurrent icon click or lazy screenshot check observes the result
+        # of the request already underway instead of sending a duplicate probe.
+        current = _latest_evidence(manager, deployment, bag, request.capability)
+        if current and current.status != "untested" and (only_missing or before is None or current.id != before.id):
+            return current
+        return _run_capability_probe(manager, deployment_id, request, model_factory=model_factory, cancelled=cancelled)
+
+
+def _run_capability_probe(manager: Any, deployment_id: str, request: CapabilityProbeRequest, *, model_factory,
+                          cancelled: Callable[[], bool] | None = None) -> CapabilityEvidence:
     # Protect owned lifecycle for the entire probe, including both halves of a tool exchange.
-    with manager.reserve_deployment(deployment_id):
+    with manager.reserve_deployment(deployment_id, **({"profile_id": request.configuration_id} if request.configuration_id else {})):
         deployment = manager.ensure_deployment_ready(deployment_id)
-        bag = deployment.settings.per_request if request.per_request is None else resolve_bag(request.per_request, PER_REQUEST_KEYS)
+        require_current_probe_template(deployment)
+        bag = resolve_probe_bag(manager, deployment, request)
         record = CapabilityEvidence(
             id=new_id("probe"), deployment_id=deployment.id, capability=request.capability,
             status="inconclusive", fingerprint=setup_fingerprint(deployment, bag),
@@ -103,6 +183,7 @@ def run_capability_probe(manager: Any, deployment_id: str, request: CapabilityPr
         )
         model = None
         wire: list[dict[str, Any]] = []
+        interrupted = False
         try:
             model = model_factory(deployment, per_request=bag, timeout=60.0, capture_sink=wire)
             if isinstance(model, BaseChatModel):
@@ -110,7 +191,9 @@ def run_capability_probe(manager: Any, deployment_id: str, request: CapabilityPr
                 # owned model so bindings and both halves of a tool exchange stay
                 # internal, while cleanup still closes the original client.
                 model.tags = [*(model.tags or []), TAG_NOSTREAM]
-            _exercise(model, request.capability, record)
+            _exercise(_CancellableProbeModel(model, cancelled) if cancelled else model, request.capability, record)
+        except _ProbeCancelled:
+            interrupted = True
         except Exception as exc:
             # A rejected request is a failure for this exact setup. Network,
             # authentication and runtime outages remain inconclusive.
@@ -133,6 +216,10 @@ def run_capability_probe(manager: Any, deployment_id: str, request: CapabilityPr
                     record.observations["cleanup_error_type"] = type(exc).__name__
                     record.status = "inconclusive"
                     record.note = "The request finished, but its client could not be closed cleanly. Retry this check."
+        if interrupted or (cancelled is not None and cancelled()):
+            # A user/app cancellation is not a model capability observation.
+            # Leave this scope missing so a later load can finish the checks.
+            raise _ProbeCancelled()
         record.observations["wire_requests"] = [{
             "model": entry.get("body", {}).get("model"),
             "settings": {key: entry.get("body", {}).get(key) for key in (*bag.applied, "chat_template_kwargs") if key in entry.get("body", {})},

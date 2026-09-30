@@ -215,7 +215,8 @@ class DirectHelperPreparationTests(unittest.TestCase):
         manager = self.app.state.manager
         bundle_id = manager.import_local(LocalImportRequest(
             source_path=str(write_tiny_gguf(self.folder / "helper.gguf")))).bundle_id
-        profile = manager.list_model_configurations(bundle_id)[0]
+        from workbench_backend.inference.schemas import ModelConfigurationWriteRequest
+        profile = manager.save_model_configuration(bundle_id, ModelConfigurationWriteRequest(display_name="Helper setup"))
         helper = self.setup(model_configuration_id=profile.id, presented_tools=[])
         self.assertEqual(manager.store.list_deployments(), [self.deployment])
         main = ScriptedChatModel([helper_fixture.call("task", {

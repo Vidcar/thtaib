@@ -28,7 +28,7 @@ The model manager SHALL use llama.cpp `gguf-py` for metadata and tensor inspecti
 
 ### Requirement: MOD-003 - Preserve profile fidelity
 
-Each model SHALL have one saved default configuration and optional named variants, shared by Chat, Lab and Workflows. Configurations SHALL separate startup and per-request inference settings; agents and project/chat setup SHALL own behaviour, tools and knowledge. An optional saved model instruction block SHALL be visible, editable and explicitly resettable in its owning Models setup and shared input inspection. Omitting this block while saving other configuration fields SHALL preserve it; resetting it SHALL clear only this optional guidance. A model configuration MUST reject a different bundle or agent capability/access fields. Historical snapshots preserve their original distinct settings bags. Selecting a profile SHALL pass its identity and resolved bags to the backend. Each deployment SHALL freeze its launch inputs; profile edits affect future work and show pending startup differences rather than rewriting an active deployment.
+Each model SHALL allow zero or more named saved configurations, shared by Chat, Lab and Workflows, with an optional preferred configuration. A model without usable selected card recipes SHALL have no automatically created setup; the user SHALL save a named setup before loading it. Empty native setting bags SHALL be valid when recorded model artifacts and runtime requirements suffice. The first manually saved setup SHALL become preferred. Deleting the last or preferred setup SHALL be allowed subject to active-use protection and SHALL clear the preferred pointer when needed. Missing setup references SHALL remain actionable without silently selecting another setup. Configurations SHALL separate startup and per-request inference settings; agents and project/chat setup SHALL own behaviour, tools and knowledge. An optional saved model instruction block SHALL be visible, editable and explicitly resettable in its owning Models setup and shared input inspection. Omitting this block while saving other configuration fields SHALL preserve it; resetting it SHALL clear only this optional guidance. A model configuration MUST reject a different bundle or agent capability/access fields. Historical snapshots preserve their original distinct settings bags. Selecting a profile SHALL pass its identity and resolved bags to the backend. Each deployment SHALL freeze its launch inputs; profile edits affect future work and show pending startup differences rather than rewriting an active deployment.
 
 Requested, selected, transmitted, loaded, applied, overridden, unsupported and unverified values SHALL remain distinguishable. Startup controls include context, parallelism, GPU layers, KV-cache types, flash attention and supported loading modes; request controls include sampling and output limits; optional model instructions use shared composition and source exclusion. Only startup changes require coordinated reload. Retired controls SHALL follow supported migration, not produce obsolete flags. Profiles SHALL support inspect, rename, duplicate and dependency-aware delete while retaining historical snapshots.
 
@@ -142,22 +142,27 @@ Guided Hugging Face imports SHALL read repository metadata before weight transfe
 - THEN import or deployment MUST require an explicit selection or text-only choice
 - AND legacy ambiguous projector records MUST fail at deployment start rather than guessing.
 
-The guided import SHALL present Find, Choose and Review/download stages. Find SHALL support repository search and exact supported Hugging Face links. Choose SHALL preserve complete primary and projector selections and SHALL keep the publisher response recipe as a generation template only. Review SHALL show the exact selection, the advisory hardware estimate, and the loading settings before explicit Download. Back SHALL preserve selections and draft settings. Advanced metadata SHALL remain expandable. A loading setting becomes part of the initial saved configuration only after the person sets it on Review. Untouched context, GPU layers, key and value cache precision, cache location, flash attention and MTP SHALL stay omitted so llama.cpp keeps its own defaults. The shared slider SHALL increment by 1,024 tokens and display the resolved value directly. Import-created recipe configurations SHALL inherit the selected job's startup in their own stable identities; retry/recovery SHALL NOT overwrite prior or deliberately edited configurations. Ordinary repeated model-card recipe creation SHALL preserve existing editable recipe identities.
+The guided import SHALL present Find and Choose with an explicit Download/Add action on Choose and no separate Review stage. Find SHALL support repository search, exact supported Hugging Face links and native local browsing. Choose SHALL preserve one complete primary/shard selection, explicit projector or text-only choice, immutable revision and checked usable card recipes. Back and failed requests SHALL preserve choices. Card recipes SHALL create only the selected named configurations. Without selected recipes, import SHALL create no setup. Untouched native settings SHALL remain omitted. Memory preview controls SHALL remain advisory and MUST NOT become saved startup overrides. Retry/recovery SHALL NOT overwrite prior or deliberately edited configurations. Repeated card creation SHALL preserve editable recipe identities.
+
+#### Scenario: Choose and install
+- **WHEN** a person selects a complete quantization, an explicit projector or text-only choice and two offered recipes, then chooses Download
+- **THEN** the exact selection is installed and only those two named setups are created, without another review step or implicit Default setup.
+
+#### Scenario: Advisory preview is not a setup
+- **WHEN** a person explores context, placement or cache values on Choose and downloads without selecting card recipes
+- **THEN** no setup is created and the preview settings are not stored as native overrides.
 
 #### Scenario: Review and revise import options
-
-- **WHEN** a person selects a complete quantization and an explicit projector or text-only choice, opens Review, sets loading options, then goes Back
-- **THEN** the exact selections remain, and explicit Download retains only the loading settings the person set, alongside the immutable revision, file membership and projector/text-only choice.
+- **WHEN** a person chooses complete files/projector on Choose, explores the advisory settings, then goes Back
+- **THEN** the exact selections remain and Download is available directly from Choose without a separate Review stage.
 
 #### Scenario: Untouched loading settings stay omitted
-
-- **WHEN** a person downloads a complete selection without changing context, GPU layers, cache precision, cache location, flash attention or MTP
-- **THEN** the saved launch setup omits those flags and still records the model path, the address the app needs, a selected vision file, and a verified chat template when the repository has one.
+- **WHEN** a person downloads without selecting any recipes or authoring a named setup
+- **THEN** optional native tuning stays omitted and no generic setup is created.
 
 #### Scenario: Exact linked primary file
-
 - **WHEN** Find receives a supported exact primary GGUF file link
-- **THEN** the staged flow retains that exact variant and required shards rather than switching to another quantization.
+- **THEN** Choose retains that exact variant and required shards rather than switching quantization.
 
 ### Requirement: MOD-009 - Discover and install exact repository selections
 
@@ -309,9 +314,9 @@ Bounded redacted evidence SHALL link transmitted requests and wire outcomes to c
 
 ### Requirement: MOD-019 - Keep capability probes specific to the tested setup
 
-Reusable probes SHALL exercise shared-adapter streaming, a harmless real tool round trip, structured output and suitable reasoning/image support. Records SHALL retain test inputs/outcomes, runtime/deployment/bundle, template/projector and effective settings. Proof follows the weight files, projector, template and runtime. Changing context, key or value cache precision, cache location, GPU layers, flash attention or MTP on the same weights and projector SHALL NOT discard that proof. Changing the weight files, projector, template or runtime SHALL. Publisher guidance, recommendations, user opt-outs, tested adjustments, failed, untested and inconclusive outcomes remain distinct. A failed probe MUST NOT establish universal model incompatibility or prevent explicitly unverified ordinary use.
+Reusable probes SHALL exercise shared-adapter streaming, a harmless real tool round trip, structured output and suitable reasoning/image support. Records SHALL retain test inputs/outcomes, runtime/deployment/bundle, template/projector and effective response/Thinking/history settings. Behavioral evidence SHALL persist in user data and be reusable across replacement deployments with matching artifacts/runtime/template/projector/response semantics. Mutable labels, revision-only changes, process IDs and endpoint changes SHALL NOT invalidate managed proof. A changed effective response/Thinking/history setting SHALL have its own tested scope. Proof follows the weight files, projector, template and runtime. Changing context, key or value cache precision, cache location, GPU layers, flash attention or MTP on the same weights and projector SHALL NOT discard that proof. Changing the weight files, projector, template or runtime SHALL. Publisher guidance, recommendations, user opt-outs, tested adjustments, failed, untested and inconclusive outcomes remain distinct. A failed probe MUST NOT establish universal model incompatibility or prevent explicitly unverified ordinary use.
 
-The model screen SHALL show one icon each for text, tools, thinking, structured output, image, video and audio. Detail and retest stay in the icon hover. A failed or inconclusive check stays distinct from a pass. Video and audio icons follow a reported modality and are not generation-probed. The first healthy load SHALL run the existing probes for each advertised kind those probes cover, and SHALL NOT repeat them for the same weights and projector.
+The model header SHALL show the ten supported checks with accessible status/help and individual icon retests, plus Run all. Failure/inconclusive SHALL be normal evidence rather than an error banner. Audio/video automatic checks SHALL remain deferred with no verified claim from an indicator. After a healthy named-setup load, missing applicable checks SHALL run automatically through the backend without blocking ordinary text use; saved matching results SHALL prevent repeated testing on later loads. Passive reads/navigation SHALL NOT infer or load. Explicit retests SHALL replace only the requested check's evidence. Concurrent automatic, manual and dependent image checks SHALL share lifecycle protection and deduplication; cancelled unrun checks SHALL remain missing and retryable.
 
 #### Scenario: Changed setup
 
@@ -322,6 +327,14 @@ The model screen SHALL show one icon each for text, tools, thinking, structured 
 
 - **WHEN** context, cache precision, cache location, GPU layers, flash attention or MTP change on the same weights and projector
 - **THEN** existing proof for those weights remains applicable.
+
+#### Scenario: Reload reuses evidence
+- **WHEN** a saved setup loads again after restart with unchanged behavioral inputs
+- **THEN** its persisted pass, fail or inconclusive results are reused without running those checks again.
+
+#### Scenario: Selected response recipe and manual retest
+- **WHEN** two response recipes share one native child and a person retests one check for the selected saved setup
+- **THEN** the saved setup identity/revision resolves its actual response values server-side and only that scope/check is updated.
 
 ### Requirement: MOD-021 - Report known defaults and their source
 
@@ -415,12 +428,11 @@ For managed inference, the selected compatible standalone chat template SHALL be
 
 ### Requirement: MOD-025 - Organize model tasks without losing progress
 
-The Models workspace SHALL separate installed models, adding models and downloads into distinct accessible tabs. Import progress and completion SHALL remain current while another Models tab is selected. Starting an import SHALL expose its progress in Downloads; completion SHALL refresh the library without taking focus from the person. Storage controls SHALL be available with Downloads.
+The Models workspace SHALL provide My models and Add models tabs. Add models SHALL contain Find, Choose and ongoing import progress with Cancel/Retry and compact detailed recovery/cleanup actions. Progress and completion SHALL remain current while another tab/page is selected, survive restart through durable job records and never steal focus on completion. No separate Downloads page SHALL be required. Installation destination/storage cleanup SHALL be available in Settings.
 
 #### Scenario: Leave a running download
-- **WHEN** a person starts a download and switches to My models or Add models
-- **THEN** the Downloads tab continues to report active work
-- **AND** the completed bundle becomes available in My models without forcing a tab change.
+- **WHEN** a person starts a download and switches to My models
+- **THEN** Add models continues to report active work and the completed bundle becomes available without forcing a tab change.
 
 ### Requirement: MOD-026 - Compare complete primary GGUF variants
 
@@ -438,11 +450,11 @@ Repository inspection SHALL present complete primary variants with exact file me
 
 ### Requirement: MOD-027 - Expose model controls and clear terminal downloads
 
-The Models workspace SHALL provide My models, Add models and Downloads tabs. My models SHALL use a compact, searchable and keyboard-accessible catalogue beside a responsive editor when space permits, collapsing into an accessible model/configuration selector on narrower windows. Long names and filename-derived Standard, LOW-MTP or MTP variants SHALL remain distinguishable. Unsaved edits SHALL remain available when switching between models or configurations or navigating within the open app, and SHALL be marked visibly; reverting to saved values SHALL clear that mark.
+The Models workspace SHALL provide My models and Add models tabs. My models SHALL use a compact, searchable and keyboard-accessible catalogue beside a responsive editor when space permits, collapsing into an accessible model/configuration selector on narrower windows. Long names and filename-derived Standard, LOW-MTP or MTP variants SHALL remain distinguishable. Unsaved edits SHALL remain available when switching between models or configurations or navigating within the open app, and SHALL be marked visibly; reverting to saved values SHALL clear that mark.
 
-The selected model SHALL clearly separate Configuration, Model card and Files. Common Context, GPU layers, independent K/V cache precision, Flash attention, Thinking, thinking history, maximum output tokens, MTP and all seven common sampling fields SHALL be visible in compact controls. Advanced SHALL retain memory fitting, specialist samplers, CPU/batch/parallel/offload/loading settings, thinking budget/format, speculative tuning and optional model instructions. Context SHALL use one 1,024-token slider and readout with verified bounds and the exact known maximum endpoint; display ranges MUST NOT become invented runtime bounds. Known default values SHALL select their actual setting without a duplicate Default choice. GPU layers SHALL offer Auto, All, CPU and an exact count. Automatic SHALL pass llama.cpp's automatic value (`auto` or legacy `-1`); All SHALL pass its explicit `all` value. Displayed launch settings SHALL identify a requested mode without claiming actual GPU placement unless the engine reports it. MTP SHALL appear only when supported by inspected metadata. Diagnostics, logs, recipes, provenance and exact file membership SHALL remain accessible in their appropriate disclosures or tabs.
+The selected model SHALL present compact Generation and Loading columns with model-card/files/runtime maintenance in contextual disclosures. Common Context, GPU layers, independent K/V cache precision, Flash attention, Thinking, thinking history, maximum output tokens, MTP and all seven common sampling fields SHALL be visible in compact controls. Advanced SHALL retain memory fitting, specialist samplers, CPU/batch/parallel/offload/loading settings, thinking budget/format, speculative tuning and optional model instructions. Context SHALL use one 1,024-token slider and readout with verified bounds and the exact known maximum endpoint; display ranges MUST NOT become invented runtime bounds. Optional native overrides SHALL remain empty until set, with known defaults/effective values in brief contextual help; displaying a default SHALL NOT store it. GPU layers SHALL offer Auto, All, CPU and an exact count. Automatic SHALL pass llama.cpp's automatic value (`auto` or legacy `-1`); All SHALL pass its explicit `all` value. Displayed launch settings SHALL identify a requested mode without claiming actual GPU placement unless the engine reports it. MTP SHALL appear only when supported by inspected metadata. Diagnostics, logs, recipes, provenance and exact file membership SHALL remain accessible in their appropriate disclosures or tabs.
 
-Controls SHALL make the backend-resolved effective value and source the main readout without storing a followed value as an explicit override. Known followed, edited, loaded and unknown values SHALL remain distinguishable; an unknown value SHALL say Not reported. Binary settings SHALL use accessible compact switches or labelled two-position controls. Keyboard-operable controls SHALL expose effective choices, retaining genuine Auto/Unlimited modes without redundant inheritance positions. Source, reset, exact native mapping and apply timing SHALL be available in contextual help. A separate Loaded value SHALL appear only for a meaningful difference reported by the running engine. Saving SHALL update the selected model configuration for future Chat, Lab and Workflows turns; startup application SHALL follow managed reload safety. Save changes, Save as configuration, default selection and Load or Apply configuration SHALL remain available with labels accurately describing saving and loading. Applying a loaded configuration SHALL not promise a restart when the existing frozen launch can be rebound without one; changed launch settings SHALL retain safe reload behaviour.
+Controls SHALL make the backend-resolved effective value and source the main readout without storing a followed value as an explicit override. Known followed, edited, loaded and unknown values SHALL remain distinguishable; an unknown value SHALL say Not reported. Binary settings SHALL use accessible compact switches or labelled two-position controls. Keyboard-operable controls SHALL expose effective choices, retaining genuine Auto/Unlimited modes without redundant inheritance positions. Source, reset, exact native mapping and apply timing SHALL be available in contextual help. A separate Loaded value SHALL appear only for a meaningful difference reported by the running engine. Saving SHALL update the selected model configuration for future Chat, Lab and Workflows turns; startup application SHALL follow managed reload safety. Create and Delete SHALL be compact primary setup actions; rename, copy, preferred selection and revert SHALL be available in a small menu. Save and Load SHALL remain distinct with accurate labels. Applying a loaded configuration SHALL not promise a restart when the existing frozen launch can be rebound without one; changed launch settings SHALL retain safe reload behaviour.
 
 Discard SHALL safely remove an eligible stopped, failed, interrupted or previously discarded import's owned unreferenced temporary content and clear its terminal job record. It MUST reject active and completed jobs. Shared or installed content SHALL remain protected, and cleanup failure SHALL leave the job actionable. Clearing history MUST NOT claim to free bytes it did not measure.
 
@@ -492,21 +504,21 @@ Hugging Face inspection SHALL retain a valid file-specific link hint and compare
 
 ### Requirement: MOD-030 - Offer model-card response recipes as explicit configurations
 
-The product SHALL extract only unambiguous, supported response recommendations from a revision-pinned GGUF repository card and record their source repository, revision, card identity and section. Card recommendations SHALL remain separately attributed from verified automatic generation defaults. A new model default SHALL initialise from an unambiguous compatible recommendation matching native Thinking; ambiguous or unsupported choices SHALL fall back to native/template settings and remain explicitly selectable. Valid zero-valued samplers and supported presence and frequency penalties SHALL be retained. An unsupported, invalid or conflicting response recommendation SHALL not be offered as a selectable recipe.
+The product SHALL extract only unambiguous, supported response recommendations from a revision-pinned GGUF repository card and record their source repository, revision, card identity and section. Card recommendations SHALL remain separately attributed from verified automatic generation defaults. Only explicitly selected card recipes SHALL be adopted as saved setups. Empty/manual setups SHALL use native/template and verified publisher generation defaults without implicitly adopting a card recipe. Valid zero-valued samplers and supported presence and frequency penalties SHALL be retained. An unsupported, invalid or conflicting response recommendation SHALL not be offered as a selectable recipe.
 
 The product SHALL support both explicitly named thinking and non-thinking recipes and a single clearly recommended set of response samplers without a thinking-mode instruction. The latter SHALL preserve the chosen configuration's existing thinking mode. Non-response guidance in the same recommendation section SHALL be clearly identified as not copied into the configuration and remain available in the full card.
 
-During import or on an installed model, a user SHALL be able to select any offered recipes for creation as named model configurations and optionally choose one as the model default. A new configuration SHALL copy the then-current default configuration's requested launch settings, use the selected response recipe while retaining unrelated requested response settings, and remain independent of later default edits. Existing configurations and explicit overrides SHALL not be overwritten by metadata refresh or later card changes. Repeating a selected import or creation action SHALL not duplicate recipe-created configurations. Thinking mode SHALL be applied only when the selected model template supports the relevant toggle. Weight-install success and configuration-creation failure SHALL be reported separately.
+During import or on an installed model, a user SHALL be able to select any offered recipes for creation as named model configurations and optionally choose one as the model default. A new configuration SHALL be created directly from required verified bundle/template defaults and the selected response recipe without requiring or cloning a generic default setup. Checked usable recipes SHALL be selected initially in stable card order; the user SHALL be able to uncheck any/all recipes. Only checked recipes SHALL create named setups, with the first selected recipe preferred unless explicitly chosen otherwise. Existing configurations and explicit overrides SHALL not be overwritten by metadata refresh or later card changes. Repeating a selected import or creation action SHALL not duplicate recipe-created configurations. Thinking mode SHALL be applied only when the selected model template supports the relevant toggle. Weight-install success and configuration-creation failure SHALL be reported separately.
 
 #### Scenario: Three recommendations on one card
 - **WHEN** the selected pinned model card clearly recommends general thinking, precise coding and non-thinking values
 - **THEN** all three appear as separate response recipes with source attribution
-- **AND** only an unambiguous compatible initial recommendation matching native Thinking may initialise a new default; other recipes require explicit selection.
+- **AND** only checked recipes create named setups; unchecking all leaves the model without a saved setup.
 
 #### Scenario: Single recommended response set
 - **WHEN** the selected pinned card clearly recommends one valid set of response samplers without specifying a thinking mode
 - **THEN** the supported values appear as one selectable recipe with source attribution
-- **AND** creating its configuration preserves the current default's requested thinking mode.
+- **AND** creating its configuration preserves native/template Thinking when the recipe does not specify it.
 
 #### Scenario: Mixed response and other guidance
 - **WHEN** a card recommends valid response samplers alongside prompt or launch guidance
@@ -619,7 +631,7 @@ For supported timing streams, inference SHALL retain actual cached and newly pro
 
 ### Requirement: MOD-036 - Estimate model hardware use without restricting user choice
 
-Import review, Models and Chat context candidates SHALL consume the shared non-disruptive hardware preview. Choose selects quantization, projector or text-only, and the publisher generation recipe. Ordinary installed-model preview SHALL use fast cached metadata/tensor calculations. A deliberate native check SHALL use a bounded subprocess compiled against the exact pinned llama.cpp native APIs. Both methods SHALL account for the selected server parallel slots, unified context, embeddings and speculation; measure target, selected projector and draft/MTP together; and count shared MTP weights once. A built-in draft head is a tensor whose name ends in `nextn.eh_proj.weight`, for every architecture. A separate draft file counts only after that file's own header contains a NextN tensor. MTP memory is included only when draft-mtp is selected. MTP off excludes embedded next-token tensors from the estimate; those tensors remain in the downloaded file. A built-in head counts shared weights once and adds the head cache. A separate draft adds that file and does not recount the target's embedded tensors. The helper protocol, digest and native compatibility SHALL be recorded in the runtime manifest. It SHALL NOT start or stop a deployment or replace the running inference process. The estimate SHALL NOT block Download.
+Choose, Models and Chat context candidates SHALL consume the shared non-disruptive hardware preview. Choose selects quantization, projector or text-only, and the publisher generation recipe. Ordinary installed-model preview SHALL use fast cached metadata/tensor calculations. A deliberate native check SHALL use a bounded subprocess compiled against the exact pinned llama.cpp native APIs. Both methods SHALL account for the selected server parallel slots, unified context, embeddings and speculation; measure target, selected projector and draft/MTP together; and count shared MTP weights once. A built-in draft head is a tensor whose name ends in `nextn.eh_proj.weight`, for every architecture. A separate draft file counts only after that file's own header contains a NextN tensor. MTP memory is included only when draft-mtp is selected. MTP off excludes embedded next-token tensors from the estimate; those tensors remain in the downloaded file. A built-in head counts shared weights once and adds the head cache. A separate draft adds that file and does not recount the target's embedded tensors. The helper protocol, digest and native compatibility SHALL be recorded in the runtime manifest. It SHALL NOT start or stop a deployment or replace the running inference process. The estimate SHALL NOT block Download.
 
 Results SHALL expose per-device estimates, evaluated placement, shared context, per-request capacity, slots, plan identity, calculation time and complete/partial/unavailable status. Native context allocations SHALL be labelled Cache and model state; projector totals SHALL NOT invent an internal breakdown. Requested Auto values remain distinct from evaluated results. Dynamic driver, host cache and operating-system costs SHALL remain unknown or separately budgeted. Missing facts MUST NOT become zero or a green fits claim. Observed memory SHALL be labelled Observed, timestamped and associated only with the exact loaded identity; cached estimates retain their original time. Shared router process usage MUST NOT be presented as model process RAM.
 
@@ -668,12 +680,12 @@ Remote discovery SHALL retain bounded revision/file metadata estimates with exac
 - **THEN** known file sizes and settings remain usable, unavailable estimate components are explicit, and the app does not fabricate precise fit.
 
 #### Scenario: Context and KV placement update together
-- **WHEN** the person adjusts the context slider or chooses supported CPU KV placement on Review
-- **THEN** the estimate updates its cache and GPU/RAM breakdown and those same explicit choices carry into the initial saved configuration.
+- **WHEN** the person adjusts the context slider or chooses supported CPU KV placement on Choose
+- **THEN** the estimate updates its cache and GPU/RAM breakdown without saving those advisory values into an initial configuration.
 
 #### Scenario: Draft head is offered only from tensor evidence
 - **WHEN** a repository GGUF header contains a `nextn.eh_proj` tensor, or a separate MTP-named file's header contains a NextN tensor
-- **THEN** Review offers MTP and includes its memory only after the person turns that head on
+- **THEN** Choose offers MTP and includes its memory only after the person turns that head on
 - **AND** a filename alone, including an imatrix file, does not offer MTP.
 
 #### Scenario: Runtime contradicts the estimate
@@ -687,6 +699,15 @@ Remote discovery SHALL retain bounded revision/file metadata estimates with exac
 #### Scenario: Shared router process observation
 - **WHEN** a managed deployment records router process usage without verified model-child usage
 - **THEN** model process RAM remains unavailable with an explicit reason rather than displaying the router's resident memory as the model allocation.
+
+#### Scenario: Total-capacity discovery preview
+- **WHEN** a model selection is previewed on Choose while another model consumes memory
+- **THEN** its advisory budget uses reported physical GPU/RAM totals with visible headroom rather than live availability; preview defaults use verified model bounds, highest supported cache precision and verified MTP where available
+- **AND** live resource rings, admission and Chat capacity previews retain their available-memory semantics, with unknown allocation unable to establish a fit.
+
+#### Scenario: Local metadata preview
+- **WHEN** a local GGUF file/folder is opened on Choose
+- **THEN** bounded read-only header inspection previews the exact complete selected model without importing, copying or loading weights.
 
 ### Requirement: MOD-037 - Preview the selected model candidate faithfully
 
@@ -712,15 +733,19 @@ Models readouts SHALL resolve the selected model, configuration and unsaved draf
 
 ### Requirement: MOD-038 - Keep import choices and estimates truthful
 
-Model import SHALL retain Find, Choose and Review/download stages; Back and failed requests SHALL preserve choices. Context and independent K/V settings SHALL become the initial configuration only after the person sets them on Review. Untouched loading settings SHALL stay omitted so llama.cpp keeps its own defaults. Exact shards, projectors, capabilities and import defaults remain authoritative. Slider fill SHALL reflect the actual displayed value; an automatic setting SHALL not imply a fixed value. Hardware presentation SHALL expose real GPU/RAM availability and qualified weights/cache/overhead estimates, with unknown components and device boundaries explicit. Estimates SHALL never block valid choices or silently reduce settings. A manual Refresh SHALL bypass estimate caching only for that request.
+Model import SHALL retain Find and Choose with direct Download/Add; Back and failed requests SHALL preserve choices. Context, K/V precision and other memory preview controls SHALL be advisory and MUST NOT become saved setup overrides. Exact shards, projector/text-only, immutable revision, local copy/original ownership and checked card recipes SHALL remain authoritative. Slider fill SHALL reflect its displayed value and real model bounds; unknown bounds SHALL remain unknown. Hardware presentation SHALL expose reported total capacity and visible headroom for discovery, qualified component estimates and explicit unknown/device boundaries. Estimates SHALL never block valid choices or silently reduce settings. A manual Refresh SHALL bypass estimate caching only for that request. Search SHALL expose known complete-variant counts and advertised capability provenance; unknown counts/capabilities SHALL remain unknown without inferring Thinking from a recipe name or Image from a filename alone.
+
+#### Scenario: Back retains choices
+- **WHEN** a person chooses files, projector and card recipes, explores memory, then goes Back and returns
+- **THEN** those choices remain and Download creates only checked card setups without copying memory-preview values.
 
 #### Scenario: Review then go Back
-- **WHEN** a person chooses files, context and cache precision, advances to Review, then goes Back
-- **THEN** those exact choices remain selected and become the installed initial configuration on download.
+- **WHEN** a person revises an import by returning from Choose to Find
+- **THEN** exact file/projector/card choices remain available without a Review stage and advisory preview values remain unsaved.
 
 #### Scenario: Incomplete estimate
-- **WHEN** device availability or overhead is unknown
-- **THEN** the estimate describes the unknown component without claiming a verified fit or blocking a valid download.
+- **WHEN** capacity or overhead is unknown
+- **THEN** the estimate identifies unknown components without claiming verified fit or blocking a valid download.
 
 ### Requirement: MOD-039 - Share validated model controls and effective Thinking
 
@@ -780,9 +805,9 @@ Installed-model preview SHALL default to fast metadata/tensor calculation withou
 
 ### Requirement: MOD-043 - Keep Models editing stable and contextual
 
-My models SHALL expose a saved-setup selector only when multiple setups exist, one Model card entry point, and compact Save, Load or Load saved, plus Reload only when a managed deployment exists for the selected setup. Load and Load saved SHALL post the saved profile to managed start with an empty startup object and SHALL ignore unsaved edits. Reload SHALL be the only control labelled Reload and SHALL post `POST /v1/deployments/{id}/reload` for that same record. Load snapshot SHALL remain the start of a stopped record. Metadata/files/refresh/setup management and optional native checking SHALL live in contextual details. Generation/Sampling and Loading/Memory SHALL form two compact columns when at least 840 CSS pixels are available, stacking below that width. Common controls SHALL remain immediately visible and show resolved values without repeated Saved/default/provenance paragraphs. Pending startup changes SHALL require explicit loading. Controls SHALL use stable compact geometry; ordinary edits, reset availability, background checks and memory recalculation SHALL NOT move subsequent rows by more than one CSS pixel at a fixed viewport. Controls, focus, drafts and scroll position SHALL remain available through checks. Explicit disclosures, panel opening and viewport changes MAY reflow.
+My models SHALL expose a saved-setup selector only when multiple setups exist, a single setup label when one exists, and an empty named setup editor when none exist. One Model card entry point and compact Save/Load SHALL remain. Create/Delete SHALL be visible beside setup management, with other setup actions in a small menu. Reload SHALL live in compact runtime details only when a managed deployment exists for the selected setup. Load and Load saved SHALL post the saved profile to managed start with an empty startup object and SHALL ignore unsaved edits. Reload SHALL be the only control labelled Reload and SHALL post `POST /v1/deployments/{id}/reload` for that same record. Load snapshot SHALL remain the start of a stopped record. Metadata/files/refresh/setup management and optional native checking SHALL live in contextual details. Generation/Sampling and Loading/Memory SHALL form two compact columns when at least 840 CSS pixels are available, stacking below that width. Common controls SHALL remain immediately visible and show resolved values without repeated Saved/default/provenance paragraphs. Pending startup changes SHALL require explicit loading. Controls SHALL use stable compact geometry; ordinary edits, reset availability, background checks and memory recalculation SHALL NOT move subsequent rows by more than one CSS pixel at a fixed viewport. Controls, focus, drafts and scroll position SHALL remain available through checks. Explicit disclosures, panel opening and viewport changes MAY reflow.
 
-The editor SHALL provide one contextual right panel for presets, optional checks, memory, runtime, card and files. The panel SHALL dock only when at least 720 CSS pixels remain for editing, otherwise overlay with keyboard containment, Escape dismissal and trigger focus restoration. Validation SHALL identify the exact candidate, include loading and response failures, and become stale after edits. Runtime details SHALL distinguish engine defaults from setup response settings. Response aliases SHALL have one canonical visible owner; bundle-level template/vision actions SHALL live in model information.
+Infrequent presets, memory/native checking, runtime and files SHALL use compact contextual disclosures; header check icons SHALL be direct retest controls. Overlays SHALL retain keyboard containment, Escape dismissal and trigger focus restoration. Validation SHALL occur during Save for the exact candidate, include loading/response failures and retain edits on failure; no standalone Validate panel SHALL be required. Runtime details SHALL distinguish engine defaults from setup response settings. Response aliases SHALL have one canonical visible owner; bundle-level template/vision actions SHALL live in model information.
 
 #### Scenario: Continuous editing during checks
 - **WHEN** a person types, resets or changes a control while descriptors, effective values or memory estimates update
@@ -791,11 +816,11 @@ The editor SHALL provide one contextual right panel for presets, optional checks
 
 #### Scenario: Check then edit or switch setup
 - **WHEN** a check completes and the person changes response/loading values or selects another setup
-- **THEN** the panel identifies the old result as out of date and cannot claim it validates the new candidate.
+- **THEN** old evidence remains attributable and cannot claim it validates the new candidate.
 
 #### Scenario: Manage saved setups
 - **WHEN** a person requests deletion
-- **THEN** existing lifecycle/reference protections remain and default/last-setup restrictions are explained before confirmation
+- **THEN** active-use lifecycle protections remain, deleting the last/preferred setup is allowed and a deleted preferred pointer is cleared without remapping saved references
 - **AND** ordinary editing/refresh never automatically renames or deletes setups; an explicitly authorised development reset may discard obsolete setups without deleting weights.
 
 #### Scenario: Load the saved setup
@@ -823,18 +848,22 @@ The editor SHALL provide one contextual right panel for presets, optional checks
 - **THEN** the editor SHALL establish the selected saved authoring base before accepting edits, and an unverified model observation SHALL NOT claim that the model is unloaded
 - **AND** once established, the editor SHALL remain usable through background checks and later observations SHALL NOT discard its accepted draft.
 
-### Requirement: MOD-044 - Apply and reversibly remove publisher presets
+### Requirement: MOD-045 - Rename models without changing identity
 
-The main Model card button SHALL open a contextual preset panel; card reading, website links and refresh SHALL be secondary details within that panel. Publisher recommendations SHALL be applied from that panel to the current response draft, changing only supplied response fields and explicitly stated Thinking mode. Applying/reapplying SHALL retain loading settings and unrelated response values, mark pending changes visibly and require Save to persist. Recorded ancestry SHALL remain read-only and SHALL NOT be inferred from names. Presets SHALL support persistent Remove from list and Restore presets from model card. Removal SHALL preserve underlying recommendations and saved origins. Restoration SHALL use the installed pinned card, clear hidden choices only after successful refresh, and SHALL NOT recreate deleted setups, overwrite saved configurations, change defaults or download weights.
+An installed model SHALL allow a validated friendly-name change without changing bundle/setup IDs, source repository/revision, artifacts, engine aliases or compatibility/probe evidence. Current catalogue, Chat, Agent/project and Lab selectors SHALL refresh that name. Historical accepted/run snapshots SHALL retain their captured labels. Compatibility matching SHALL use stable source/artifact identity rather than mutable display names.
+
+#### Scenario: Rename while other pages stay open
+- **WHEN** a model is renamed from My models
+- **THEN** mounted current selectors display its new name and continue using the same stable setup/model references without a reload or retest.
+
+### Requirement: MOD-046 - Use publisher presets explicitly
+
+The Model card entry point SHALL retain verified pinned reading, website links, refresh and compact explicit preset application/creation. Applying a publisher preset SHALL change only supplied response fields and explicitly supported Thinking mode in the current draft, retain loading/unrelated values, mark changes and require Save. Recorded ancestry SHALL remain read-only and MUST NOT be inferred from names. Persistent preset hide/remove/restore actions SHALL be removed; pinned refresh SHALL not recreate deleted setups, overwrite configurations, change preference or download weights.
 
 #### Scenario: Apply non-thinking to an edited setup
-- **WHEN** a person previews and applies a Non-thinking preset
-- **THEN** the specified response fields and Thinking mode change in the draft, loading/unrelated settings remain intact and Save is required.
+- **WHEN** a person applies a supported Non-thinking preset
+- **THEN** supplied response/Thinking fields change in the draft while loading/unrelated values remain, and Save is required.
 
-#### Scenario: Remove and restore a preset
-- **WHEN** a person removes a preset, reopens the application and restores presets from the card
-- **THEN** removal persists until restoration and existing saved setups/provenance remain usable throughout.
-
-#### Scenario: Restore fails
-- **WHEN** the pinned card cannot be verified or retrieved
-- **THEN** the error is actionable and prior presets, visibility and saved setups remain unchanged.
+#### Scenario: Refresh after setup deletion
+- **WHEN** a person deletes a card-created setup and refreshes the pinned card
+- **THEN** recipe metadata refreshes without recreating that setup or changing other saved setups.

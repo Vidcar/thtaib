@@ -243,8 +243,8 @@ class BundleTests(unittest.TestCase):
             patch.object(self.manager.store, "put_bundle", wraps=self.manager.store.put_bundle) as wrapped_put,
         ):
             listed = self.manager.list_bundles()
-            self.assertIsNotNone(listed[0].default_configuration_id)
-            self.assertEqual(wrapped_put.call_count, 1)  # one-time configuration migration
+            self.assertIsNone(listed[0].default_configuration_id)
+            self.assertEqual(wrapped_put.call_count, 0)  # catalogue reads do not create setups
             wrapped_put.reset_mock()
             self.manager.list_bundles()
 

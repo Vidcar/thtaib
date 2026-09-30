@@ -337,7 +337,7 @@ export function App() {
       />
       <main className="app-main">
         <div className="persistent-chat" data-active={tab === "chat"} aria-hidden={tab !== "chat"} inert={tab !== "chat"}>{renderTab("chat")}</div>
-        {(["models", "agents", "knowledge"] as WorkbenchTab[]).map(editor => visitedEditors.has(editor) || tab === editor ? <div key={editor} className="persistent-editor" hidden={tab !== editor} inert={tab !== editor}>{renderTab(editor)}</div> : null)}
+        {(["models", "agents", "knowledge"] as WorkbenchTab[]).map(editor => visitedEditors.has(editor) || tab === editor ? <div key={editor} className={editor === "models" ? "persistent-editor models-editor-host" : "persistent-editor"} hidden={tab !== editor} inert={tab !== editor}>{renderTab(editor)}</div> : null)}
         {tab !== "chat" && !["models", "agents", "knowledge"].includes(tab) ? renderTab(tab) : null}
       </main>
     </div>

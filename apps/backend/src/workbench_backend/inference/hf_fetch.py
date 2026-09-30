@@ -22,6 +22,37 @@ PUBLISHER_DIR = ".workbench-publisher"
 REPOSITORY_TEMPLATE_DIR = ".workbench-repository-template"
 CONFIG_NAMES = frozenset({"config.json", "generation_config.json", "tokenizer_config.json", "tokenizer.json", "chat_template.jinja"})
 MAX_CARD_BYTES = 2 * 1024 * 1024
+MAX_SEARCH_FILES = 4096
+
+
+def search_metadata(item: object) -> tuple[int | None, list[str], str | None]:
+    """Publisher/listing facts, never a capability probe or filename guess."""
+    siblings = getattr(item, "siblings", None)
+    count = None
+    if siblings is not None and len(siblings) <= MAX_SEARCH_FILES:
+        try:
+            listing = describe_repository(str(getattr(item, "id", "") or getattr(item, "modelId", "")), item)
+            count = sum(variant.complete for variant in listing.variants)
+        except ManagerError:
+            pass
+    card = getattr(item, "card_data", None)
+    if hasattr(card, "to_dict"):
+        card = card.to_dict()
+    card = card if isinstance(card, dict) else {}
+    pipeline = getattr(item, "pipeline_tag", None) or card.get("pipeline_tag")
+    tags = set(getattr(item, "tags", None) or [])
+    advertised = set()
+    if pipeline in {"text-generation", "text2text-generation", "image-text-to-text"}:
+        advertised.add("text")
+    if pipeline == "image-text-to-text" or "image-text-to-text" in tags:
+        advertised.add("image")
+    if card.get("reasoning") is True or card.get("thinking") is True or "reasoning" in tags:
+        advertised.add("reasoning")
+    for key in ("modalities", "input_modalities", "capabilities"):
+        values = card.get(key, [])
+        if isinstance(values, list):
+            advertised.update(value for value in values if isinstance(value, str) and value in {"text", "image", "video", "audio", "reasoning"})
+    return count, sorted(advertised), "Hugging Face repository listing and publisher metadata" if count is not None or advertised else None
 
 
 def _access_error(exc: Exception) -> ManagerError:
@@ -180,18 +211,20 @@ class HuggingFaceFetcher:
             raise ManagerError("Enter a model search query.", code="hf_search_query", status_code=400)
         limit = max(1, min(limit, 50))
         try:
-            results = list(islice(HfApi().list_models(search=value, limit=limit, sort="downloads"), limit))
+            results = list(islice(HfApi().list_models(search=value, limit=limit, sort="downloads",
+                expand=["downloads", "likes", "siblings", "sha", "tags", "pipeline_tag", "cardData"]), limit))
         except (HfHubHTTPError, httpx.TransportError, OfflineModeIsEnabled) as exc:
             raise _access_error(exc) from exc
-        return [
-            HubSearchResult(
-                repo_id=str(getattr(item, "modelId", "") or getattr(item, "id", "")),
-                downloads=getattr(item, "downloads", None),
-                likes=getattr(item, "likes", None),
-            )
-            for item in results
-            if getattr(item, "modelId", None) or getattr(item, "id", None)
-        ]
+        rows = []
+        for item in results:
+            repo_id = str(getattr(item, "modelId", "") or getattr(item, "id", ""))
+            if not repo_id:
+                continue
+            count, advertised, provenance = search_metadata(item)
+            rows.append(HubSearchResult(repo_id=repo_id, downloads=getattr(item, "downloads", None),
+                likes=getattr(item, "likes", None), complete_variants=count,
+                advertised_capabilities=advertised, metadata_source=provenance))
+        return rows
 
     def inspect(self, *, repo_id: str, revision: str = "main", include_recipes: bool = False) -> HubRepository:
         file_hint = repository_file_hint(repo_id)

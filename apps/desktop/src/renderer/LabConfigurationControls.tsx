@@ -60,11 +60,11 @@ export function LabConfigurationControls({ selection, models, profiles, disabled
       const bundleId = event.target.value;
       const model = models.find(item => item.id === bundleId);
       const saved = profiles.filter(item => item.bundle_id === bundleId);
-      const configuration_id = saved.find(item => item.id === model?.default_configuration_id)?.id ?? saved[0]?.id ?? "";
+      const configuration_id = saved.find(item => item.id === model?.default_configuration_id)?.id ?? "";
       onChange({ ...selection, bundleId, configuration_id, startup: {}, options: null, ready: false });
     }}><option value="">Choose an installed model…</option>{models.map(model => <option key={model.id} value={model.id}>{model.display_name}</option>)}</select></label>
     <label>Configuration<select aria-label={index ? `Lab configuration ${index + 1}` : "Lab configuration"} value={selection.configuration_id} disabled={disabled || !selection.bundleId} onChange={event => onChange({ ...selection, configuration_id: event.target.value, startup: {}, options: null, ready: false })}>
-      {!configurations.length ? <option value="">{selection.bundleId ? "No saved configurations" : "Choose a model first"}</option> : null}
+      <option value="">{configurations.length ? "Choose a saved setup" : selection.bundleId ? "No saved configurations" : "Choose a model first"}</option>
       {configurations.map(item => <option key={item.id} value={item.id}>{item.display_name}</option>)}
     </select></label>
     {selection.bundleId && !configurations.length ? <p className="hint">Save a configuration for this model in Models.</p> : null}

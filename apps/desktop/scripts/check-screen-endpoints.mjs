@@ -19,7 +19,7 @@ const calls = [];
 let deployments = [];
 let failManaged = false;
 const profile = { id: "config", bundle_id: "model", display_name: "Default", revision: 1, bags: { startup: bag({ ctx_size: 8192 }), per_request: bag({}), agent: bag({}) } };
-const bundle = { id: "model", display_name: "Example", default_configuration_id: "config", disk_matches: true, files: [], companions: [], status: "ready" };
+const bundle = { id: "model", display_name: "Example", source: { kind: "local" }, default_configuration_id: "config", disk_matches: true, files: [], companions: [], status: "ready" };
 const running = { id: "running-1", bundle_id: "model", profile_id: "config", display_name: "Example", scope: "managed", status: "running", health: { healthy: true }, server_props: { n_ctx: 8192 }, applied_startup: { ctx_size: 8192 }, settings: profile.bags, updated_at: "current", endpoint: "http://127.0.0.1:8080" };
 const stopped = { ...running, id: "stopped-1", status: "stopped", health: null, server_props: null, updated_at: "earlier" };
 deployments = [running, stopped];
@@ -68,7 +68,7 @@ try {
     await tick();
   });
   assert.ok(button(models, "Load"), "a clean saved setup offers Load");
-  assert.ok(button(models, "Reload"), "a managed record offers Reload beside Load");
+  assert.ok(button(models, "Reload saved setup"), "a managed record offers Reload in loaded-model details");
   assert.equal(button(models, "Load").props.title.includes("saved setup"), true);
   const beforeSave = managedCalls().length;
   await act(async () => { models.root.findByProps({ id: "model-settings-form" }).props.onSubmit({ preventDefault() {} }); await tick(); });
@@ -91,12 +91,12 @@ try {
   assert.equal(savedLoad.body.profile_id, "config");
   assert.match(text(models.root), /Saved setup loaded\./, "a Load saved success stays visible while unsaved edits remain");
 
-  await act(async () => { button(models, "Reload").props.onClick(); await tick(); });
+  await act(async () => { button(models, "Reload saved setup").props.onClick(); await tick(); });
   const reload = calls.find(call => call.path.endsWith("/v1/deployments/running-1/reload"));
   assert.equal(reload?.method, "POST", "Reload posts the same deployment record");
   assert.equal(calls.filter(call => call.path.endsWith("/reload")).length, 1);
 
-  await act(async () => { models.root.findByProps({ "aria-label": "Loaded model details" }).props.onClick(); await tick(); });
+  assert.ok(models.root.findAllByType("summary").some(node => text(node).startsWith("Loaded model")), "runtime actions remain in the loaded-model disclosure");
   await act(async () => { button(models, "Load snapshot").props.onClick(); await tick(); });
   const snapshot = calls.find(call => call.path.endsWith("/v1/deployments/stopped-1/start"));
   assert.equal(snapshot?.method, "POST", "Load snapshot starts the stopped record");

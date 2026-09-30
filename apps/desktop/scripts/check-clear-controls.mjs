@@ -153,9 +153,9 @@ try {
   assert.ok(!elementText(outputDetails()).includes("pinned_runtime_default"));
   assert.equal(outputDetails().find(node => node.type === "code").props.children, "max_tokens", "native request path stays in help");
   assert.ok(elementText(outputDetails()).includes("Applies to future messages."));
-  const outputReset = () => outputDetails().find(node => node.type === "button");
+  const outputReset = () => renderer.root.findByProps({ "aria-label": "Reset maximum output tokens" });
   assert.equal(outputReset().props.disabled, true);
-  assert.equal(outputReset().props.title, undefined, "disabled Reset has no duplicated target tooltip");
+  assert.equal(outputReset().props.style.visibility, "hidden", "unused Reset has a reserved hidden slot");
   const limit = input("response-thinking-budget-model"), format = renderer.root.findByProps({ id: "model-response-reasoning-format" });
   pending = true;
   await act(async () => renderer.update(editor()));

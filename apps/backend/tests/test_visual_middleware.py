@@ -298,8 +298,9 @@ class VisualMiddlewareTests(unittest.TestCase):
         captures = _CaptureBackend(encoded)
         probe_calls = []
 
-        def record_probe(_manager, deployment_id, request):
+        def record_probe(_manager, deployment_id, request, *, only_missing=False):
             self.assertIs(_manager, manager)
+            self.assertTrue(only_missing, "Lazy screenshot checks must reuse existing proof")
             self.assertEqual(deployment_id, deployment.id)
             self.assertEqual(request.per_request, selected.per_request.applied,
                 "Capability evidence must apply to the selected request settings")

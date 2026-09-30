@@ -1,5 +1,6 @@
 import { useId, type CSSProperties, type ReactNode } from "react";
 import { HoverHelp } from "./HoverHelp";
+import { Icon } from "./Icon";
 import "./CompactControls.css";
 
 function aboutTitle(label: ReactNode, helpTitle?: string) {
@@ -27,20 +28,20 @@ export function SettingRow({ label, labelId, htmlFor, help, helpTitle, provenanc
     {provenance ? <div className="setting-help-source">{provenance}</div> : null}
     {hint ? <div>{hint}</div> : null}
     {status ? <div>{status}</div> : null}
-    <div className="setting-help-reset"><button type="button" className="text-button" disabled={!onReset} title={onReset ? resetTitle : undefined} onClick={onReset}>{resetLabel === "Use configuration default" ? "Reset" : resetLabel}</button></div>
   </> : help;
   const classes = ["setting-row", models ? "setting-row-models" : "", inline ? "setting-row-inline" : "", stacked ? "setting-row-stacked" : "", className ?? ""].filter(Boolean).join(" ");
   return <div className={classes}>
     <div className="setting-row-label">
       <div className="setting-row-title">
         {htmlFor ? <label id={labelId} htmlFor={htmlFor}>{label}</label> : <span id={labelId} className="setting-row-name">{label}</span>}
-        {details ? <HoverHelp title={aboutTitle(label, helpTitle)} interactive={models}>{details}</HoverHelp> : null}
+        {details ? <HoverHelp title={aboutTitle(label, helpTitle)} interactive={models} mode={models ? "click" : "hover"} bubbleClassName={models ? "models-help" : undefined}>{details}</HoverHelp> : null}
         {!models && onReset ? <button type="button" className="text-button setting-reset" title={resetTitle} aria-label={resetTitle ? `${resetLabel}: ${resetTitle}` : undefined} onClick={onReset}>{resetLabel}</button> : null}
       </div>
       {!models && provenance ? <small className="control-provenance">{provenance}</small> : null}
     </div>
     <div className="setting-row-control">
       {models ? <div className="setting-row-control-content">{children}</div> : children}
+      {models ? <span className="model-reset-slot"><button type="button" className="icon-button model-value-reset" disabled={!onReset} aria-label={`Reset ${typeof label === "string" ? label.toLowerCase() : "setting"}`} title={resetTitle ?? resetLabel} onClick={onReset} style={{ visibility: onReset ? "visible" : "hidden" }}><Icon name="restore" size={14} /></button></span> : null}
       {!models && hint ? <small className="setting-row-hint">{hint}</small> : null}
     </div>
   </div>;

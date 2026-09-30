@@ -456,7 +456,10 @@ class CapabilityProbeTests(unittest.TestCase):
                 self.store.put_deployment(deployment)
                 manager = FakeManager(self.store, deployment)
                 manager.get_deployment = self.store.get_deployment
-                per_request = {"temperature": 0.2, "max_tokens": 256}
+                # Both graph modes must exercise private probe traffic. They
+                # deliberately use different behaviour scopes because identical
+                # scopes now reuse persisted proof across deployment records.
+                per_request = {"temperature": 0.2 if stream_kind == "messages" else 0.3, "max_tokens": 256}
                 models = [
                     ProbeStreamModel(responses=[reply("red"), reply("blue")], tags=["probe-diagnostic"]),
                     ProbeStreamModel(responses=[reply("call-red", tool_call=True), reply("red"),
