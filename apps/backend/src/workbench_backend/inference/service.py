@@ -815,6 +815,27 @@ class ModelManager:
             )
             return self.deployments.stop(deployment_id)
 
+    def stop_owned_deployments_for_quit(self) -> None:
+        """Stop residency after desktop maintenance has joined execution owners.
+
+        Paused inputs retain their frozen configuration for a later restart;
+        unlike an ordinary model change, Quit does not edit that configuration.
+        Keep this purpose on the existing lifecycle owner so every lower-level
+        guard rechecks active work without granting concurrent callers a bypass.
+        """
+        managed = [item for item in self.store.list_deployments() if item.scope == ManagementScope.managed]
+        deployment_ids = {item.id for item in managed}
+        profile_ids = {item.profile_id for item in managed if item.profile_id}
+        bundle_ids = {item.bundle_id for item in managed if item.bundle_id}
+        with self.lifecycle.mutate("desktop_quit", deployment_ids=deployment_ids,
+                                   profile_ids=profile_ids, bundle_ids=bundle_ids):
+            self._require_no_live_runs(deployment_ids=deployment_ids, profile_ids=profile_ids,
+                                       bundle_ids=bundle_ids, code="deployment_active")
+            for deployment in managed:
+                self.stop_deployment(deployment.id)
+            if self.deployments._router_enabled():
+                self.deployments.router.stop_router()
+
     def stop_legacy_owned_deployment(self, deployment_id: str) -> Deployment:
         """Safely stop a verified older per-model process during local cutover."""
         deployment = self.get_deployment(deployment_id)
@@ -1344,7 +1365,7 @@ class ModelManager:
             )
         return consumers
 
-    def _chat_consumers(self, *, profile_id: str | None = None, profile_ids: set[str] | None = None, deployment_ids: set[str] | None = None) -> list[LifecycleConsumer]:
+    def _chat_consumers(self, *, profile_id: str | None = None, profile_ids: set[str] | None = None, deployment_ids: set[str] | None = None, ignore_paused: bool = False) -> list[LifecycleConsumer]:
         profiles = set(profile_ids or ()) | ({profile_id} if profile_id else set())
         deployments = deployment_ids or set()
         try:
@@ -1364,6 +1385,8 @@ class ModelManager:
         ]
         for conversation in conversations:
             for item in conversation.queue:
+                if ignore_paused and item.status == "paused":
+                    continue
                 frozen = item.frozen_config or item.intended_config or {}
                 if (frozen.get("deployment_id", conversation.deployment_id) in deployments
                     or frozen.get("embedding_deployment_id", conversation.embedding_deployment_id) in deployments
@@ -1407,7 +1430,8 @@ class ModelManager:
             for consumer in [*self._run_consumers(
                 deployment_ids=deployment_ids,
                 profile_ids=profile_ids,
-            ), *self._chat_consumers(deployment_ids=deployment_ids, profile_ids=profile_ids)]
+            ), *self._chat_consumers(deployment_ids=deployment_ids, profile_ids=profile_ids,
+                                    ignore_paused=self.lifecycle.owns_mutation("desktop_quit"))]
             if consumer.live
         ]
         if blockers:

@@ -9,7 +9,9 @@ The current application passes its existing gates, but failure/race reproduction
 - Acknowledge queued Chat submissions without inventing a run, settle queued-only cancellation, and wake the existing coordinator when a project reservation becomes available.
 - Keep post-dispatch desktop uncertainty in the existing uncertain-effect recovery path rather than converting it into a correctable tool failure.
 - Invalidate Chat previews when the selected saved configuration revision changes; retain the original base revision of dirty Models drafts and complete accepted model-picker actions reliably.
+- Establish Models' saved authoring base independently of initial engine observations, preserving accepted edits and truthful unknown status.
 - Recover Chat's independent startup reads without false empty states or stale errors, retain accepted Lab run ownership through failed observation, and reject obsolete Browser/attention observations.
+- Let deliberate Quit stop settled owned engines while retaining paused input, frozen settings and unresolved outcomes; keep ordinary model protections and connected engines unchanged.
 - Add regressions through the existing production boundaries, challenge them against isolated original behaviour, independently review the changes and validate the actual built Windows application with isolated data and an installed model.
 
 ## Capabilities
@@ -20,8 +22,8 @@ None.
 
 ### Modified Capabilities
 
-- `backend-desktop`: clarify accepted-action versus observation failure, read recovery and ordering, and queued submission display.
-- `models`: include saved revisions in preview identity and preserve dirty draft revision conflicts.
+- `backend-desktop`: clarify accepted-action versus observation failure, read recovery and ordering, queued submission display and deliberate shutdown with retained input.
+- `models`: include saved revisions in preview identity, preserve dirty draft revision conflicts and separate initial saved authoring from engine observations.
 - `state-recovery`: clarify progress after reservation release, queued-only cancellation settlement, and post-dispatch desktop uncertainty.
 
 ## Impact

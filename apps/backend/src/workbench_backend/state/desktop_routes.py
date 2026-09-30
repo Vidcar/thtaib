@@ -110,9 +110,18 @@ def stop_owned_work(request: Request, background_tasks: BackgroundTasks) -> dict
             if time.monotonic() >= deadline:
                 raise WorkbenchError("Some work has not confirmed stopping. Keep the app open and inspect its status.", code="shutdown_pending", status_code=409)
             time.sleep(0.05)
-        for deployment in state.manager.list_deployments():
-            if deployment.scope == "managed" and deployment.status == "running":
-                state.manager.stop_deployment(deployment.id)
+        # A terminal record can precede worker/client/checkpoint cleanup. The
+        # harness join is reusable after a failed Quit; it does not close its
+        # store or disable future admission when maintenance is released.
+        try:
+            state.harness.close(timeout=max(0.0, deadline - time.monotonic()))
+        except RuntimeError as exc:
+            raise WorkbenchError("Some work has not confirmed stopping. Keep the app open and inspect its status.", code="shutdown_pending", status_code=409) from exc
+        # Maintenance has drained the coordinator and prevents new dispatch.
+        # Settle accepted terminal queue rows using the existing recovery owner;
+        # unresolved dispatch/effect evidence remains paused and durable.
+        state.chat.reconcile_saved_queue_on_startup(pending_only=True)
+        state.manager.stop_owned_deployments_for_quit()
         browser = getattr(state, "browser", None)
         if browser is not None:
             submit_checkpoint_task(state.manager.paths.checkpoints_db, browser.shutdown()).result(timeout=30)

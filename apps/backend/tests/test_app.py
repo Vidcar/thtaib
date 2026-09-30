@@ -17,7 +17,7 @@ from workbench_backend.inference.schemas import PinRuntimeRequest
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
-from support import OfflineProbe, close_workbench_sqlite, workbench_client, write_tiny_gguf, wait_for_import
+from tests.support import OfflineProbe, close_workbench_sqlite, workbench_client, write_tiny_gguf, wait_for_import
 
 
 class FakeHF:

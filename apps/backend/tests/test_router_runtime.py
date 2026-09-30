@@ -21,8 +21,8 @@ from workbench_backend.inference.hashes import sha256_file
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
-from support import write_tiny_gguf
-from test_app import FakeHF
+from tests.support import write_tiny_gguf
+from tests.test_app import FakeHF
 
 
 class RouterRuntimeTests(unittest.TestCase):

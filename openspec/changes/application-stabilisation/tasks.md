@@ -17,6 +17,8 @@
 - [x] 3.3 Wake existing queue coordination after project reservation release, including Lab capture and failed pre-run admission; prove progress after release and no premature start or notification loop.
 - [x] 3.4 Preserve post-dispatch desktop uncertainty through actual tools/middleware/storage and continuation guards; prove timeout/changed identity outcomes, pre-dispatch refusal controls and failing original adapter fixtures.
 
+- [ ] 3.5 Make deliberate Quit stop settled managed engines without paused retained queue references blocking shutdown; preserve queue/setup/cancellation evidence, maintenance exclusion, live-work guards and connected engines; prove actual route/consumer behaviour and native clean shutdown.
+
 ## 4. Recoverable current observations
 
 - [x] 4.1 Repair Chat's independent startup/read owners, empty-model gating, retry/disposal and stale-error recovery; pass mounted deterministic failure/order/cancellation checks and a failing original source fixture.

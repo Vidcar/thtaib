@@ -100,3 +100,18 @@ The `repair-local-interaction-boundaries` prerequisite SHALL remain satisfied: s
 - **WHEN** Send is durably accepted while another task owns the project folder
 - **THEN** acknowledgement and desktop reconciliation SHALL identify that exact queued input without inventing a run or associating a previous completed run
 - **AND** recovery after a lost acknowledgement SHALL recognise that same accepted identity, clear only its submitted draft revision, and observe its later execution without submitting it again.
+
+
+### Requirement: API-011 - Keep background work visible and quit deliberately
+
+Closing the main window or event stream SHALL NOT cancel or resubmit a run. Ongoing work SHALL have visible tray/background state and a route back. Explicit Quit with active work SHALL offer keep running or stop owned work and exit. Shutdown SHALL reconcile owned runs/clients/savers/processes and retain unresolved external outcomes; externally connected engines MUST NOT be terminated as owned processes. Reopening reconnects to existing work.
+
+#### Scenario: Close reopen and quit
+
+- **WHEN** a user closes/reopens the desktop or explicitly quits during work
+- **THEN** close/reopen preserves the same run; Quit makes the keep-running versus stop-owned-work decision explicit and reconciles its outcome.
+
+#### Scenario: Quit with retained paused input
+- **WHEN** deliberate Quit has paused queued input and confirmed that owned workers have stopped
+- **THEN** retained paused input SHALL NOT prevent shutdown of the owned managed engine
+- **AND** the queued input, frozen setup, cancellation identity and unresolved outcome evidence SHALL remain retained for deliberate later recovery; live work that has not confirmed stopping SHALL still block shutdown, and connected engines SHALL remain untouched.
