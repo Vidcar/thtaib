@@ -216,11 +216,17 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
             if coordinator is not None and event is None and not telemetry and not is_run_lifecycle_live(run.status):
                 coordinator.observe(run)
 
+    def _project_available():
+        coordinator = getattr(application.state, "chat_coordinator", None)
+        if coordinator is not None:
+            coordinator.wake()
+
     application.state.harness = HarnessService(
         lambda: application.state.manager,
         knowledge_provider=lambda: application.state.knowledge,
         app_store=application.state.app_store,
         interaction_observer=_observe_run,
+        project_available_observer=_project_available,
         assets=application.state.assets,
         browser=application.state.browser,
         preview=application.state.preview,

@@ -20,6 +20,9 @@ try {
   const { workspaceApi } = await vite.ssrLoadModule("/src/renderer/workspaceApi.ts");
   let workspaceCount = 0;
   let failSave = true;
+  let failRunRead = true;
+  const runReads = [];
+  const bindings = [];
   const patch = (object, key, fn) => { originals.set([object, key], object[key]); object[key] = fn; };
   patch(api, "deployments", async () => []);
   const bag = requested => ({ requested, applied: requested, unsupported: [], retired: [], overridden: [], unverified: [] });
@@ -30,7 +33,13 @@ try {
   patch(api, "workspaceFiles", async id => ({ files: { "notes.md": id === "restored_1" ? "snapshot notes" : "original notes" } }));
   patch(api, "writeWorkspaceFiles", async (id, files) => { calls.push(["save", id, files]); if (failSave) { failSave = false; throw new Error("Source is temporarily busy"); } return { files }; });
   patch(api, "startAgentRun", (...args) => { calls.push(["start", ...args]); return heldRun; });
-  patch(api, "agentRun", async id => ({ id, deployment_id: "deployment_a", status: "completed", events: [] }));
+  patch(api, "agentRun", async id => {
+    runReads.push(id);
+    if (failRunRead) { failRunRead = false; throw new Error("Run status temporarily unavailable"); }
+    return { id, deployment_id: "deployment_a", status: id === "run_live-tool" ? "running" : "completed", events: [] };
+  });
+  patch(api, "cancelAgentRun", async id => { calls.push(["cancel", id]); return { id, deployment_id: "deployment_a", status: "cancelled", events: [] }; });
+  patch(api, "registerAgentInteractionThread", async binding => { bindings.push(binding); return new Promise(() => {}); });
   patch(api, "captureCase", async (workspaceId, runId) => { calls.push(["capture", workspaceId, runId]); return { id: "case_1", snapshot_id: "snapshot_1", snapshot_path: "isolated/snapshot" }; });
   patch(api, "restoreCase", async id => { calls.push(["restore", id]); return { workspace: { id: "restored_1" }, parent_unchanged: true, branch: { kind: "copy" } }; });
   patch(api, "rerunCase", async (id, mode, workspaceId) => { calls.push(["rerun", id, mode, workspaceId]); return { id: `result_${mode}`, agent_run_id: `run_${mode}`, tool_mode_label: mode, evidence: { executable_checks: [{}] }, applied_config: {}, judgement: {} }; });
@@ -51,6 +60,21 @@ try {
   await click("Capture case");
   await click("Restore a copy");
   await click("Use live tools");
+  assert.equal(button("Use live tools").props.disabled, true, "accepted comparison stays owned while its read fails");
+  assert.equal(button("Replay recorded tools").props.disabled, true, "read failure cannot start a second comparison");
+  assert.equal(button("Create workspace").props.disabled, true, "read failure cannot discard the accepted run's workspace");
+  assert.match(JSON.stringify(renderer.toJSON()), /Comparison started, but its status could not load/);
+  assert.match(JSON.stringify(renderer.toJSON()), /Run status temporarily unavailable/);
+  assert.ok(bindings.some(binding => binding.run_id === "run_live-tool"), "the accepted run is registered for observation before status loading succeeds");
+  await click("Retry status");
+  assert.deepEqual(runReads, ["run_live-tool", "run_live-tool"], "recovery rereads the same accepted run");
+  assert.equal(calls.filter(call => call[0] === "rerun").length, 1, "status recovery does not repeat execution");
+  assert.equal(button("Replay recorded tools").props.disabled, true, "observing a live comparison keeps repeat execution blocked");
+  assert.equal(button("Cancel").props.disabled, false, "the recovered accepted run has its live control");
+  await click("Cancel");
+  assert.deepEqual(calls.filter(call => call[0] === "cancel"), [["cancel", "run_live-tool"]], "Cancel targets the accepted comparison instead of the old source run");
+  assert.equal(button("Replay recorded tools").props.disabled, false, "confirmed settlement restores comparison controls");
+  assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /Run status temporarily unavailable/);
   await click("Replay recorded tools");
   assert.deepEqual(calls.filter(call => call[0] === "rerun"), [["rerun", "case_1", "live-tool", "restored_1"], ["rerun", "case_1", "recorded-tool", "restored_1"]]);
   await click("Save source");

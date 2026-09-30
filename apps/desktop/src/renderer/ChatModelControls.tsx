@@ -76,6 +76,7 @@ export interface ChatModelControlsProps {
   projectId?: string | null;
   agentSetupVersionId?: string | null;
   conversationId?: string | null;
+  selectionGeneration?: number;
   disabled?: boolean;
   runtimeBusy?: boolean;
   fixedModel?: boolean;
@@ -83,9 +84,10 @@ export interface ChatModelControlsProps {
   openRequest?: number;
   onApply: (configuration: SetupConfiguration) => void | Promise<void>;
   onReloaded: () => Promise<void>;
+  onBusyChange?: (busy: boolean) => void;
 }
 
-export function ChatModelControls({ bundles, deployments, profiles, selectedDeploymentId, selectedConfigurationId, configuration, projectId = null, agentSetupVersionId = null, conversationId = null, disabled = false, runtimeBusy = false, fixedModel = false, onManageAgent, openRequest, onApply, onReloaded }: ChatModelControlsProps) {
+export function ChatModelControls({ bundles, deployments, profiles, selectedDeploymentId, selectedConfigurationId, configuration, projectId = null, agentSetupVersionId = null, conversationId = null, selectionGeneration = 0, disabled = false, runtimeBusy = false, fixedModel = false, onManageAgent, openRequest, onApply, onReloaded, onBusyChange }: ChatModelControlsProps) {
   const [fallbackBundles, setFallbackBundles] = useState<ModelBundle[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [tuningOpen, setTuningOpen] = useState(false);
@@ -106,11 +108,23 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   const [error, setError] = useState("");
   const [tuningRefreshFailure, setTuningRefreshFailure] = useState<{ detail: string; settingsApplied: boolean } | null>(null);
   const contextDrafts = useRef(new Map<string, { context: number | null; base: number | null }>());
-  const pending = useRef(false);
-  const ownerKey = [conversationId, projectId, agentSetupVersionId, configuration.model_configuration_id ?? selectedConfigurationId].join(":");
+  const pending = useRef<object | null>(null);
+  const scopeKey = [selectionGeneration, conversationId, projectId, agentSetupVersionId].join(":");
+  const ownerKey = [scopeKey, configuration.model_configuration_id ?? selectedConfigurationId].join(":");
+  const contextDraftKey = [conversationId, projectId, agentSetupVersionId, configuration.model_configuration_id ?? selectedConfigurationId].join(":");
   const owner = useRef({ key: ownerKey, generation: 0 });
   if (owner.current.key !== ownerKey) owner.current = { key: ownerKey, generation: owner.current.generation + 1 };
   const currentGeneration = owner.current.generation;
+  useEffect(() => {
+    pending.current = null; setBusy(false); setLoadingChoice("");
+    return () => { pending.current = null; };
+  }, [scopeKey]);
+  useEffect(() => { onBusyChange?.(busy); return () => onBusyChange?.(false); }, [busy, onBusyChange]);
+  function ownsOperation(operation: object) { return pending.current === operation && owner.current.generation === currentGeneration; }
+  function finishOperation(operation: object) {
+    if (pending.current !== operation) return;
+    pending.current = null; setBusy(false); setLoadingChoice("");
+  }
   const latest = useRef({ configuration, onApply, onReloaded, runtimeBusy });
   latest.current = { configuration, onApply, onReloaded, runtimeBusy };
   const incomingThinking = JSON.stringify(thinkingSettings(configuration));
@@ -118,18 +132,19 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   useEffect(() => { setTuningRefreshFailure(null); }, [ownerKey]);
   useEffect(() => {
     setThinking(JSON.parse(incomingThinking) as Record<string, unknown>);
-    const draft = contextDrafts.current.get(ownerKey);
+    const draft = contextDrafts.current.get(contextDraftKey);
     const next = draft && draft.context !== draft.base ? draft.context : incomingContext;
-    contextDrafts.current.set(ownerKey, { context: next, base: incomingContext }); setContext(next); setError("");
-  }, [incomingThinking, incomingContext, ownerKey]);
-  function stageContext(next: number | null) { contextDrafts.current.set(ownerKey, { context: next, base: incomingContext }); setContext(next); setError(""); }
+    contextDrafts.current.set(contextDraftKey, { context: next, base: incomingContext }); setContext(next); setError("");
+  }, [incomingThinking, incomingContext, contextDraftKey]);
+  function stageContext(next: number | null) { contextDrafts.current.set(contextDraftKey, { context: next, base: incomingContext }); setContext(next); setError(""); }
 
   const selectedProfile = profiles.find(item => item.id === (configuration.model_configuration_id ?? selectedConfigurationId));
   const selectedDeployment = deployments.find(item => item.id === selectedDeploymentId);
   const selectedBundleId = selectedProfile?.bundle_id ?? selectedDeployment?.bundle_id;
   const selectedBundle = availableBundles.find(item => item.id === selectedBundleId);
   const selectedName = selectedBundle ? modelLabel(selectedBundle, availableBundles) : selectedDeployment?.display_name.replace(/^(managed|connected):/, "") ?? "Choose model";
-  const runtimeRevision = JSON.stringify(deployments.map(item => [item.id, item.profile_id, item.status, item.health?.healthy, item.settings?.startup?.requested]));
+  const savedRevision = `${selectedProfile?.id ?? ""}:${selectedProfile?.revision ?? 0}`;
+  const runtimeRevision = JSON.stringify([savedRevision, deployments.map(item => [item.id, item.profile_id, item.status, item.health?.healthy, item.settings?.startup?.requested])]);
   const residency = useSetupPreview(configuration, projectId, agentSetupVersionId, "conversation", runtimeRevision, Boolean(selectedProfile || selectedDeployment));
   function observed(profile: RunProfile | null, connected: Deployment | null) {
     const selected = profile ? profile.id === selectedProfile?.id : connected?.id === selectedDeployment?.id;
@@ -146,7 +161,7 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   }
   const selectedState = observed(selectedProfile ?? null, selectedDeployment?.scope === "connected" ? selectedDeployment : null);
   const previewConfiguration = chatTuningCandidate(configuration, thinking, context);
-  const preview = useSetupPreview(previewConfiguration, projectId, agentSetupVersionId, "conversation", "", tuningOpen);
+  const preview = useSetupPreview(previewConfiguration, projectId, agentSetupVersionId, "conversation", savedRevision, tuningOpen);
   const facts = preview.data?.effective_values ?? {};
   const optionStartup = JSON.stringify(previewConfiguration.startup_overrides ?? {});
   const optionOwnerKey = JSON.stringify([selectedBundleId, selectedProfile?.id, selectedProfile?.revision, selectedDeployment?.id]);
@@ -173,14 +188,14 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   const incompatibleChoices = incompatibleResult.context === compatibilityContext ? incompatibleResult.reasons : {};
 
   async function applyChoice(profile: RunProfile | null, connected: Deployment | null, close: () => void) {
-    if (pending.current || fixedModel) return;
+    if (pending.current || disabled || fixedModel) return;
     const choiceKey = profile?.id ?? connected?.id ?? "";
     if (incompatibleChoices[choiceKey]) { setError(incompatibleChoices[choiceKey]); return; }
     const exactHealthyChoice = profile
       ? selectedProfile?.id === profile.id && selectedDeployment?.id === residency.data?.configuration.deployment_id && selectedState.tone === "ready"
       : connected?.id === selectedDeployment?.id && selectedState.tone === "ready";
     if (exactHealthyChoice) { close(); return; }
-    pending.current = true;
+    const operation = {}; pending.current = operation;
     setBusy(true); setLoadingChoice(latest.current.runtimeBusy ? "" : choiceKey); setError("");
     let loadAttempted = false;
     const candidate = modelChoiceConfiguration(latest.current.configuration, profile, connected);
@@ -194,20 +209,23 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
           throw new Error(reason);
         }
       }
-      if (owner.current.generation !== currentGeneration) return;
+      if (!ownsOperation(operation)) return;
       const resolved = await workspaceApi.resolveSetup(projectId, agentSetupVersionId, candidate);
-      if (owner.current.generation !== currentGeneration) return;
+      if (!ownsOperation(operation)) return;
       const exactDeployment = deployments.find(item => item.id === resolved.configuration.deployment_id);
       loadAttempted = Boolean(profile?.bundle_id) && !latest.current.runtimeBusy && !(exactDeployment?.status === "running" && exactDeployment.health?.healthy);
       const loaded = loadAttempted ? await api.applyChatStartupOverrides(profile!.bundle_id!, profile!.id, candidate.startup_overrides ?? {}) : null;
       if (loaded && (!loaded.health?.healthy || loaded.status !== "running")) throw new Error(loaded.error ?? "Model did not become ready.");
-      if (owner.current.generation !== currentGeneration) return;
+      if (!ownsOperation(operation)) return;
       await latest.current.onApply({ ...candidate, deployment_id: loaded?.id ?? connected?.id ?? (latest.current.runtimeBusy ? null : exactDeployment?.id ?? null) });
+      // Acceptance may publish the chosen profile before this callback returns.
+      // Close for that one expected transition, never for later navigation.
+      const acceptedOwnerKey = [scopeKey, candidate.model_configuration_id ?? selectedConfigurationId].join(":");
+      if (pending.current === operation && (owner.current.generation === currentGeneration || (owner.current.key === acceptedOwnerKey && owner.current.generation === currentGeneration + 1))) close();
       if (loadAttempted) await latest.current.onReloaded();
-      if (owner.current.generation === currentGeneration) close();
     } catch (failure) {
       const parts = [errorMessage(failure)];
-      if (owner.current.generation === currentGeneration && loadAttempted) {
+      if (ownsOperation(operation) && loadAttempted) {
         try {
           await latest.current.onApply(candidate);
         } catch (applyFailure) {
@@ -221,13 +239,13 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
           parts.push(errorMessage(refreshFailure));
         }
       }
-      if (owner.current.generation === currentGeneration) setError((loadAttempted ? (profile?.display_name ?? connected?.display_name ?? "Model") + " · " : "") + parts.filter(Boolean).join(" "));
-    } finally { pending.current = false; setBusy(false); setLoadingChoice(""); }
+      if (ownsOperation(operation)) setError((loadAttempted ? (profile?.display_name ?? connected?.display_name ?? "Model") + " · " : "") + parts.filter(Boolean).join(" "));
+    } finally { finishOperation(operation); }
   }
 
   async function applyThinking(nextThinking: Record<string, unknown>) {
-    if (pending.current) return;
-    pending.current = true; setBusy(true); setThinking(nextThinking); setError("");
+    if (pending.current || disabled) return;
+    const operation = {}; pending.current = operation; setBusy(true); setThinking(nextThinking); setError("");
     try {
       const current = latest.current.configuration;
       const currentContext = typeof current.startup_overrides?.ctx_size === "number" ? current.startup_overrides.ctx_size : null;
@@ -235,8 +253,8 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
       const key = selectedBundleId ?? selectedDeployment?.id;
       if (key) Object.assign(next, { model_overrides: { ...remembered(current), [key]: { model_configuration_id: selectedProfile?.id ?? null, startup_overrides: next.startup_overrides, per_request_overrides: next.per_request_overrides } } });
       await latest.current.onApply(next);
-    } catch (failure) { if (owner.current.generation === currentGeneration) { setThinking(thinkingSettings(latest.current.configuration)); setError(errorMessage(failure)); } }
-    finally { pending.current = false; setBusy(false); }
+    } catch (failure) { if (ownsOperation(operation)) { setThinking(thinkingSettings(latest.current.configuration)); setError(errorMessage(failure)); } }
+    finally { finishOperation(operation); }
   }
   async function refreshTuningStatus(settingsApplied: boolean): Promise<boolean> {
     try {
@@ -249,14 +267,14 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
     }
   }
   async function retryTuningStatus() {
-    if (pending.current || !tuningRefreshFailure) return;
-    pending.current = true; setBusy(true);
+    if (pending.current || disabled || !tuningRefreshFailure) return;
+    const operation = {}; pending.current = operation; setBusy(true);
     try { await refreshTuningStatus(tuningRefreshFailure.settingsApplied); }
-    finally { pending.current = false; setBusy(false); }
+    finally { finishOperation(operation); }
   }
   async function applyTuning(close: () => void) {
-    if (pending.current || preview.loading || preview.error || !preview.data || (context !== null && (!Number.isInteger(context) || context < 0))) return;
-    pending.current = true; setBusy(true); setError(""); setTuningRefreshFailure(null);
+    if (pending.current || disabled || preview.loading || preview.error || !preview.data || (context !== null && (!Number.isInteger(context) || context < 0))) return;
+    const operation = {}; pending.current = operation; setBusy(true); setError(""); setTuningRefreshFailure(null);
     let loadAttempted = false, settingsApplied = false;
     try {
       const current = latest.current.configuration;
@@ -270,20 +288,20 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
         if (!loaded.health?.healthy || loaded.status !== "running") throw new Error(loaded.error ?? "Model did not become ready.");
         next.deployment_id = loaded.id;
       }
-      if (owner.current.generation !== currentGeneration) return;
+      if (!ownsOperation(operation)) return;
       await latest.current.onApply(next);
-      if (owner.current.generation !== currentGeneration) return;
-      contextDrafts.current.set(ownerKey, { context, base: context });
+      if (!ownsOperation(operation)) return;
+      contextDrafts.current.set(contextDraftKey, { context, base: context });
       settingsApplied = true;
     } catch (failure) {
-      if (owner.current.generation === currentGeneration) setError(errorMessage(failure));
+      if (ownsOperation(operation)) setError(errorMessage(failure));
     } finally {
       // The accepted candidate owns the chat binding; observation cannot undo it.
-      if (owner.current.generation === currentGeneration) {
+      if (ownsOperation(operation)) {
         const refreshed = !loadAttempted || await refreshTuningStatus(settingsApplied);
-        if (settingsApplied && refreshed && owner.current.generation === currentGeneration) close();
+        if (settingsApplied && refreshed && ownsOperation(operation)) close();
       }
-      pending.current = false; setBusy(false);
+      finishOperation(operation);
     }
   }
 
@@ -295,7 +313,7 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
     const selected = profile ? selectedProfile?.id === profile.id : connected?.id === selectedDeploymentId;
     const index = visibleKeys.indexOf(variant ? `${key}:variant` : key);
     const status = <span className={"model-state-dot is-" + (reason ? "attention" : state.tone)} aria-label={reason || state.label} />;
-    return <button id={`chat-model-option-${index}`} type="button" role="option" aria-selected={selected} data-highlighted={index === highlighted} className={className} key={key} disabled={busy || fixedModel || Boolean(reason) || (!profile && !connected)} aria-pressed={selected} title={[label, details, reason || state.label].filter(Boolean).join(" · ")} onPointerMove={() => setHighlighted(index)} onClick={() => void applyChoice(profile, connected, close)}>
+    return <button id={`chat-model-option-${index}`} type="button" role="option" aria-selected={selected} data-highlighted={index === highlighted} className={className} key={key} disabled={disabled || busy || fixedModel || Boolean(reason) || (!profile && !connected)} aria-pressed={selected} title={[label, details, reason || state.label].filter(Boolean).join(" · ")} onPointerMove={() => setHighlighted(index)} onClick={() => void applyChoice(profile, connected, close)}>
       {!variant ? status : null}
       <span className="chat-model-choice-name"><strong>{label}</strong></span>
       {description ? <span className="chat-model-quantization">{description}</span> : null}

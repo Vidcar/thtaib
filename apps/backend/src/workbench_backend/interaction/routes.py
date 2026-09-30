@@ -46,6 +46,10 @@ def command(thread_id: str, body: dict, request: Request) -> JSONResponse:
     except (ValidationError, ValueError, TypeError) as exc:
         return JSONResponse({"type": "error", "id": body.get("id"), "error": "invalid_request",
                              "message": "Invalid command parameters."}, status_code=400)
+    if body.get("method") == "run.start" and "run_id" not in result:
+        coordinator = getattr(request.app.state, "chat_coordinator", None)
+        if coordinator is not None:
+            coordinator.wake()
     return JSONResponse({"type": "success", "id": body["id"], "result": result})
 
 

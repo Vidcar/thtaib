@@ -161,7 +161,7 @@ try {
   await act(async () => choices(renderer)[0].props.onClick()); await flush();
   assert.equal(applied.at(-1).startup_overrides.ctx_size, 8192, "A to B to A restores chat-local context");
   assert.equal(applied.at(-1).per_request_overrides.reasoning_effort, "medium");
-  await update({ runtimeBusy: false, conversationId: "chat_reload", selectedConfigurationId: "config_a", selectedDeploymentId: "dep_a", configuration: { model_configuration_id: "config_a", deployment_id: "dep_a", startup_overrides: { ctx_size: 8192 }, per_request_overrides: { temperature: 0.2, reasoning_effort: "medium" } } });
+  await update({ runtimeBusy: false, conversationId: "chat_reload", selectionGeneration: 1, selectedConfigurationId: "config_a", selectedDeploymentId: "dep_a", configuration: { model_configuration_id: "config_a", deployment_id: "dep_a", startup_overrides: { ctx_size: 8192 }, per_request_overrides: { temperature: 0.2, reasoning_effort: "medium" } } });
   await open(renderer, "Tune model");
   await act(async () => changeContext(renderer, 12288)); await flush();
   await act(async () => thinkingChoice(renderer, "off").props.onChange()); await flush();
@@ -177,8 +177,8 @@ try {
   assert.equal(aria(renderer, "Chat context", "input").props["data-token-value"], 12288, "the failed candidate stays available for correction or retry");
   assert.match(text(renderer.root), /GPU memory exhausted while reloading/);
   const reloadConfiguration = props.configuration;
-  await update({ conversationId: "chat_other", configuration: { model_configuration_id: "config_a", deployment_id: "dep_a" } });
-  await update({ conversationId: "chat_reload", configuration: reloadConfiguration });
+  await update({ conversationId: "chat_other", selectionGeneration: 2, configuration: { model_configuration_id: "config_a", deployment_id: "dep_a" } });
+  await update({ conversationId: "chat_reload", selectionGeneration: 3, configuration: reloadConfiguration });
   assert.equal(aria(renderer, "Chat context", "input").props["data-token-value"], 12288, "returning to a chat restores its pending capacity draft");
   failure = "";
   let refreshCalls = 0, refreshFails = true;
@@ -286,6 +286,8 @@ try {
   await update({ bundles: duplicates, deployments: [], profiles: duplicates.map((bundle, index) => profile("duplicate_config_" + index, bundle.id, "Default")) });
   assert.equal(new Set(choices(renderer).map(text)).size, 2, "short model names retain distinct publisher identities");
   assert.ok(choices(renderer).every(node => !text(node).includes(".gguf")), "model groups keep full filenames in their tooltip");
+  await act(async () => renderer.unmount()); renderer = undefined;
+  await checkSavedRevisionAndChoiceCompletion();
   console.log("Chat model picker, exact residency, safe staging and per-model tuning checks passed.");
 } finally {
   if (renderer) await act(async () => renderer.unmount());
@@ -293,4 +295,104 @@ try {
   Object.assign(workspaceApi, { resolveSetup: original.resolveSetup, chatReadiness: original.chatReadiness });
   globalThis.window = originalWindow;
   await vite.close();
+}
+
+async function checkSavedRevisionAndChoiceCompletion() {
+  let mounted;
+  const localProfiles = profiles.map(item => ({ ...item, revision: 1 }));
+  const loads = [], applications = [], busyReports = [];
+  let optionReads = 0, pendingRefresh = null, pendingAcceptance = null;
+  let props = { bundles, profiles: localProfiles, deployments: [deployment("resident", "bundle_a", "config_a")], selectedDeploymentId: "resident", selectedConfigurationId: "config_a", configuration: { model_configuration_id: "config_a", deployment_id: "resident" }, conversationId: "revision-chat" };
+  const publish = patch => { props = { ...props, ...patch }; mounted.update(React.createElement(ChatModelControls, props)); };
+  const update = async patch => { await act(async () => publish(patch)); await flush(); };
+  workspaceApi.resolveSetup = async (_project, _agent, configuration) => {
+    const selected = props.profiles.find(item => item.id === configuration.model_configuration_id);
+    const startup = { ...selected?.bags.startup.requested, ...configuration.startup_overrides };
+    const exact = props.deployments.find(item => item.bundle_id === selected?.bundle_id && item.settings.startup.requested.ctx_size === startup.ctx_size);
+    const inherited = (key, bag) => ({ value: configuration[bag + "_overrides"]?.[key] ?? selected?.bags[bag].requested[key], known: true, source: "Configuration: Default", inherited: true, inherited_value: selected?.bags[bag].requested[key], inherited_source: "Configuration: Default" });
+    return { configuration: { ...configuration, deployment_id: exact?.id ?? null }, instruction_layers: [], effective_values: { "startup.ctx_size": inherited("ctx_size", "startup"), "per_request.reasoning": inherited("reasoning", "per_request"), "per_request.reasoning_effort": inherited("reasoning_effort", "per_request") } };
+  };
+  workspaceApi.chatReadiness = async () => ({ status: "ready", can_send: true, issues: [] });
+  api.modelConfiguration = async () => { optionReads++; return options; };
+  api.applyChatStartupOverrides = async (bundle, configuration, startup) => {
+    const selected = props.profiles.find(item => item.id === configuration);
+    const loaded = deployment("loaded-" + loads.length, bundle, configuration, { ...selected.bags.startup.requested, ...startup });
+    loads.push(loaded); return loaded;
+  };
+  props.onApply = async configuration => {
+    applications.push(configuration);
+    publish({ configuration, selectedConfigurationId: configuration.model_configuration_id, selectedDeploymentId: configuration.deployment_id });
+    if (pendingAcceptance) await pendingAcceptance.promise;
+  };
+  props.onReloaded = async () => {
+    if (pendingRefresh) await pendingRefresh.promise;
+    publish({ deployments: [loads.at(-1)] });
+  };
+  props.onBusyChange = busy => busyReports.push(busy);
+  try {
+    await act(async () => { mounted = create(React.createElement(ChatModelControls, props)); }); await flush();
+    await open(mounted, "Tune model");
+    assert.equal(aria(mounted, "Chat context", "input").props["data-token-value"], 32768);
+    assert.equal(thinkingChoice(mounted, "high").props.checked, true);
+    const oldOptionReads = optionReads;
+    localProfiles[0] = { ...localProfiles[0], revision: 2, bags: { ...localProfiles[0].bags, startup: bag({ ctx_size: 16384 }), per_request: bag({ reasoning: "on", reasoning_effort: "medium" }) } };
+    await update({ profiles: [...localProfiles] });
+    assert.equal(aria(mounted, "Chat context", "input").props["data-token-value"], 16384, "an open tuning panel follows revised inherited Context");
+    assert.equal(thinkingChoice(mounted, "medium").props.checked, true, "Thinking follows the revised saved default");
+    assert.ok(optionReads > oldOptionReads, "descriptor options also follow the selected saved revision");
+    assert.equal(loads.length, 0, "refreshing a saved setup remains passive");
+    await open(mounted, "Chat model: Qwen");
+    assert.match(choices(mounted)[0].props.title, /Settings not loaded/, "old native settings cannot remain Ready after a saved startup edit");
+    await act(async () => choices(mounted)[0].props.onClick()); await flush();
+    assert.equal(loads.length, 1, "explicit selection loads the revised saved setup");
+    assert.equal(loads[0].settings.startup.requested.ctx_size, 16384);
+    localProfiles[0] = { ...localProfiles[0], revision: 3, bags: { ...localProfiles[0].bags, per_request: bag({ reasoning: "on", reasoning_effort: "low" }) } };
+    await update({ profiles: [...localProfiles] });
+    await open(mounted, "Tune model");
+    assert.equal(thinkingChoice(mounted, "low").props.checked, true, "a response-only revision updates the visible default");
+    await open(mounted, "Chat model: Qwen");
+    await act(async () => choices(mounted)[0].props.onClick()); await flush();
+    assert.equal(loads.length, 1, "a response-only save reuses the exact loaded startup");
+
+    pendingRefresh = Promise.withResolvers(); pendingAcceptance = Promise.withResolvers();
+    await open(mounted, "Chat model: Qwen");
+    await act(async () => choices(mounted)[1].props.onClick()); await flush();
+    assert.equal(props.configuration.model_configuration_id, "config_b");
+    assert.equal(aria(mounted, "Chat model: Gemma").props["aria-expanded"], true, "selection is still awaiting acceptance completion");
+    await act(async () => pendingAcceptance.resolve()); await flush();
+    assert.equal(aria(mounted, "Chat model: Gemma").props["aria-expanded"], false, "its own accepted model transition closes the picker before delayed status refresh");
+    await act(async () => pendingRefresh.resolve()); await flush();
+    pendingRefresh = null;
+
+    pendingAcceptance = Promise.withResolvers();
+    await open(mounted, "Chat model: Gemma");
+    await act(async () => choices(mounted)[0].props.onClick()); await flush();
+    await update({ conversationId: "another-chat" });
+    await open(mounted, "Chat model: Qwen");
+    await act(async () => pendingAcceptance.resolve()); await flush();
+    assert.equal(aria(mounted, "Chat model: Qwen").props["aria-expanded"], true, "late acceptance cannot close a newly selected chat's picker");
+    assert.equal(applications.length, 3, "late completion cannot reapply a selection");
+
+    await update({ conversationId: null, selectionGeneration: 10, selectedConfigurationId: "config_a", selectedDeploymentId: "", configuration: { model_configuration_id: "config_a", startup_overrides: { ctx_size: 8192 } } });
+    await open(mounted, "Tune model");
+    await act(async () => changeContext(mounted, 12288)); await flush();
+    await update({ selectionGeneration: 11 });
+    assert.equal(aria(mounted, "Chat context", "input").props["data-token-value"], 12288, "fresh New preserves pending settings while changing transient operation ownership");
+
+    const resolving = Promise.withResolvers(), resolveBeforeDisposal = workspaceApi.resolveSetup;
+    workspaceApi.resolveSetup = async (...args) => { if (args[2].model_configuration_id === "config_b") await resolving.promise; return resolveBeforeDisposal(...args); };
+    const beforeDisposal = { loads: loads.length, applications: applications.length };
+    await open(mounted, "Chat model: Qwen");
+    await act(async () => choices(mounted)[1].props.onClick()); await flush();
+    assert.equal(busyReports.at(-1), true, "model preflight publishes its pending state");
+    await act(async () => mounted.unmount()); mounted = undefined;
+    assert.equal(busyReports.at(-1), false, "disposal clears the reported selection gate");
+    await act(async () => resolving.resolve()); await flush();
+    assert.equal(loads.length, beforeDisposal.loads, "disposed model preparation cannot start a model later");
+    assert.equal(applications.length, beforeDisposal.applications, "disposed model preparation cannot apply to a replacement owner");
+    workspaceApi.resolveSetup = resolveBeforeDisposal;
+  } finally {
+    pendingAcceptance?.resolve(); pendingRefresh?.resolve();
+    if (mounted) await act(async () => mounted.unmount());
+  }
 }

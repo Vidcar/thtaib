@@ -168,6 +168,21 @@ try {
   assert.match(attentionButton.props["aria-label"], /Attention could not load/);
   assert.match(attentionButton.props["aria-label"], /Attention list unavailable/);
   assert.equal(text(attentionButton).includes("!"), true, "a failed attention load is not shown as zero items");
+  const heldAttention = [];
+  globalThis.fetch = async url => {
+    assert.ok(String(url).endsWith("/v1/desktop/attention"));
+    return new Promise((resolve, reject) => heldAttention.push({ resolve: value => resolve(jsonResponse(value)), reject }));
+  };
+  await act(async () => { globalThis.window.dispatchEvent(new Event("workbench-attention")); globalThis.window.dispatchEvent(new Event("workbench-attention")); await tick(); });
+  assert.equal(heldAttention.length, 2, "two independent attention refreshes have reached the API");
+  await act(async () => { heldAttention[1].resolve([{ identity: "latest-approval" }]); await tick(); });
+  assert.equal(attention.root.findByType("button").props["aria-label"], "Attention, 1 item");
+  await act(async () => { heldAttention[0].resolve([]); await tick(); });
+  assert.equal(attention.root.findByType("button").props["aria-label"], "Attention, 1 item", "an old empty response cannot hide current attention");
+  await act(async () => { globalThis.window.dispatchEvent(new Event("workbench-attention")); globalThis.window.dispatchEvent(new Event("workbench-attention")); await tick(); });
+  await act(async () => { heldAttention[3].resolve([]); await tick(); });
+  await act(async () => { heldAttention[2].reject(new Error("Obsolete attention failure")); await tick(); });
+  assert.equal(attention.root.findByType("button").props["aria-label"], "Attention, 0 items", "an old failure cannot replace a newer successful refresh");
   console.log("Screen controls call the endpoints their labels name.");
 } finally {
   if (models) await act(async () => models.unmount());

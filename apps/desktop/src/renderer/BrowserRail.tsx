@@ -63,6 +63,7 @@ interface BrowserRailProps {
 export function BrowserRail({ threadId, visible, enabled, projectBound, attachments, onConfigure, onSettings = onConfigure, onOpenFiles, onDownloadsChanged, onReadinessChange }: BrowserRailProps) {
   const [status, setStatus] = useState<BrowserSessionStatus | null>(null);
   const statusRef = useRef(status);
+  const statusVersion = useRef(0);
   const [frame, setFrame] = useState<BrowserFrame | null>(null);
   const [, setLoadedFrame] = useState("");
   const displayedFrame = useRef<BrowserFrame | null>(null);
@@ -106,6 +107,7 @@ export function BrowserRail({ threadId, visible, enabled, projectBound, attachme
     if (previous?.session_id !== next.session_id || previous?.active_page_id !== next.active_page_id || previous?.revision !== next.revision || next.state !== "active") clearFrame();
     if (previous?.control !== next.control) { actionQueue.current = []; pressed.current = null; }
     if (previous && (previous.state !== next.state || previous.control !== next.control || previous.worker.installed !== next.worker.installed || previous.worker.chrome_available !== next.worker.chrome_available)) readinessChanged.current?.();
+    statusVersion.current += 1;
     statusRef.current = next;
     setStatus(next);
     if (next.state !== "active") setConnection(next.state === "lost" ? "Connection lost" : "Idle");
@@ -124,7 +126,12 @@ export function BrowserRail({ threadId, visible, enabled, projectBound, attachme
     if (!threadId || !visible) { setConnection("Idle"); return; }
     const controller = new AbortController();
     let retryTimer: number | null = null;
-    void api.browserSession(threadId).then(next => { if (generation.current === currentGeneration && !controller.signal.aborted) acceptStatus(next); }).catch(failure => { if (!controller.signal.aborted) setError(errorMessage(failure)); });
+    const initialStatusVersion = statusVersion.current;
+    void api.browserSession(threadId).then(next => {
+      if (generation.current === currentGeneration && !controller.signal.aborted && statusVersion.current === initialStatusVersion) acceptStatus(next);
+    }).catch(failure => {
+      if (!controller.signal.aborted && statusVersion.current === initialStatusVersion) setError(errorMessage(failure));
+    });
     async function connect() {
       setConnection("Connecting…");
       try {

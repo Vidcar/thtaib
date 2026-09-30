@@ -22,6 +22,11 @@ class LifecycleCoordinator:
         self._profile_refs: dict[str, int] = {}
         self._bundle_refs: dict[str, int] = {}
 
+    def owns_mutation(self, operation: str) -> bool:
+        """Whether this caller owns the outer lifecycle operation."""
+        with self._condition:
+            return self._mutation == operation and self._mutation_owner == threading.get_ident()
+
     @contextmanager
     def reserve(self, deployment: Deployment, *, profile_id: str | None = None) -> Iterator[None]:
         deps = self._deps_for(deployment, profile_id=profile_id)
