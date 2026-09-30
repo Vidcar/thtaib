@@ -689,7 +689,7 @@ class MemoryEstimateTests(unittest.TestCase):
 
 class HardwareTelemetryTests(unittest.TestCase):
     def test_each_gpu_has_its_own_budget_and_unavailable_telemetry_is_unknown(self):
-        output = SimpleNamespace(returncode=0, stdout="GPU-one, First, 8192, 4096\nGPU-two, Second, 4096, 2048\n")
+        output = SimpleNamespace(returncode=0, stdout="GPU-one, First, 8192, 4096, 4000\nGPU-two, Second, 4096, 2048, 2000\n")
         with patch("workbench_backend.inference.hardware.shutil.which", return_value="nvidia-smi"), patch("workbench_backend.inference.hardware.subprocess.run", return_value=output) as run:
             observer = HardwareObserver()
             observation = observer.observe()

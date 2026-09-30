@@ -44,6 +44,7 @@ from workbench_backend.inference.schemas import (
     SmokeResult,
     ModelEstimateRequest,
     ModelMemoryEstimate,
+    HardwareMemoryObservation,
 )
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.inference.process_logs import deployment_log_path
@@ -112,6 +113,11 @@ def search_huggingface(request: Request, q: str = Query(min_length=1, max_length
 @router.post("/models/estimate", response_model=ModelMemoryEstimate)
 def estimate_model(request: Request, body: ModelEstimateRequest) -> ModelMemoryEstimate:
     return get_manager(request).memory_estimator.estimate(body)
+
+
+@router.get("/system/resources", response_model=HardwareMemoryObservation)
+def system_resources(request: Request) -> HardwareMemoryObservation:
+    return get_manager(request).memory_estimator.hardware.observe(max_age=2.0)
 
 
 @router.post("/imports/local", response_model=ImportJob, status_code=202)

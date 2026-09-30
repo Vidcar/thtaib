@@ -50,6 +50,8 @@ window.fetch = async (url, init) => {
   if (address.pathname === "/v1/chat/conversations/search") return { ok: true, json: async () => address.searchParams.get("q") === "absent" ? [] : [{ conversation: sidebarChat }] } as Response;
   if (address.pathname === "/v1/projects") return { ok: true, json: async () => [{ id: "other-project", name: "Unrelated project", path: "D:/Other" }, { id: "project-game", name: "Game project", path: "D:/Games" }] } as Response;
   if (address.pathname === "/v1/desktop/attention") return { ok: true, json: async () => [] } as Response;
+  if (address.pathname === "/v1/system/resources") return { ok: true, json: async () => ({ gpu_devices: [{ id: "fixture-gpu", name: "Fixture GPU", total_bytes: 100, used_bytes: 0 }],
+    ram_total_bytes: 100, ram_available_bytes: 0, gpu_observed_at: new Date().toISOString(), ram_observed_at: new Date().toISOString(), gpu_stale: false, ram_stale: false }) } as Response;
   if (address.pathname === "/v1/assets") {
     window.fixture.libraryRequests ??= [];
     window.fixture.libraryRequests.push({ sessionId: address.searchParams.get("session_id"), projectPath: address.searchParams.get("project_path") });

@@ -8277,6 +8277,17 @@
               }
             ],
             "title": "Total Bytes"
+          },
+          "used_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used Bytes"
           }
         },
         "required": [
@@ -8295,6 +8306,22 @@
             "title": "Gpu Devices",
             "type": "array"
           },
+          "gpu_observed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpu Observed At"
+          },
+          "gpu_stale": {
+            "default": false,
+            "title": "Gpu Stale",
+            "type": "boolean"
+          },
           "observed_at": {
             "title": "Observed At",
             "type": "string"
@@ -8309,6 +8336,22 @@
               }
             ],
             "title": "Ram Available Bytes"
+          },
+          "ram_observed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ram Observed At"
+          },
+          "ram_stale": {
+            "default": false,
+            "title": "Ram Stale",
+            "type": "boolean"
           },
           "ram_total_bytes": {
             "anyOf": [
@@ -24592,6 +24635,24 @@
         "tags": [
           "shared-contracts"
         ]
+      }
+    },
+    "/v1/system/resources": {
+      "get": {
+        "operationId": "system_resources_v1_system_resources_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HardwareMemoryObservation"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "System Resources"
       }
     },
     "/v1/window-testing/conversations/{conversation_id}/scope": {

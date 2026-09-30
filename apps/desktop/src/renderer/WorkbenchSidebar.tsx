@@ -9,6 +9,7 @@ import { conversationTitle, formatWhen } from "./display";
 import { errorMessage } from "./errors";
 import { Icon } from "./Icon";
 import { PanelResize } from "./PanelResize";
+import { SystemResourceMonitor } from "./SystemResourceMonitor";
 import type { ChatConversation, WorkbenchTab } from "./types";
 import { tabIcons, tabLabel, workbenchTabs } from "./workspaceNavigation";
 import { workspaceApi, type ProjectRecord } from "./workspaceApi";
@@ -315,7 +316,7 @@ export function WorkbenchSidebar(props: {
         <nav className="side-tabs" aria-label="Destinations">
           {workbenchTabs.filter(item => item !== "attention" && item !== "settings").map(item => <button key={item} type="button" className={item === props.tab ? "tab destination-current" : "tab"} aria-label={tabLabel(item)} title={tabLabel(item)} onClick={() => props.onNavigate(item)}><Icon name={tabIcons[item]} size={18} /></button>)}
         </nav>
-        <div className="rail-bottom"><button type="button" className={props.tab === "settings" ? "tab destination-current" : "tab"} aria-label="Settings" title="Settings" onClick={() => props.onNavigate("settings")}><Icon name="settings" size={18} /></button><div className="service-indicator" title={props.dotTitle ?? props.backendStatus}><span className={`status-dot${props.dotReady ? " ready" : ""}`} /><span className="sr-only">{props.backendOk === false ? "Service unavailable" : "Local"}</span></div></div>
+        <div className="rail-bottom"><button type="button" className={props.tab === "settings" ? "tab destination-current" : "tab"} aria-label="Settings" title="Settings" onClick={() => props.onNavigate("settings")}><Icon name="settings" size={18} /></button><SystemResourceMonitor /><div className="service-indicator" title={props.dotTitle ?? props.backendStatus}><span className={`status-dot${props.dotReady ? " ready" : ""}`} /><span className="sr-only">{props.backendOk === false ? "Service unavailable" : "Local"}</span></div></div>
       </div>
       <div className="app-nav chat-navigation" hidden={props.tab !== "chat" || props.collapsed}>
       <div className="app-nav-head">
