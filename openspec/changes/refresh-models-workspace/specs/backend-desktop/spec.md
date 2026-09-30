@@ -21,4 +21,3 @@ Settings forms SHALL share appearance tokens and accessible control conventions.
 #### Scenario: Compact Models and shared settings
 - **WHEN** Models is opened and native controls are edited, then Chat, Agents or Settings is opened
 - **THEN** Models uses its compact scoped layout while the shared consumers retain their own geometry, controls and appearance.
-
