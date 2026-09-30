@@ -700,6 +700,16 @@ Models readouts SHALL resolve the selected model, configuration and unsaved draf
 - **WHEN** typing changes the candidate while an earlier check completes
 - **THEN** editing stays uninterrupted and that earlier result cannot enable Apply this chat's settings for the newer candidate.
 
+#### Scenario: Saved setup changes while Chat stays mounted
+- **WHEN** a selected saved configuration gains a new revision while Chat remains mounted
+- **THEN** its readiness, Thinking and context preview SHALL be reverified for that revision without passively loading a model
+- **AND** explicitly selecting the changed saved startup SHALL apply that exact selection rather than treat an older running configuration as current.
+
+#### Scenario: Model and agent preparation share setup ownership
+- **WHEN** an explicit model or main-agent choice is still preparing its resolved setup
+- **THEN** shared setup controls SHALL remain visibly busy until that owned action settles, so a competing choice cannot be silently discarded by its later callback
+- **AND** disposal or replacement of the selection owner SHALL release its UI gate without allowing obsolete completion to overwrite the replacement.
+
 ### Requirement: MOD-038 - Keep import choices and estimates truthful
 
 Model import SHALL retain Find, Choose and Review/download stages; Back and failed requests SHALL preserve choices. Context and independent K/V settings SHALL become the initial configuration only after the person sets them on Review. Untouched loading settings SHALL stay omitted so llama.cpp keeps its own defaults. Exact shards, projectors, capabilities and import defaults remain authoritative. Slider fill SHALL reflect the actual displayed value; an automatic setting SHALL not imply a fixed value. Hardware presentation SHALL expose real GPU/RAM availability and qualified weights/cache/overhead estimates, with unknown components and device boundaries explicit. Estimates SHALL never block valid choices or silently reduce settings. A manual Refresh SHALL bypass estimate caching only for that request.
@@ -801,6 +811,17 @@ The editor SHALL provide one contextual right panel for presets, optional checks
 #### Scenario: Load a stopped snapshot
 - **WHEN** the person chooses Load snapshot on a stopped managed record
 - **THEN** the desktop posts `POST /v1/deployments/{id}/start` for that record.
+
+#### Scenario: A dirty draft races another save
+- **WHEN** a configuration changes after an editor draft was created, including while that draft is stashed during navigation
+- **THEN** Save SHALL compare against the draft's original saved revision and report a conflict without overwriting the intervening change or discarding the local draft
+- **AND** only an explicit revert or a confirmed save SHALL replace that draft's saved base; failed observation after a confirmed save SHALL not undo the save acknowledgement.
+- **AND** displayed effective values, validation and memory estimates SHALL describe the retained draft that Save or Save a copy would submit, including settings removed or added by the intervening save.
+
+#### Scenario: Initial saved setup and engine observations arrive independently
+- **WHEN** Models opens while saved configurations or engine observations are still being read
+- **THEN** the editor SHALL establish the selected saved authoring base before accepting edits, and an unverified model observation SHALL NOT claim that the model is unloaded
+- **AND** once established, the editor SHALL remain usable through background checks and later observations SHALL NOT discard its accepted draft.
 
 ### Requirement: MOD-044 - Apply and reversibly remove publisher presets
 
