@@ -47,6 +47,15 @@ The backend and desktop SHALL present run hierarchy, streamed progress, approval
 - THEN visible state MUST show `cancel_requested` until the worker records confirmed `cancelled`
 - AND a later persisted outcome MUST match execution records.
 
+#### Scenario: Accepted action followed by failed observation
+- **WHEN** a Lab or Chat action has been accepted but its immediate status read fails
+- **THEN** the desktop SHALL retain its accepted identity, show observation as unavailable, and retry observing the same work
+- **AND** it SHALL NOT present a different completed run or encourage repeating the accepted action as a refresh.
+
+#### Scenario: Observations complete out of order
+- **WHEN** an initial Browser read or earlier attention refresh completes after newer accepted state
+- **THEN** it SHALL NOT replace that newer state, suppress current frames, or erase its error and attention count.
+
 ### Requirement: API-005 - Keep provisioning distinct from job execution
 
 The environment manager SHALL provision workers and access, map project storage, and tear down environments. Adapters SHALL own jobs inside environments. Docker Compose SHALL manage container services. Service readiness MUST NOT be reported as task completion.
@@ -136,6 +145,11 @@ Each catalogue list SHALL retain its own loading and failure state. Only a succe
 - **WHEN** no Chat model has been chosen and several healthy chat deployments are running
 - **THEN** New Chat asks for an explicit model choice rather than silently selecting one.
 
+#### Scenario: Chat startup reads recover independently
+- **WHEN** Chat's model, setup, project or history reads fail and later recover independently
+- **THEN** only successful model and bundle reads SHALL permit an empty-workspace state, and each failed resource SHALL retain its own error until recovery
+- **AND** retries SHALL be bounded in frequency and cancelled on owner disposal; obsolete responses SHALL NOT overwrite newer state or user edits, and passive reads SHALL NOT start a model.
+
 ### Requirement: API-008 - Preserve terminal Chat hydration
 
 The desktop SHALL reconcile upstream incremental projections and the persisted readable conversation by stable identity. Completed replies SHALL remain visible after final hydration. Optimistic user input, completed messages and tool results MUST NOT duplicate or disappear. Thread switches SHALL dispose the old observation and MUST NOT apply late frames or hydration to the new selection. Readable archive history MUST NOT be shortened to match compacted execution context.
@@ -218,6 +232,11 @@ The `repair-local-interaction-boundaries` prerequisite SHALL remain satisfied: s
 - **THEN** the user bubble SHALL retain those characters and spacing literally without interpreting them as Markdown or HTML
 - **AND** assistant Markdown and code remain formatted, attachments remain accessible, and model-only context notices remain outside the user bubble.
 
+#### Scenario: Submission accepted into a busy project's queue
+- **WHEN** Send is durably accepted while another task owns the project folder
+- **THEN** acknowledgement and desktop reconciliation SHALL identify that exact queued input without inventing a run or associating a previous completed run
+- **AND** recovery after a lost acknowledgement SHALL recognise that same accepted identity, clear only its submitted draft revision, and observe its later execution without submitting it again.
+
 ### Requirement: API-011 - Keep background work visible and quit deliberately
 
 Closing the main window or event stream SHALL NOT cancel or resubmit a run. Ongoing work SHALL have visible tray/background state and a route back. Explicit Quit with active work SHALL offer keep running or stop owned work and exit. Shutdown SHALL reconcile owned runs/clients/savers/processes and retain unresolved external outcomes; externally connected engines MUST NOT be terminated as owned processes. Reopening reconnects to existing work.
@@ -226,6 +245,11 @@ Closing the main window or event stream SHALL NOT cancel or resubmit a run. Ongo
 
 - **WHEN** a user closes/reopens the desktop or explicitly quits during work
 - **THEN** close/reopen preserves the same run; Quit makes the keep-running versus stop-owned-work decision explicit and reconciles its outcome.
+
+#### Scenario: Quit with retained paused input
+- **WHEN** deliberate Quit has paused queued input and confirmed that owned workers have stopped
+- **THEN** retained paused input SHALL NOT prevent shutdown of the owned managed engine
+- **AND** the queued input, frozen setup, cancellation identity and unresolved outcome evidence SHALL remain retained for deliberate later recovery; live work that has not confirmed stopping SHALL still block shutdown, and connected engines SHALL remain untouched.
 
 ### Requirement: API-016 - Present one conversation-led desktop shell
 

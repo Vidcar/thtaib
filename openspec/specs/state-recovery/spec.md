@@ -73,6 +73,16 @@ Checkpoint branching SHALL be paired with an application-owned project snapshot.
 - **WHEN** the backend restarts or a waiting message is cancelled
 - **THEN** accepted input identities SHALL remain idempotent, uncertain work SHALL NOT replay, and cancelling a waiter SHALL NOT cancel its current project owner.
 
+#### Scenario: Temporary project reservation ends without a run event
+- **WHEN** a Lab capture or failed pre-run admission releases a project folder after a Chat task has queued for it
+- **THEN** the existing queue SHALL resume eligible work after release without requiring another user action or run event
+- **AND** no work SHALL start while the reservation remains held.
+
+#### Scenario: Cancel a queued input with no worker
+- **WHEN** cancellation safely pauses a queued-only input and no admission or dispatch remains in flight for it
+- **THEN** pending cancellation SHALL settle without waiting for a nonexistent worker or requiring restart
+- **AND** its cancellation identity SHALL continue to prevent a late duplicate dispatch and SHALL NOT cancel the other project owner.
+
 ### Requirement: STATE-004 - Do not promise rollback of external effects
 
 Snapshots SHALL NOT undo external actions or restore a whole environment unless an adapter explicitly supports it. External effects without acknowledgement after crash, reconnect, or restart SHALL remain `unknown` until reconciled with authoritative evidence. Unknown operations MUST NOT be silently replayed. `cancel_requested` SHALL remain live until confirmed stop.
@@ -82,6 +92,11 @@ Snapshots SHALL NOT undo external actions or restore a whole environment unless 
 - WHEN a crash occurs between external effect dispatch and local acknowledgement
 - THEN recovery MUST report uncertainty or reconcile against authoritative evidence
 - AND it MUST NOT treat a cancel request as confirmed stop or permission to replay.
+
+#### Scenario: Desktop control outcome is uncertain after dispatch
+- **WHEN** a desktop control action is dispatched and acknowledgement times out or the target window identity changes before its result is verified
+- **THEN** its durable outcome SHALL remain uncertain and require inspection or explicit acknowledgement before dependent continuation
+- **AND** it SHALL NOT be converted to an ordinary correctable tool failure or automatically replayed; a refusal before dispatch remains distinguishable.
 
 ### Requirement: STATE-005 - Version durable knowledge and enforce its write policy
 
