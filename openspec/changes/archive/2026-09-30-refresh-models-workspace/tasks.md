@@ -20,4 +20,4 @@
 
 - [x] 4.1 Pass affected shared/spec acceptance gates and resolve fresh independent review findings, including migration/lifecycle/concurrency/CSS guards.
 - [x] 4.2 Verify native Windows editing, downloads/recovery, setup/load/check persistence and cross-page layout with isolated data; preserve product records/weights and record actual evidence.
-- [ ] 4.3 Complete authorized Git delivery, sync contracts and refresh the established local app; verify built/process/auth identity and update concise handover. Archive this change after delivery is verified.
+- [x] 4.3 Complete authorized Git delivery, sync contracts and refresh the established local app; verify built/process/auth identity and update concise handover. Archive this change after delivery is verified.
