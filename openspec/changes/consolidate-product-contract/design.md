@@ -6,7 +6,7 @@ The surviving contracts were synced previously. Everyday workspace, native skill
 
 ## Goals / Non-Goals
 
-Deliver the remaining workflow and media contracts using the existing backend and desktop. Retain accepted behaviour and newer Chat/model contracts. Lab is owned only by [lab-workbench](../lab-workbench/design.md). This change does not build the older llama-bench views/reservation, another execution engine/store, bundled media engines, schedules or voice cloning.
+Deliver the remaining workflow and media contracts using the existing backend and desktop. Retain accepted behaviour and newer Chat/model contracts. Lab is owned only by [lab-workbench](../archive/2026-09-30-lab-workbench/design.md). This change does not build the older llama-bench views/reservation, another execution engine/store, bundled media engines, schedules or voice cloning.
 
 ## Decisions
 

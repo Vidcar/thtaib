@@ -70,6 +70,23 @@ class ManagedRouter:
         self._preset_path = store.paths.state / "managed-router.ini"
         self._cache_root = store.paths.state / "managed-router-cache"
         self._template_path = store.paths.state / "managed-router-templates"
+        self._lab_holds: dict[str, set[str]] = {}
+
+    def hold_for_lab(self, owner: str, deployment_id: str) -> None:
+        with self._lock:
+            self._lab_holds.setdefault(owner, set()).add(deployment_id)
+
+    def release_lab_holds(self, owner: str | None = None) -> None:
+        with self._lock:
+            if owner is None:
+                self._lab_holds.clear()
+            else:
+                self._lab_holds.pop(owner, None)
+
+    def _require_not_lab_held(self, deployment_id: str | None = None) -> None:
+        if any(deployment_id is None or deployment_id in ids for ids in self._lab_holds.values()):
+            raise ManagerError("A Lab measurement is using this loaded model. Stop the measurement first.",
+                               code="lab_residency_busy", status_code=409)
 
     def max_loaded_models(self) -> int:
         raw = self.store.get_setting(_MAX_KEY)
@@ -92,6 +109,7 @@ class ManagedRouter:
         with self._lock:
             if value == self.max_loaded_models():
                 return self.status()
+            self._require_not_lab_held()
             if self.require_idle is not None:
                 for deployment in self._managed_deployments():
                     self.require_idle(deployment)
@@ -138,7 +156,8 @@ class ManagedRouter:
                 "router_status": status,
             }
 
-    def start(self, deployment_id: str, *, verify_before_load: Callable[[], None] | None = None) -> Deployment:
+    def start(self, deployment_id: str, *, verify_before_load: Callable[[], None] | None = None,
+              cancelled: Callable[[], bool] | None = None) -> Deployment:
         with self._lock:
             deployment = self._require_managed(deployment_id)
             if deployment.reconfiguration and deployment.reconfiguration.get("phase") == "recovery_required":
@@ -162,11 +181,18 @@ class ManagedRouter:
                                    details={"deployment_id": deployment.id})
             state = self._model_state(model)
             if state != "loaded":
+                resident = {key for key, item in inventory.items() if self._model_state(item) in {"loaded", "loading"}}
+                held = set().union(*self._lab_holds.values()) if self._lab_holds else set()
+                if len(resident) >= self.max_loaded_models() and resident & held:
+                    raise ManagerError("A Lab measurement is using the loaded model. Stop it before loading a replacement.",
+                                       code="lab_residency_busy", status_code=409)
                 if verify_before_load is not None:
                     verify_before_load()
                 self._post(endpoint, "/models/load", {"model": deployment.id})
                 deadline = time.monotonic() + _LOAD_TIMEOUT
                 while True:
+                    if cancelled is not None and cancelled():
+                        raise ManagerError("Lab loading was stopped.", code="deployment_load_cancelled", status_code=409)
                     model = self._inventory(endpoint).get(deployment.id)
                     state = self._model_state(model)
                     if state == "loaded":
@@ -184,6 +210,8 @@ class ManagedRouter:
                     time.sleep(0.25)
             deadline = time.monotonic() + _LOAD_TIMEOUT
             while True:
+                if cancelled is not None and cancelled():
+                    raise ManagerError("Lab loading was stopped.", code="deployment_load_cancelled", status_code=409)
                 observed = self._record_observation(deployment, record, model)
                 if observed.status == DeploymentStatus.running:
                     return observed
@@ -200,6 +228,7 @@ class ManagedRouter:
 
     def stop(self, deployment_id: str) -> Deployment:
         with self._lock:
+            self._require_not_lab_held(deployment_id)
             deployment = self._require_managed(deployment_id)
             if self.require_idle is not None:
                 self.require_idle(deployment)
@@ -252,6 +281,7 @@ class ManagedRouter:
 
     def stop_router(self) -> None:
         with self._lock:
+            self._require_not_lab_held()
             if self.require_idle is not None:
                 for deployment in self._managed_deployments():
                     self.require_idle(deployment)
@@ -432,7 +462,8 @@ class ManagedRouter:
         }))
 
     def _managed_deployments(self) -> list[Deployment]:
-        return [item for item in self.store.list_deployments() if item.scope == ManagementScope.managed]
+        return [item for item in self.store.list_deployments()
+                if item.scope == ManagementScope.managed and item.benchmark_owner is None]
 
     def _legacy_live(self) -> list[Deployment]:
         return [deployment for deployment in self._managed_deployments()

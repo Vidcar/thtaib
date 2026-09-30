@@ -1945,6 +1945,112 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/lab/workbench/challenges": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Challenges */
+        get: operations["list_challenges_v1_lab_workbench_challenges_get"];
+        put?: never;
+        /** Add Challenge */
+        post: operations["add_challenge_v1_lab_workbench_challenges_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/lab/workbench/challenges/{challenge_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Edit Challenge */
+        put: operations["edit_challenge_v1_lab_workbench_challenges__challenge_id__put"];
+        post?: never;
+        /** Delete Challenge */
+        delete: operations["delete_challenge_v1_lab_workbench_challenges__challenge_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/lab/workbench/leave": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Leave */
+        post: operations["leave_v1_lab_workbench_leave_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/lab/workbench/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Runs */
+        get: operations["list_runs_v1_lab_workbench_runs_get"];
+        put?: never;
+        /** Start Run */
+        post: operations["start_run_v1_lab_workbench_runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/lab/workbench/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Run */
+        get: operations["get_run_v1_lab_workbench_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Run */
+        delete: operations["delete_run_v1_lab_workbench_runs__run_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/lab/workbench/runs/{run_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop Run */
+        post: operations["stop_run_v1_lab_workbench_runs__run_id__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/models/estimate": {
         parameters: {
             query?: never;
@@ -3583,6 +3689,20 @@ export interface components {
              */
             version: 1;
         };
+        /** ChallengeWrite */
+        ChallengeWrite: {
+            /** Name */
+            name: string;
+            /**
+             * Required Text
+             * @default
+             */
+            required_text: string;
+            /** Required Tool */
+            required_tool?: ("echo" | "time_now") | null;
+            /** Task */
+            task: string;
+        };
         /** ChatCancelRequest */
         ChatCancelRequest: {
             /** Input Message Id */
@@ -4724,6 +4844,8 @@ export interface components {
             applied_startup?: {
                 [key: string]: unknown;
             };
+            /** Benchmark Owner */
+            benchmark_owner?: string | null;
             /** Bundle Id */
             bundle_id?: string | null;
             /** Capability Evidence */
@@ -5980,6 +6102,188 @@ export interface components {
             scope_id?: string | null;
             /** Token Counting Method */
             readonly token_counting_method: string;
+        };
+        /** LabChallenge */
+        LabChallenge: {
+            /** Created At */
+            created_at: string;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /**
+             * Required Text
+             * @default
+             */
+            required_text: string;
+            /** Required Tool */
+            required_tool?: ("echo" | "time_now") | null;
+            /** Task */
+            task: string;
+            /** Updated At */
+            updated_at: string;
+        };
+        /** LabConfiguration */
+        LabConfiguration: {
+            /**
+             * Concurrent Requests
+             * @default 1
+             */
+            concurrent_requests: number;
+            /** Configuration Id */
+            configuration_id: string;
+            /** Startup */
+            startup?: {
+                [key: string]: unknown;
+            };
+        };
+        /** LabLeaveRequest */
+        LabLeaveRequest: {
+            /** Run Ids */
+            run_ids?: string[];
+        };
+        /** LabMeasurement */
+        LabMeasurement: {
+            /** Answer */
+            answer?: string | null;
+            /** Context Tokens */
+            context_tokens?: number | null;
+            /** Created At */
+            created_at: string;
+            /** Depth */
+            depth?: number | null;
+            /** Error */
+            error?: string | null;
+            /** Expected */
+            expected?: string[];
+            /** Found */
+            found?: boolean | null;
+            /** Generated Tokens */
+            generated_tokens?: number | null;
+            /** Generation Tps */
+            generation_tps?: number | null;
+            /** Id */
+            id: string;
+            /** Missing */
+            missing?: string[];
+            /** Passed */
+            passed?: boolean | null;
+            /** Prefill Tps */
+            prefill_tps?: number | null;
+            /** Prompt Tokens */
+            prompt_tokens?: number | null;
+            /** Requested Prompt Length */
+            requested_prompt_length?: number | null;
+            /** Samples */
+            samples?: {
+                [key: string]: unknown;
+            }[];
+            /** Series Id */
+            series_id: string;
+            /** Tool Calls */
+            tool_calls?: string[];
+        };
+        /** LabRun */
+        LabRun: {
+            /** Agent Run Id */
+            agent_run_id?: string | null;
+            challenge_snapshot?: components["schemas"]["LabChallenge"] | null;
+            /** Created At */
+            created_at: string;
+            /** Current */
+            current?: {
+                [key: string]: unknown;
+            } | null;
+            /** Error */
+            error?: string | null;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "performance" | "memory" | "challenge";
+            /** Measurements */
+            measurements?: components["schemas"]["LabMeasurement"][];
+            request: components["schemas"]["LabRunRequest"];
+            /** Series */
+            series?: components["schemas"]["LabSeries"][];
+            /**
+             * Status
+             * @default queued
+             * @enum {string}
+             */
+            status: "queued" | "running" | "stopping" | "completed" | "stopped" | "failed";
+            /** Updated At */
+            updated_at: string;
+        };
+        /** LabRunRequest */
+        LabRunRequest: {
+            /** Challenge Id */
+            challenge_id?: string | null;
+            /** Configurations */
+            configurations: components["schemas"]["LabConfiguration"][];
+            /** Depths */
+            depths?: (0 | 25 | 50 | 75 | 100)[];
+            /**
+             * Generation Length
+             * @default 512
+             * @enum {integer}
+             */
+            generation_length: 256 | 512 | 1024;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "performance" | "memory" | "challenge";
+            /**
+             * Memory Test
+             * @default uuid
+             * @enum {string}
+             */
+            memory_test: "uuid" | "multi_key" | "multi_value";
+            /**
+             * Mode
+             * @default single
+             * @enum {string}
+             */
+            mode: "single" | "concurrent";
+            /** Prompt Lengths */
+            prompt_lengths?: number[];
+        };
+        /** LabSeries */
+        LabSeries: {
+            /**
+             * Benchmark Owned
+             * @default false
+             */
+            benchmark_owned: boolean;
+            /**
+             * Concurrent Requests
+             * @default 1
+             */
+            concurrent_requests: number;
+            /** Configuration Id */
+            configuration_id: string;
+            /**
+             * Context Adjusted
+             * @default false
+             */
+            context_adjusted: boolean;
+            /** Context Size */
+            context_size?: number | null;
+            /** Deployment Id */
+            deployment_id: string;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Requested Context Size */
+            requested_context_size?: number | null;
+            /** Startup */
+            startup?: {
+                [key: string]: unknown;
+            };
         };
         /** LifecycleConsumer */
         LifecycleConsumer: {
@@ -8227,6 +8531,7 @@ export type SchemaCapabilityEvidence = components['schemas']['CapabilityEvidence
 export type SchemaCapabilityProbeReport = components['schemas']['CapabilityProbeReport'];
 export type SchemaCapabilityProbeRequest = components['schemas']['CapabilityProbeRequest'];
 export type SchemaCapabilitySetupRequest = components['schemas']['CapabilitySetupRequest'];
+export type SchemaChallengeWrite = components['schemas']['ChallengeWrite'];
 export type SchemaChatCancelRequest = components['schemas']['ChatCancelRequest'];
 export type SchemaChatContinuity = components['schemas']['ChatContinuity'];
 export type SchemaChatConversation = components['schemas']['ChatConversation'];
@@ -8322,6 +8627,13 @@ export type SchemaKnowledgeProvenance = components['schemas']['KnowledgeProvenan
 export type SchemaKnowledgeRevertRequest = components['schemas']['KnowledgeRevertRequest'];
 export type SchemaKnowledgeScopeOption = components['schemas']['KnowledgeScopeOption'];
 export type SchemaKnowledgeVersion = components['schemas']['KnowledgeVersion'];
+export type SchemaLabChallenge = components['schemas']['LabChallenge'];
+export type SchemaLabConfiguration = components['schemas']['LabConfiguration'];
+export type SchemaLabLeaveRequest = components['schemas']['LabLeaveRequest'];
+export type SchemaLabMeasurement = components['schemas']['LabMeasurement'];
+export type SchemaLabRun = components['schemas']['LabRun'];
+export type SchemaLabRunRequest = components['schemas']['LabRunRequest'];
+export type SchemaLabSeries = components['schemas']['LabSeries'];
 export type SchemaLifecycleConsumer = components['schemas']['LifecycleConsumer'];
 export type SchemaLoadedKnowledgeFact = components['schemas']['LoadedKnowledgeFact'];
 export type SchemaLocalImportRequest = components['schemas']['LocalImportRequest'];
@@ -12644,6 +12956,304 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SkillResourceView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_challenges_v1_lab_workbench_challenges_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabChallenge"][];
+                };
+            };
+        };
+    };
+    add_challenge_v1_lab_workbench_challenges_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChallengeWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabChallenge"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    edit_challenge_v1_lab_workbench_challenges__challenge_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                challenge_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChallengeWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabChallenge"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_challenge_v1_lab_workbench_challenges__challenge_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                challenge_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    leave_v1_lab_workbench_leave_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LabLeaveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_runs_v1_lab_workbench_runs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabRun"][];
+                };
+            };
+        };
+    };
+    start_run_v1_lab_workbench_runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LabRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabRun"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_v1_lab_workbench_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabRun"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_run_v1_lab_workbench_runs__run_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_run_v1_lab_workbench_runs__run_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabRun"];
                 };
             };
             /** @description Validation Error */

@@ -1,6 +1,6 @@
 # Tasks
 
-Reviewed 2026-09-27 against source and existing acceptance checks. The original contract sync is complete. Lab's former tasks are superseded, not completed: [lab-workbench](../lab-workbench/tasks.md) is their sole remaining owner. Detailed workflow layout/UX acceptance remains governed by API-020.
+Reviewed 2026-09-27 against source and existing acceptance checks. The original contract sync is complete. Lab's former tasks were superseded and their replacement is delivered: [lab-workbench](../archive/2026-09-30-lab-workbench/tasks.md) records that completed delivery. Detailed workflow layout/UX acceptance remains governed by API-020.
 
 ## 1. Delivered everyday workspace
 

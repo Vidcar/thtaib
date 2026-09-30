@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Callable
 from contextlib import contextmanager
 from pathlib import Path
 import hashlib
@@ -713,6 +713,7 @@ class ModelManager:
                     )
                 if self.deployments._router_enabled():
                     self._require_no_live_runs(deployment_ids=deployment_ids, code="runtime_pin_busy")
+                    self.release_lab_deployments()
                     self.deployments.router.stop_router()
                 else:
                     for deployment in running:
@@ -790,6 +791,66 @@ class ModelManager:
         self._require_current_loaded_identity(deployment)
         return self.deployments.start(deployment_id)
 
+    def prepare_lab_deployment(self, configuration_id: str, startup: dict, *, owner: str,
+                               concurrent: bool, deployment_id: str | None = None,
+                               cancelled: Callable[[], bool] | None = None) -> Deployment:
+        """Borrow only overflow residency, using the existing managed launcher.
+
+        b11045 fixes router capacity at process start. Overflow therefore uses
+        DeploymentService's existing identity-verified managed child path; it
+        never restarts the router or edits its saved limit. Admission and slot
+        observation are serialized with other application lifecycle callers.
+        """
+        with self.lifecycle.mutate("prepare_lab_deployment"):
+            if deployment_id is None:
+                profile = self.get_profile(configuration_id)
+                if not profile.bundle_id:
+                    raise ManagerError("Lab requires an installed model configuration.", code="lab_model_required", status_code=422)
+                deployment = self.create_managed(ManagedDeploymentRequest(bundle_id=profile.bundle_id,
+                    profile_id=profile.id, startup=startup, auto_start=False))
+            else:
+                deployment = self.get_deployment(deployment_id)
+            residency = self.managed_model_runtime()
+            resident = set(residency["loaded_deployment_ids"]) | set(residency["loading_deployment_ids"])
+            if concurrent and deployment.id not in resident and len(resident) >= int(residency["max_loaded_models"]):
+                # Never lend an ordinary record to another owner. A fresh record
+                # carries immutable launch settings and survives crash recovery.
+                deployment = self.store.put_deployment(deployment.model_copy(update={
+                    "id": new_id("deployment"), "benchmark_owner": owner,
+                    "router_preset_id": None, "endpoint": None, "pid": None,
+                    "process_identity": None, "status": DeploymentStatus.stopped, "health": None,
+                    "server_props": None, "resource_usage": None, "error": None,
+                    "created_at": utc_now(), "updated_at": utc_now(),
+                }, deep=True))
+            loaded = self.ensure_deployment_ready(deployment.id, **({"cancelled": cancelled} if cancelled else {}))
+            if not loaded.benchmark_owner:
+                self.deployments.router.hold_for_lab(owner, loaded.id)
+            return loaded
+
+    def release_lab_deployments(self, owner: str | None = None) -> None:
+        """Release exactly marked overflow children, also after an interrupted run."""
+        self.deployments.router.release_lab_holds(owner)
+        for deployment in self.store.list_deployments():
+            if not deployment.benchmark_owner or owner is not None and deployment.benchmark_owner != owner:
+                continue
+            # Overflow has its own process and is deliberately unavailable for
+            # ordinary configuration binding. Same-bundle Chat on the router
+            # must not prevent releasing this distinct child.
+            with self.lifecycle.mutate("release_lab_deployment", deployment_ids={deployment.id}):
+                self._require_no_live_runs(deployment_ids={deployment.id}, code="deployment_active")
+                with self.deployments._lock_for(deployment.id):
+                    try:
+                        self.deployments._stop_locked(deployment.id)
+                    except ManagerError as exc:
+                        current = self.store.get_deployment(deployment.id)
+                        if (exc.code != "process_identity_mismatch" or current is None
+                                or current.process_identity is not None or current.pid is not None):
+                            raise
+                        # The supervisor proved that this PID no longer belongs
+                        # to the benchmark and cleared its stale identity. Never
+                        # kill the replacement process or block app recovery.
+                self.store.delete_deployment(deployment.id)
+
     def _require_current_loaded_identity(self, deployment: Deployment) -> None:
         if deployment.scope != ManagementScope.managed or deployment.loaded_model_identity is None or not deployment.bundle_id:
             return
@@ -851,7 +912,10 @@ class ModelManager:
             self._require_no_live_runs(deployment_ids={deployment.id}, code="deployment_active")
             return self.deployments.detach(deployment_id)
 
-    def ensure_deployment_ready(self, deployment_id: str) -> Deployment:
+    def ensure_deployment_ready(self, deployment_id: str, *, cancelled: Callable[[], bool] | None = None) -> Deployment:
+        cancellation = {"cancelled": cancelled} if cancelled else {}
+        if cancelled is not None and cancelled():
+            raise ManagerError("Lab loading was stopped.", code="deployment_load_cancelled", status_code=409)
         deployment = self.get_deployment(deployment_id)
         if deployment.reconfiguration and deployment.reconfiguration.get("phase") == "recovery_required":
             raise ManagerError("Reload this model to restore its previous configuration.", code="reconfigure_recovery_required", status_code=409)
@@ -860,7 +924,7 @@ class ModelManager:
                 raise ManagerError("Deployment has no endpoint", code="no_endpoint", status_code=409)
             return deployment
         self._require_current_loaded_identity(deployment)
-        if self.deployments._router_enabled():
+        if self.deployments._router_enabled() and not deployment.benchmark_owner:
             if deployment.bundle_id:
                 # A resident preset already uses verified weight bytes. Recheck
                 # its file identity on each turn without hashing the full GGUF.
@@ -876,20 +940,22 @@ class ModelManager:
             return self._wait_deployment_ready(
                 deployment.id, first=self.deployments.start(
                     deployment.id, verify_before_load=verify_before_load,
+                    **cancellation,
                 ),
                 timeout_seconds=180.0,
+                **cancellation,
             )
         if (
             deployment.status == DeploymentStatus.running
             and deployment.endpoint
             and (deployment.health is None or deployment.health.healthy)
         ):
-            return self._wait_deployment_ready(deployment.id, first=deployment)
+            return self._wait_deployment_ready(deployment.id, first=deployment, **cancellation)
         if deployment.bundle_id:
             self._require_deployable_bundle(deployment.bundle_id)
         if deployment.status in {DeploymentStatus.stopped, DeploymentStatus.failed} or not deployment.endpoint:
-            deployment = self.deployments.start(deployment.id)
-        return self._wait_deployment_ready(deployment.id, first=deployment)
+            deployment = self.deployments.start(deployment.id, **cancellation)
+        return self._wait_deployment_ready(deployment.id, first=deployment, **cancellation)
 
     @contextmanager
     def reserve_deployment(
@@ -1103,10 +1169,13 @@ class ModelManager:
         *,
         first: Deployment | None = None,
         timeout_seconds: float = 20.0,
+        cancelled: Callable[[], bool] | None = None,
     ) -> Deployment:
         deadline = time.monotonic() + timeout_seconds
         deployment = first or self.get_deployment(deployment_id)
         while True:
+            if cancelled is not None and cancelled():
+                raise ManagerError("Lab loading was stopped.", code="deployment_load_cancelled", status_code=409)
             if deployment.scope != ManagementScope.managed:
                 return deployment
             if deployment.status == DeploymentStatus.running and deployment.endpoint:
