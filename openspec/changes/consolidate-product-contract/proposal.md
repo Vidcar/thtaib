@@ -10,7 +10,7 @@ This change originally consolidated older product plans. Its documentation sync 
 - Finish Workflows with application-owned versioned definitions and validation, LangGraph sequencing and durable execution, and a React Flow editor that matches the running workflow.
 - Add configured ComfyUI image generation and speech dictation/spoken replies to the existing Settings connection list and retained-media path.
 - Make the main path compact and readable, with honest empty, progress, failure and unavailable states. Optional engines remain configured external integrations.
-- Retire duplicate Lab work from this change. [lab-workbench](../lab-workbench/proposal.md) owns the replacement Lab plan; no llama-bench chart or exclusive Lab reservation is to be built here.
+- Retire duplicate Lab work from this change. [lab-workbench](../archive/2026-09-30-lab-workbench/proposal.md) owns the replacement Lab plan; no llama-bench chart or exclusive Lab reservation is to be built here.
 
 ## Capabilities
 

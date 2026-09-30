@@ -6,8 +6,8 @@
     "apps/backend/contracts/jsonschema/RunLifecycleContract.schema.json": "85787e25ad06d84230607ac29a57ff8c9aa8cba9dcd0a9675f4393a7be0fbedb",
     "apps/backend/contracts/jsonschema/RunLifecycleStatus.schema.json": "55d5ca8e611457efc4c3ac67d884b5255902c564208d5cf388466436271f2119",
     "apps/backend/contracts/jsonschema/WorkbenchInteractionMetadata.schema.json": "ce15cb6b6335df01735af30f651d460506202f627b3b0813956972e893f8a834",
-    "apps/backend/contracts/openapi.json": "ccb5b0210bfa5362a6c711be4972308350ae720ba5567cf7e65f910e15d4b1af",
-    "apps/desktop/src/generated/shared-contracts/openapi.d.ts": "a9b5388c80eb75c1a943594f833c1143e654f4a9fe5bfb1b696f4ac997ced210"
+    "apps/backend/contracts/openapi.json": "8fd0d67673e2e28ecc7b455b99bfdee60e3c962ca5a56a3e601a660e7fa3c245",
+    "apps/desktop/src/generated/shared-contracts/openapi.d.ts": "61a17a4719c346fdd05e94823b6ab7f185b616830c7d25ff12761bf1df699a63"
   },
   "generator": {
     "openapi_typescript": "7.13.0",

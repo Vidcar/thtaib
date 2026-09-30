@@ -45,6 +45,7 @@ def create_shared_contract_app() -> FastAPI:
     from workbench_backend.agents.routes import router as agent_router
     from workbench_backend.interaction.routes import router as interaction_router
     from workbench_backend.interaction.schemas import WorkbenchInteractionMetadata
+    from workbench_backend.lab.workbench_routes import router as lab_workbench_router
 
     application = FastAPI(
         title=SHARED_CONTRACT_OPENAPI_TITLE,
@@ -98,5 +99,6 @@ def create_shared_contract_app() -> FastAPI:
     application.include_router(desktop_automation_router)
     application.include_router(agent_router)
     application.include_router(interaction_router)
+    application.include_router(lab_workbench_router)
 
     return application

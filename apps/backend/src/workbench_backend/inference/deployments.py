@@ -228,21 +228,23 @@ class DeploymentService:
         )
         return self.store.put_deployment(deployment)
 
-    def start(self, deployment_id: str, *, verify_before_load: Callable[[], None] | None = None) -> Deployment:
+    def start(self, deployment_id: str, *, verify_before_load: Callable[[], None] | None = None,
+              cancelled: Callable[[], bool] | None = None) -> Deployment:
         deployment = self._require(deployment_id)
-        if deployment.scope == ManagementScope.managed and self._router_enabled():
+        if deployment.scope == ManagementScope.managed and self._router_enabled() and not deployment.benchmark_owner:
             with self.lifecycle.reserve(deployment):
-                return self.router.start(deployment_id, verify_before_load=verify_before_load)
+                return self.router.start(deployment_id, verify_before_load=verify_before_load,
+                                         **({"cancelled": cancelled} if cancelled else {}))
         with self.lifecycle.reserve(deployment):
             with self._lock_for(deployment_id):
                 # Serialize port selection through listen ownership verification.
                 # The OS port is not reserved merely by saving a deployment.
                 with self._guard:
-                    return self._start_locked(deployment_id)
+                    return self._start_locked(deployment_id, **({"cancelled": cancelled} if cancelled else {}))
 
     def stop(self, deployment_id: str) -> Deployment:
         deployment = self._require(deployment_id)
-        if deployment.scope == ManagementScope.managed and self._router_enabled():
+        if deployment.scope == ManagementScope.managed and self._router_enabled() and not deployment.benchmark_owner:
             with self.lifecycle.mutate(
                 "stop_deployment", deployment_ids={deployment.id},
                 profile_ids={deployment.profile_id} if deployment.profile_id else set(),
@@ -322,7 +324,7 @@ class DeploymentService:
 
     def health(self, deployment_id: str) -> Deployment:
         deployment = self._require(deployment_id)
-        if deployment.scope == ManagementScope.managed and self._router_enabled():
+        if deployment.scope == ManagementScope.managed and self._router_enabled() and not deployment.benchmark_owner:
             return self.router.health(deployment_id)
         with self._lock_for(deployment_id):
             return self._health_locked(deployment_id)
@@ -355,7 +357,10 @@ class DeploymentService:
 
     def live_owned(self) -> list[Deployment]:
         if self._router_enabled():
-            return self.router.live_owned()
+            return [*self.router.live_owned(), *[
+                item for item in self.store.list_deployments()
+                if item.benchmark_owner and (item.process_identity is not None or item.status == DeploymentStatus.starting)
+            ]]
         blocking: list[Deployment] = []
         for deployment in self.store.list_deployments():
             if deployment.scope != ManagementScope.managed:
@@ -374,7 +379,7 @@ class DeploymentService:
                 blocking.append(deployment)
         return blocking
 
-    def _start_locked(self, deployment_id: str) -> Deployment:
+    def _start_locked(self, deployment_id: str, *, cancelled: Callable[[], bool] | None = None) -> Deployment:
         deployment = self._require(deployment_id)
         if deployment.reconfiguration and deployment.reconfiguration.get("phase") == "recovery_required":
             raise ManagerError("Reload this model to restore the previous configuration before using it.", code="reconfigure_recovery_required", status_code=409)
@@ -467,6 +472,7 @@ class DeploymentService:
                 self.processes,
                 identity,
                 port=port,
+                **({"cancelled": cancelled} if cancelled else {}),
             )
             if verdict != "match" or not self.processes.launched_still_running(identity.pid):
                 return self._fail_unowned(

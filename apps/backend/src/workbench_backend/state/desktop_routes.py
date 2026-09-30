@@ -81,6 +81,9 @@ def claim_notification(request: Request, identity: str) -> dict:
 def active_work(request: Request) -> dict:
     state = request.app.state
     runs = [run.id for run in state.harness.list_run_lifecycle(statuses=set(LIVE_RUN_LIFECYCLE_STATUSES), details=False)]
+    lab = getattr(state, "lab_workbench", None)
+    if lab is not None:
+        runs.extend(run.id for run in lab.list_runs() if run.status in {"queued", "running", "stopping"})
     imports = [job.id for job in state.manager.imports.list_jobs() if job.status.value in {"pending", "running", "stopping"}]
     return {"active_run_ids": runs, "active_import_ids": imports}
 
@@ -95,6 +98,9 @@ def stop_owned_work(request: Request, background_tasks: BackgroundTasks) -> dict
         # release its gate or signal the server to shut down.
         raise WorkbenchError(str(exc), code=exc.code, status_code=409) from exc
     try:
+        lab = getattr(state, "lab_workbench", None)
+        if lab is not None:
+            lab.leave()
         for conversation in state.chat.store.list_conversations(include_archived=True):
             with state.chat.store.conversation_lock(conversation.id):
                 state.chat._pause_queue(state.chat._require(conversation.id), "cancelled")
@@ -106,6 +112,7 @@ def stop_owned_work(request: Request, background_tasks: BackgroundTasks) -> dict
             state.manager.imports.cancel_job(job.id)
         deadline = time.monotonic() + 15
         while (any(is_run_lifecycle_live(state.harness.get_run_lifecycle(run.id, details=False).status) for run in live)
+               or lab is not None and any(run.status in {"queued", "running", "stopping"} for run in lab.list_runs())
                or any(job.status.value in {"pending", "running", "stopping"} for job in state.manager.imports.list_jobs())):
             if time.monotonic() >= deadline:
                 raise WorkbenchError("Some work has not confirmed stopping. Keep the app open and inspect its status.", code="shutdown_pending", status_code=409)

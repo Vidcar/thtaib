@@ -13,7 +13,7 @@ globalThis.window = Object.assign(new EventTarget(), { innerWidth: 1280, setInte
 globalThis.document = { documentElement: { dataset: {} }, dispatchEvent() {} };
 globalThis.appFixture = { chat: null, sidebar: null, launches: [] };
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const children = new Set(["AgentRunPanel", "AttentionPanel", "CreateProjectDialog", "ProjectsPanel", "AgentSetupsPanel", "KnowledgePanel", "LabPanel", "LibraryPanel", "ModelsPanel", "SettingsPanel"]);
+const children = new Set(["AgentRunPanel", "AttentionPanel", "CreateProjectDialog", "ProjectsPanel", "AgentSetupsPanel", "KnowledgePanel", "LabWorkbench", "LibraryPanel", "ModelsPanel", "SettingsPanel"]);
 const vite = await createServer({ root, appType: "custom", server: { middlewareMode: true, hmr: false }, logLevel: "error", plugins: [{ name: "app-selection-boundaries", enforce: "pre", load(id) {
   const name = path.basename(id).replace(/\.tsx?$/, "");
   if (["ModelsPanel", "AgentSetupsPanel", "KnowledgePanel"].includes(name)) return `import React, {useState} from 'react'; export function ${name}(props) { const [draft,setDraft] = useState('saved'); globalThis.appFixture.${name} = props; return React.createElement('input', {'aria-label':'${name} draft',value:draft,onChange:e=>setDraft(e.target.value)}); }`;

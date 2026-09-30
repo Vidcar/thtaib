@@ -663,6 +663,7 @@ class Deployment(BaseModel):
     profile_id: str | None = None
     endpoint: str | None = None
     router_preset_id: str | None = None
+    benchmark_owner: str | None = None
     requested_startup: dict[str, Any] = Field(default_factory=dict)
     applied_startup: dict[str, Any] = Field(default_factory=dict)
     startup_overrides: dict[str, Any] = Field(default_factory=dict)

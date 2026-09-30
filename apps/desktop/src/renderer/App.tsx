@@ -11,7 +11,7 @@ import { CreateProjectDialog } from "./CreateProjectDialog";
 import { ProjectsPanel } from "./ProjectsPanel";
 import { AgentSetupsPanel } from "./AgentSetupsPanel";
 import { KnowledgePanel } from "./KnowledgePanel";
-import { LabPanel } from "./LabPanel";
+import { LabWorkbench } from "./LabWorkbench";
 import { LibraryPanel } from "./LibraryPanel";
 import { ModelsPanel } from "./ModelsPanel";
 import { SettingsPanel } from "./SettingsPanel";
@@ -261,7 +261,7 @@ export function App() {
       case "agent-run":
         return <AgentRunPanel attentionRunId={attentionRunId} onAttentionHandled={clearAttentionRun} onNavigate={openOwner} />;
       case "lab":
-        return <LabPanel />;
+        return <LabWorkbench />;
       case "library":
         return <LibraryPanel />;
       case "attention":

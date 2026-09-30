@@ -4,7 +4,7 @@
 
 Specify how the one FastAPI backend coordinates APIs, records, jobs, approvals, events, and artifacts while the one Electron desktop presents them without becoming execution authority.
 
-The built desktop does not yet offer the planned Lab views or a visual workflow editor. Their delivery is tracked by [lab-workbench](../../changes/lab-workbench/tasks.md) and [consolidate-product-contract](../../changes/consolidate-product-contract/tasks.md). Initial catalogue failure recovery is delivered in [startup-catalogue](../../changes/archive/2026-09-29-startup-catalogue/tasks.md).
+The desktop offers Lab Performance, Memory and Challenges under the [Lab contract](../lab/spec.md). Visual workflow editor delivery remains tracked by [consolidate-product-contract](../../changes/consolidate-product-contract/tasks.md). Initial catalogue failure recovery is delivered in [startup-catalogue](../../changes/archive/2026-09-29-startup-catalogue/tasks.md).
 
 ## Requirements
 

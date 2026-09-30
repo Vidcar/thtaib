@@ -50,6 +50,8 @@ from workbench_backend.knowledge.routes import router as knowledge_router
 from workbench_backend.knowledge.service import KnowledgeService
 from workbench_backend.lab.routes import router as lab_router
 from workbench_backend.lab.service import LabService
+from workbench_backend.lab.workbench import LabWorkbenchService
+from workbench_backend.lab.workbench_routes import router as lab_workbench_router
 from workbench_backend.local_trust import ensure_shared_secret, require_local_trust
 from workbench_backend.state.checkpointer import close_all_sqlite_checkpointers, submit_checkpoint_task
 from workbench_backend.state.effect_routes import router as effect_router
@@ -101,6 +103,7 @@ def _finish_startup(application: FastAPI) -> None:
 async def _app_lifespan(application: FastAPI) -> AsyncIterator[None]:
     application.state.catalogue_served = threading.Event()
     application.state.startup_stop = threading.Event()
+    application.state.lab_workbench.recover()
     # Recovery must precede admission and must not depend on opening a sidebar.
     # This reconciles durable identities only; execution starts on the worker.
     application.state.chat.reconcile_saved_queue_on_startup(pending_only=True)
@@ -116,6 +119,7 @@ async def _app_lifespan(application: FastAPI) -> AsyncIterator[None]:
     if finish.is_alive():
         raise RuntimeError("Chat startup recovery is still using the application store")
     application.state.chat_coordinator.close()
+    application.state.lab_workbench.close()
     browser = getattr(application.state, "browser", None)
     if browser is not None:
         await asyncio.wrap_future(submit_checkpoint_task(application.state.manager.paths.checkpoints_db, browser.shutdown()))
@@ -239,6 +243,9 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         knowledge_provider=lambda: application.state.knowledge,
         effects_provider=lambda: application.state.effects,
     )
+    application.state.lab_workbench = LabWorkbenchService(
+        lambda: application.state.manager, lambda: application.state.harness, application.state.app_store,
+    )
     application.state.chat = ChatService(
         lambda: application.state.manager,
         lambda: application.state.harness,
@@ -252,6 +259,7 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         active = [run.id for run in application.state.harness.list_run_lifecycle(
             statuses={"queued", "running", "cancel_requested"}, details=False)]
         active.extend(job.id for job in application.state.manager.imports.list_jobs() if job.status.value in {"pending", "running", "stopping"})
+        active.extend(run.id for run in application.state.lab_workbench.list_runs() if run.status in {"queued", "running", "stopping"})
         return active
     def _reconcile_for_backup():
         # Maintenance has drained coordinator mutations and blocks dispatch.
@@ -277,6 +285,7 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
     application.include_router(agent_router)
     application.include_router(setup_router)
     application.include_router(lab_router)
+    application.include_router(lab_workbench_router)
     application.include_router(knowledge_router)
     application.include_router(chat_router)
     application.include_router(branch_router)

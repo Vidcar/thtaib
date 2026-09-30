@@ -1,0 +1,71 @@
+.lab-workbench {gap: var(--space-stack);}
+.lab-workbench > .surface-head {justify-content: space-between;}
+.lab-workbench > .surface-head .hint {margin-left: auto;}
+.lab-layout {display: grid; grid-template-columns: minmax(240px, 290px) minmax(0, 1fr); align-items: start; gap: var(--space-stack);}
+.lab-layout > *, .lab-results > *, .lab-challenge-cards > * {min-width: 0;}
+.lab-results, .lab-memory-runs, .lab-challenges-view {display: grid; gap: var(--space-stack); align-content: start;}
+.lab-run-controls {align-content: start;}
+.lab-run-controls > .section-heading {align-items: center; gap: var(--space-tight);}
+.lab-run-controls > .section-heading > .hint {display: inline-flex; align-items: center; gap: var(--space-tight); white-space: nowrap;}
+.lab-run-controls > .setting-row.segmented-setting {grid-template-columns: minmax(0, 1fr); gap: var(--space-compact); padding-block: var(--space-tight);}
+.lab-run-controls .lab-configuration > .setting-row {grid-template-columns: minmax(0, 1fr) minmax(0, calc(var(--control-height) * 2)); column-gap: var(--space-compact);}
+.lab-configuration {display: grid; gap: var(--space-compact); min-width: 0;}
+.lab-configuration + .lab-configuration {border-top: var(--line-hairline) solid var(--border); padding-top: var(--space-stack);}
+.lab-configuration > label, .lab-run-controls > label {margin: 0;}
+.lab-load-controls .setting-row {min-height: var(--control-height-lg); padding-block: var(--space-tight); grid-template-columns: minmax(85px, 1fr) minmax(0, 1fr); gap: var(--space-compact);}
+.lab-load-controls .setting-row + .setting-row {border-top: var(--line-hairline) solid var(--border);}
+.lab-load-controls .setting-row-control {min-width: 0;}
+.lab-load-controls select {width: 100%;}
+.lab-context-control {display: grid; gap: var(--space-tight); width: 100%;}
+.lab-context-control .context-slider-control {min-width: 0; width: 100%;}
+.lab-run-controls .segmented-options {font-size: var(--text-small);}
+.lab-run-controls .segmented-options label > span {padding-inline: var(--pad-tight);}
+.lab-switch-group {display: grid; gap: var(--space-compact);}
+.lab-length-switches {display: flex; flex-wrap: wrap; gap: var(--space-tight); max-height: 160px; overflow-y: auto; padding: var(--focus-offset); margin: calc(var(--focus-offset) * -1);}
+.lab-length-switches > button {min-height: calc(var(--control-height) - var(--space-tight)); padding: var(--pad-tight) var(--pad-compact); font-size: var(--text-small); border-radius: var(--radius-pill); color: var(--muted);}
+.lab-length-switches > button[aria-checked="true"] {color: var(--text); background: color-mix(in srgb, var(--accent) var(--tint-quiet), transparent); border-color: color-mix(in srgb, var(--accent) var(--tint-half), transparent);}
+.lab-run-status {display: flex; align-items: center; justify-content: space-between; gap: var(--space-stack); min-height: 54px; padding: var(--pad-compact) var(--pad-card); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); background: var(--bg-raised); overflow-wrap: anywhere;}
+.lab-run-status > div {display: grid; gap: var(--space-tight); min-width: 0;}
+.lab-run-status button {flex-shrink: 0;}
+.lab-run-failed {border-color: color-mix(in srgb, var(--danger) var(--tint-half), var(--border));}
+.lab-read-error {display: grid; gap: var(--space-compact); justify-items: start;}
+.lab-read-error p {margin: 0;}
+.lab-charts {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-stack);}
+.lab-chart {gap: var(--space-tight) !important;}
+.lab-chart-plot {height: 220px; min-width: 0;}
+.lab-chart-empty {height: 100%; display: grid; place-items: center; font-size: var(--text-small); color: var(--muted); border-left: var(--line-hairline) solid var(--border); border-bottom: var(--line-hairline) solid var(--border); margin: var(--space-compact) var(--space-stack) 0 var(--pad-section); background: repeating-linear-gradient(to top, transparent 0, transparent 43px, var(--border) 44px);}
+.lab-chart-axis {text-align: center; color: var(--muted); font-size: var(--text-small);}
+.lab-chart-legend {display: flex; flex-wrap: wrap; gap: var(--space-compact) var(--space-stack); font-size: var(--text-small); color: var(--muted);}
+.lab-chart-legend > span {display: inline-flex; align-items: center; gap: var(--space-tight); overflow-wrap: anywhere; min-width: 0;}
+.lab-chart-legend i {width: 7px; height: 7px; border-radius: var(--radius-circle); flex-shrink: 0;}
+.lab-saved-run {display: grid; gap: var(--space-compact); border-top: var(--line-hairline) solid var(--border); padding-top: var(--pad-compact);}
+.lab-saved-run .check-row {align-items: center; margin: 0; min-width: 0; overflow-wrap: anywhere;}
+.lab-saved-run .check-row > span {display: block;}
+.lab-saved-run .section-heading > button {flex-shrink: 0;}
+.lab-table-scroll {max-width: 100%; overflow-x: auto;}
+.lab-measurements {width: 100%; border-collapse: collapse; font-size: var(--text-small); font-variant-numeric: tabular-nums;}
+.lab-measurements th, .lab-measurements td {text-align: right; padding: var(--pad-compact); border-bottom: var(--line-hairline) solid var(--border); vertical-align: top;}
+.lab-measurements th {font-weight: var(--weight-regular); color: var(--muted);}
+.lab-measurements th:first-child, .lab-measurements td:first-child {text-align: left;}
+.lab-error {color: var(--danger); overflow-wrap: anywhere;}
+.lab-settings-list {display: grid; gap: var(--space-tight); font-size: var(--text-small); margin: 0;}
+.lab-settings-list > div {display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-compact);}
+.lab-settings-list dt, .lab-settings-list dd {margin: 0; overflow-wrap: anywhere;}
+.lab-series-settings {margin-top: var(--space-compact);}
+.lab-memory-run > summary {justify-content: space-between; color: var(--text);}
+.lab-depth-result {padding-block: var(--space-compact); border-top: var(--line-hairline) solid var(--border);}
+.lab-depth-result > summary {justify-content: space-between; min-height: var(--control-height); color: var(--text);}
+.lab-depth-result .badge {white-space: normal; text-align: right;}
+.lab-answer {max-height: 220px; margin: var(--space-compact) 0; white-space: pre-wrap; overflow-wrap: anywhere;}
+.lab-missing {display: grid; gap: var(--space-tight); padding-block: var(--space-compact);}
+.lab-missing code {overflow-wrap: anywhere;}
+.lab-challenge-cards {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-stack); align-items: start;}
+.lab-challenge-task {white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow-y: auto;}
+.lab-challenge-check {font-size: var(--text-small); color: var(--muted); overflow-wrap: anywhere;}
+.lab-challenge-check strong {font-weight: var(--weight-regular); color: var(--text);}
+.lab-challenge-result {border-top: var(--line-hairline) solid var(--border); padding-top: var(--pad-compact);}
+.lab-challenge-result > .hint {margin-block: var(--space-compact);}
+.lab-challenge-editor {max-width: var(--layout-form);}
+@container workbench-surface (max-width: 1060px) {.lab-charts, .lab-challenge-cards {grid-template-columns: minmax(0, 1fr);}}
+@container workbench-surface (max-width: 780px) {.lab-layout {grid-template-columns: minmax(0, 1fr);} .lab-run-controls {max-width: none;} .lab-charts {grid-template-columns: repeat(2, minmax(0, 1fr));} .lab-load-controls .setting-row {grid-template-columns: minmax(140px, 1fr) minmax(0, 1fr);}}
+@container workbench-surface (max-width: 560px) {.lab-charts {grid-template-columns: minmax(0, 1fr);} .lab-run-status {align-items: start;} .lab-challenge-cards {grid-template-columns: minmax(0, 1fr);}}

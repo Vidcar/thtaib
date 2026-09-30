@@ -504,6 +504,7 @@ def wait_for_owned_health(
     port: int | None = None,
     attempts: int = OWNED_HEALTH_ATTEMPTS,
     delay: float = OWNED_HEALTH_DELAY_SECONDS,
+    cancelled=None,
 ) -> tuple[IdentityVerdict, HealthReport, bool | None]:
     """Probe health only while the launched process still matches identity.
 
@@ -513,9 +514,13 @@ def wait_for_owned_health(
     A healthy endpoint with ``owns_listen is None`` is not ownership. Keep
     waiting until listen is proven, denied, the process exits, or timeout.
     """
+    if cancelled is not None and cancelled():
+        raise ManagerError("Lab loading was stopped.", code="deployment_load_cancelled", status_code=409)
     report = probe.health(endpoint)
     owns: bool | None = None
     for _ in range(attempts):
+        if cancelled is not None and cancelled():
+            raise ManagerError("Lab loading was stopped.", code="deployment_load_cancelled", status_code=409)
         verdict = supervisor.classify(identity)
         if verdict != "match":
             return verdict, report, False

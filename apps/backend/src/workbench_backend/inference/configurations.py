@@ -288,7 +288,7 @@ def find_compatible_deployment(
     selected_identity = loaded_model_identity(runtime, bundle, bags)
     matches = []
     for deployment in store.list_deployments():
-        if deployment.scope != ManagementScope.managed or deployment.bundle_id != bundle_id or has_response_startup_defaults(deployment.settings):
+        if deployment.benchmark_owner or deployment.scope != ManagementScope.managed or deployment.bundle_id != bundle_id or has_response_startup_defaults(deployment.settings):
             continue
         if deployment.loaded_model_identity is not None:
             compatible = deployment.loaded_model_identity == selected_identity

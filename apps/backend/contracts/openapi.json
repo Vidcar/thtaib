@@ -3355,6 +3355,50 @@
         "title": "CapabilitySetupRequest",
         "type": "object"
       },
+      "ChallengeWrite": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "required_text": {
+            "default": "",
+            "maxLength": 4000,
+            "title": "Required Text",
+            "type": "string"
+          },
+          "required_tool": {
+            "anyOf": [
+              {
+                "enum": [
+                  "echo",
+                  "time_now"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required Tool"
+          },
+          "task": {
+            "maxLength": 16000,
+            "minLength": 1,
+            "title": "Task",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "task"
+        ],
+        "title": "ChallengeWrite",
+        "type": "object"
+      },
       "ChatCancelRequest": {
         "properties": {
           "input_message_id": {
@@ -7069,6 +7113,17 @@
             "title": "Applied Startup",
             "type": "object"
           },
+          "benchmark_owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Benchmark Owner"
+          },
           "bundle_id": {
             "anyOf": [
               {
@@ -10757,6 +10812,548 @@
           "token_counting_method"
         ],
         "title": "KnowledgeVersion",
+        "type": "object"
+      },
+      "LabChallenge": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "required_text": {
+            "default": "",
+            "maxLength": 4000,
+            "title": "Required Text",
+            "type": "string"
+          },
+          "required_tool": {
+            "anyOf": [
+              {
+                "enum": [
+                  "echo",
+                  "time_now"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required Tool"
+          },
+          "task": {
+            "maxLength": 16000,
+            "minLength": 1,
+            "title": "Task",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "task",
+          "id",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "LabChallenge",
+        "type": "object"
+      },
+      "LabConfiguration": {
+        "additionalProperties": false,
+        "properties": {
+          "concurrent_requests": {
+            "default": 1,
+            "maximum": 64.0,
+            "minimum": 1.0,
+            "title": "Concurrent Requests",
+            "type": "integer"
+          },
+          "configuration_id": {
+            "title": "Configuration Id",
+            "type": "string"
+          },
+          "startup": {
+            "additionalProperties": true,
+            "title": "Startup",
+            "type": "object"
+          }
+        },
+        "required": [
+          "configuration_id"
+        ],
+        "title": "LabConfiguration",
+        "type": "object"
+      },
+      "LabLeaveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "run_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "title": "Run Ids",
+            "type": "array"
+          }
+        },
+        "title": "LabLeaveRequest",
+        "type": "object"
+      },
+      "LabMeasurement": {
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "context_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Tokens"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "depth": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Depth"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "expected": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Expected",
+            "type": "array"
+          },
+          "found": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Found"
+          },
+          "generated_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated Tokens"
+          },
+          "generation_tps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation Tps"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing",
+            "type": "array"
+          },
+          "passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passed"
+          },
+          "prefill_tps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prefill Tps"
+          },
+          "prompt_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Tokens"
+          },
+          "requested_prompt_length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Prompt Length"
+          },
+          "samples": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Samples",
+            "type": "array"
+          },
+          "series_id": {
+            "title": "Series Id",
+            "type": "string"
+          },
+          "tool_calls": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tool Calls",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "series_id",
+          "created_at"
+        ],
+        "title": "LabMeasurement",
+        "type": "object"
+      },
+      "LabRun": {
+        "properties": {
+          "agent_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Run Id"
+          },
+          "challenge_snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LabChallenge"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "current": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "performance",
+              "memory",
+              "challenge"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "measurements": {
+            "items": {
+              "$ref": "#/components/schemas/LabMeasurement"
+            },
+            "title": "Measurements",
+            "type": "array"
+          },
+          "request": {
+            "$ref": "#/components/schemas/LabRunRequest"
+          },
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/LabSeries"
+            },
+            "title": "Series",
+            "type": "array"
+          },
+          "status": {
+            "default": "queued",
+            "enum": [
+              "queued",
+              "running",
+              "stopping",
+              "completed",
+              "stopped",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "created_at",
+          "updated_at",
+          "request"
+        ],
+        "title": "LabRun",
+        "type": "object"
+      },
+      "LabRunRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "challenge_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Challenge Id"
+          },
+          "configurations": {
+            "items": {
+              "$ref": "#/components/schemas/LabConfiguration"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "title": "Configurations",
+            "type": "array"
+          },
+          "depths": {
+            "items": {
+              "enum": [
+                0,
+                25,
+                50,
+                75,
+                100
+              ],
+              "type": "integer"
+            },
+            "title": "Depths",
+            "type": "array"
+          },
+          "generation_length": {
+            "default": 512,
+            "enum": [
+              256,
+              512,
+              1024
+            ],
+            "title": "Generation Length",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "performance",
+              "memory",
+              "challenge"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "memory_test": {
+            "default": "uuid",
+            "enum": [
+              "uuid",
+              "multi_key",
+              "multi_value"
+            ],
+            "title": "Memory Test",
+            "type": "string"
+          },
+          "mode": {
+            "default": "single",
+            "enum": [
+              "single",
+              "concurrent"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "prompt_lengths": {
+            "items": {
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "title": "Prompt Lengths",
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "configurations"
+        ],
+        "title": "LabRunRequest",
+        "type": "object"
+      },
+      "LabSeries": {
+        "properties": {
+          "benchmark_owned": {
+            "default": false,
+            "title": "Benchmark Owned",
+            "type": "boolean"
+          },
+          "concurrent_requests": {
+            "default": 1,
+            "title": "Concurrent Requests",
+            "type": "integer"
+          },
+          "configuration_id": {
+            "title": "Configuration Id",
+            "type": "string"
+          },
+          "context_adjusted": {
+            "default": false,
+            "title": "Context Adjusted",
+            "type": "boolean"
+          },
+          "context_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Size"
+          },
+          "deployment_id": {
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "requested_context_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Context Size"
+          },
+          "startup": {
+            "additionalProperties": true,
+            "title": "Startup",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "configuration_id",
+          "name",
+          "deployment_id"
+        ],
+        "title": "LabSeries",
         "type": "object"
       },
       "LifecycleConsumer": {
@@ -22293,6 +22890,355 @@
           }
         },
         "summary": "Skill Resource"
+      }
+    },
+    "/v1/lab/workbench/challenges": {
+      "get": {
+        "operationId": "list_challenges_v1_lab_workbench_challenges_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LabChallenge"
+                  },
+                  "title": "Response List Challenges V1 Lab Workbench Challenges Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Challenges"
+      },
+      "post": {
+        "operationId": "add_challenge_v1_lab_workbench_challenges_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChallengeWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabChallenge"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Challenge"
+      }
+    },
+    "/v1/lab/workbench/challenges/{challenge_id}": {
+      "delete": {
+        "operationId": "delete_challenge_v1_lab_workbench_challenges__challenge_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "challenge_id",
+            "required": true,
+            "schema": {
+              "title": "Challenge Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Challenge"
+      },
+      "put": {
+        "operationId": "edit_challenge_v1_lab_workbench_challenges__challenge_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "challenge_id",
+            "required": true,
+            "schema": {
+              "title": "Challenge Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChallengeWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabChallenge"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Edit Challenge"
+      }
+    },
+    "/v1/lab/workbench/leave": {
+      "post": {
+        "operationId": "leave_v1_lab_workbench_leave_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LabLeaveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Leave"
+      }
+    },
+    "/v1/lab/workbench/runs": {
+      "get": {
+        "operationId": "list_runs_v1_lab_workbench_runs_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LabRun"
+                  },
+                  "title": "Response List Runs V1 Lab Workbench Runs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Runs"
+      },
+      "post": {
+        "operationId": "start_run_v1_lab_workbench_runs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LabRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabRun"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Run"
+      }
+    },
+    "/v1/lab/workbench/runs/{run_id}": {
+      "delete": {
+        "operationId": "delete_run_v1_lab_workbench_runs__run_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Run"
+      },
+      "get": {
+        "operationId": "get_run_v1_lab_workbench_runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabRun"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Run"
+      }
+    },
+    "/v1/lab/workbench/runs/{run_id}/stop": {
+      "post": {
+        "operationId": "stop_run_v1_lab_workbench_runs__run_id__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabRun"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Run"
       }
     },
     "/v1/models/estimate": {
