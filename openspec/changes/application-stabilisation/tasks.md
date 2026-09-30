@@ -17,7 +17,7 @@
 - [x] 3.3 Wake existing queue coordination after project reservation release, including Lab capture and failed pre-run admission; prove progress after release and no premature start or notification loop.
 - [x] 3.4 Preserve post-dispatch desktop uncertainty through actual tools/middleware/storage and continuation guards; prove timeout/changed identity outcomes, pre-dispatch refusal controls and failing original adapter fixtures.
 
-- [ ] 3.5 Make deliberate Quit stop settled managed engines without paused retained queue references blocking shutdown; preserve queue/setup/cancellation evidence, maintenance exclusion, live-work guards and connected engines; prove actual route/consumer behaviour and native clean shutdown.
+- [x] 3.5 Make deliberate Quit stop settled managed engines without paused retained queue references blocking shutdown; preserve queue/setup/cancellation evidence, maintenance exclusion, live-work guards and connected engines; prove actual route/consumer behaviour and native clean shutdown.
 
 ## 4. Recoverable current observations
 
@@ -27,7 +27,7 @@
 
 ## 5. Integrated delivery
 
-- [ ] 5.1 Run focused checks during each repair and final applicable backend/default/integration, full desktop, generated-contract and OpenSpec gates through scripts/verify.py; record failures fixed and environment skips separately.
+- [x] 5.1 Run focused checks during each repair and final applicable backend/default/integration, full desktop, generated-contract and OpenSpec gates through scripts/verify.py; record failures fixed and environment skips separately.
 - [x] 5.2 Obtain fresh-context independent review of exact production/test diffs and resolve supported findings with corresponding checks.
-- [ ] 5.3 Validate actual built Windows main/preload/renderer and backend using isolated data: cold/passive launch, outage/recovery, full/half-screen and keyboard, saved setup/load behaviour, real installed-model multi-turn/tool execution and queue/cancel/recovery; record hashes/processes, effects and cleanup separately from deterministic mocks and pending human UX acceptance.
+- [x] 5.3 Validate actual built Windows main/preload/renderer and backend using isolated data: cold/passive launch, outage/recovery, full/half-screen and keyboard, saved setup/load behaviour, real installed-model multi-turn/tool execution and queue/cancel/recovery; record hashes/processes, effects and cleanup separately from deterministic mocks and pending human UX acceptance.
 - [ ] 5.4 Complete coherent commits, PR/merge and necessary local delivery; verify protected data/processes and later feature plans, sync clarified scenarios, archive only after required checks, and leave a concise accurate handover.
