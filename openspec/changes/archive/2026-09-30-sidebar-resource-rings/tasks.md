@@ -14,4 +14,4 @@
 
 - [x] 3.1 Run shared/spec acceptance and independent review; resolve supported findings and rerun affected checks.
 - [x] 3.2 Validate the continuously open built app against live GPU/RAM readings during load/unload and RAM changes, using isolated data and preserving user records.
-- [ ] 3.3 Sync/archive contracts, merge the reviewed change, refresh the established local app with verified process/build identity, and update the handover with delivery evidence.
+- [x] 3.3 Sync/archive contracts, merge the reviewed change, refresh the established local app with verified process/build identity, and update the handover with delivery evidence.
