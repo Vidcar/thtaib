@@ -17,6 +17,7 @@ import subprocess
 import sys
 import threading
 import time
+from itertools import islice
 from typing import Any
 
 import httpx
@@ -24,7 +25,7 @@ from gguf.constants import GGMLQuantizationType, GGML_QUANT_SIZES
 from huggingface_hub import get_token, hf_hub_url
 
 from workbench_backend.errors import ManagerError
-from workbench_backend.inference.bundles import mmproj_companion
+from workbench_backend.inference.bundles import mmproj_companion, collect_bundle_files, validate_bundle_selection, is_under
 from workbench_backend.inference.configurations import loading_startup_settings, loaded_model_identity
 from workbench_backend.inference.hardware import HardwareObserver
 from workbench_backend.inference.ids import utc_now
@@ -256,9 +257,14 @@ class MemoryEstimator:
         if bags.startup.unsupported:
             raise ManagerError("Check the selected launch settings.", code="estimate_settings", status_code=400)
         hardware = self.hardware.observe(refresh=request.refresh)
-        identity = request.bundle_id or f"{request.repo_id}@{request.revision}:{','.join(request.primary_files)}"
+        if sum(bool(item) for item in (request.bundle_id, request.repo_id, request.source_path)) != 1:
+            raise ManagerError("Choose one installed model, repository selection or local source.", code="estimate_selection", status_code=400)
+        if request.method == "native" and not request.bundle_id:
+            raise ManagerError("Native checking requires an installed model; Choose uses read-only metadata.", code="estimate_selection", status_code=400)
+        identity = request.bundle_id or request.source_path or f"{request.repo_id}@{request.revision}:{','.join(request.primary_files)}"
         result = ModelMemoryEstimate(source_identity=identity, estimated_at=utc_now(), hardware=hardware,
-            selected_startup=dict(request.startup), evaluated_startup=dict(request.startup))
+            basis=request.basis, selected_startup=dict(request.startup), evaluated_startup=dict(request.startup))
+        self._set_budgets(result)
         fields = GgufFields()
         projector_fields: GgufFields | None = None
         draft_fields: GgufFields | None = None
@@ -266,6 +272,8 @@ class MemoryEstimator:
             fields, projector_fields, draft_fields = self._estimate_installed_bundle(request, bags, result)
         elif request.repo_id:
             fields, projector_fields, draft_fields = self._estimate_repository_files(request, bags, result)
+        elif request.source_path:
+            fields, projector_fields, draft_fields = self._estimate_local_source(request, bags, result)
         else:
             raise ManagerError("Choose an installed model or exact repository files.", code="estimate_selection", status_code=400)
         result.builtin_mtp = self._builtin_mtp(fields)
@@ -277,6 +285,66 @@ class MemoryEstimator:
         result.unknown_reasons = list(dict.fromkeys(result.unknown_reasons))
         result.calculation_ms = round((time.perf_counter() - started) * 1000, 3)
         return result
+
+    @staticmethod
+    def _set_budgets(result):
+        capacity = result.basis == "capacity"
+        result.gpu_headroom_bytes = 1024**3 if capacity else 0
+        result.ram_headroom_bytes = 2 * 1024**3 if capacity else 0
+        for device in result.hardware.gpu_devices:
+            raw = device.total_bytes if capacity else device.available_bytes
+            result.gpu_budget_bytes[device.id] = max(0, raw - result.gpu_headroom_bytes) if raw is not None else None
+        raw = result.hardware.ram_total_bytes if capacity else result.hardware.ram_available_bytes
+        result.ram_budget_bytes = max(0, raw - result.ram_headroom_bytes) if raw is not None else None
+        if capacity:
+            result.assumptions.append("Discovery uses physical capacity with 1 GiB GPU and 2 GiB RAM headroom; current loaded models are excluded.")
+
+    def _estimate_local_source(self, request, bags, result):
+        source = Path(request.source_path).expanduser().resolve()
+        if source.is_dir():
+            candidates = list(islice((path for path in source.rglob("*") if path.is_file()
+                and ".cache" not in path.relative_to(source).parts), 257))
+        else:
+            candidates = collect_bundle_files(source)
+        if len(candidates) > 256:
+            raise ManagerError("Choose a smaller local folder or one complete model selection.", code="estimate_selection", status_code=400)
+        if source.is_dir() and any(not is_under(path, source) for path in candidates):
+            raise ManagerError("Local preview cannot follow files outside the chosen folder.", code="estimate_selection", status_code=400)
+        # Optional explicit members are restricted to this local selection; do
+        # not turn a preview into a general host-file reader.
+        if request.primary_files or request.projector_files:
+            root = source if source.is_dir() else source.parent
+            selected = [((root / name).resolve()) for name in request.primary_files + request.projector_files]
+            if any(not is_under(path, root) or path not in candidates for path in selected):
+                raise ManagerError("Choose files belonging to the local source.", code="estimate_selection", status_code=400)
+            candidates = selected
+        primaries, shards, companions = validate_bundle_selection(candidates)
+        if not primaries:
+            raise ManagerError("Choose a complete GGUF weights selection.", code="estimate_selection", status_code=400)
+        projectors = [path for path in companions if path.suffix.casefold() == ".gguf"]
+        result.source_identity = str(source)
+        result.model_disk_bytes = sum(path.stat().st_size for path in primaries + shards)
+        result.projector_disk_bytes = sum(path.stat().st_size for path in projectors)
+        fields = GgufFields()
+        try:
+            for index, path in enumerate(primaries + shards):
+                part, _ = self._local_directory(path, refresh=request.refresh)
+                if index == 0:
+                    fields = part
+                else:
+                    fields.tensors += part.tensors
+            result.weights_bytes = self._weight_bytes(fields, bags.startup.applied)
+        except (OSError, ValueError, ManagerError) as exc:
+            result.unknown_reasons.append(f"Local model metadata is unavailable: {getattr(exc, 'message', str(exc))}")
+        projector_fields = None
+        if projectors:
+            try:
+                projector_fields, result.projector_bytes = self._local_directory(projectors[0], refresh=request.refresh)
+            except (OSError, ValueError, ManagerError) as exc:
+                result.unknown_reasons.append(f"Projector metadata is unavailable: {getattr(exc, 'message', str(exc))}")
+        else:
+            result.projector_bytes = 0
+        return fields, projector_fields, self._installed_draft_fields(bags, request, result)
 
     def _estimate_installed_bundle(self, request, bags, result):
         bundle = self.manager.store.get_bundle(request.bundle_id)
@@ -614,6 +682,8 @@ class MemoryEstimator:
         return context, parallel
 
     def _metadata_prediction(self, fields, applied, result, *, projector_fields=None, draft_fields=None):
+        if not result.gpu_budget_bytes:
+            self._set_budgets(result)
         if result.projector_disk_bytes == 0 and result.projector_bytes is None:
             result.projector_bytes = 0
         architecture = fields.get("general.architecture")
@@ -645,8 +715,8 @@ class MemoryEstimator:
         speculative = CacheProjection()
         draft_weights = 0
         if "draft-mtp" in modes and not applied.get("spec_draft_model"):
-            speculative = cache_projection(fields, context, applied.get("spec_draft_type_k", "f16"),
-                applied.get("spec_draft_type_v", "f16"), parallel=parallel, mtp=True,
+            speculative = cache_projection(fields, context, applied.get("spec_draft_cache_type_k", "f16"),
+                applied.get("spec_draft_cache_type_v", "f16"), parallel=parallel, mtp=True,
                 flash_attention=applied.get("flash_attn", "auto"))
             result.speculation_bytes = speculative.total
             result.assumptions.append("MTP shares the loaded target weights; its dense cache is additional and shared weights are counted once.")
@@ -661,8 +731,8 @@ class MemoryEstimator:
                     speculative.attention_known = speculative.recurrent_known = False
                     speculative.unknown.append("Specialist draft cache geometry is unavailable; its weight bytes remain known.")
                 else:
-                    speculative = cache_projection(draft_fields, context, applied.get("spec_draft_type_k", "f16"),
-                        applied.get("spec_draft_type_v", "f16"), parallel=parallel, mtp="draft-mtp" in modes,
+                    speculative = cache_projection(draft_fields, context, applied.get("spec_draft_cache_type_k", "f16"),
+                        applied.get("spec_draft_cache_type_v", "f16"), parallel=parallel, mtp="draft-mtp" in modes,
                         flash_attention=applied.get("flash_attn", "auto"))
                 result.speculation_bytes = draft_weights + speculative.total if draft_weights is not None and speculative.total is not None else None
         else:
@@ -817,7 +887,7 @@ class MemoryEstimator:
                 and result.weights_bytes is not None and result.projector_disk_bytes == 0
                 and result.speculation_bytes == 0 and applied.get("kv_offload", True)
                 and projection.total is not None):
-            available = single_gpu.available_bytes
+            available = result.gpu_budget_bytes.get(single_gpu.id)
             one_token = cache_projection(fields, 1, applied.get("cache_type_k", "f16"), applied.get("cache_type_v", "f16"),
                 parallel=result.effective_parallel, flash_attention=applied.get("flash_attn", "auto"))
             rate = sum(one_token.attention.values()) if one_token.attention_known else None

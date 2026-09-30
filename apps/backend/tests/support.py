@@ -148,6 +148,9 @@ def close_workbench_sqlite(*objects: object) -> None:
             client.close()
         state.workbench_test_clients = []
         manager = getattr(state, "manager", None)
+        checks = getattr(manager, "capability_checks", None)
+        if checks is not None:
+            checks.close()
         runner = getattr(manager, "imports", None)
         closer = getattr(runner, "close", None)
         if callable(closer):

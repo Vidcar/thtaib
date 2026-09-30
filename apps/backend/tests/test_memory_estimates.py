@@ -435,17 +435,61 @@ class MemoryEstimateTests(unittest.TestCase):
             self.assertEqual(result.ram_bytes, result.kv_bytes if cpu_kv else None)
             self.assertIn("Explicit layer placement", " ".join(result.unknown_reasons))
 
-    def test_import_initial_settings_survive_configuration_recovery(self):
+    def test_capacity_preview_does_not_create_or_save_a_setup(self):
         bundle_id = self.manager.import_local(LocalImportRequest(source_path=str(self.model()))).bundle_id
-        bundle = self.manager.store.get_bundle(bundle_id)
         startup = {"ctx_size":16384, "cache_type_k":"q8_0", "cache_type_v":"q8_0", "kv_offload":False}
-        job = ImportJob(id="chosen", kind=BundleSourceKind.huggingface, status=ImportStatus.complete, created_at="now", initial_startup=startup)
-        self.manager.imports._create_initial_configuration(job, bundle)
-        first = self.manager.list_model_configurations(bundle_id)
-        self.manager.imports._create_initial_configuration(job, bundle)
-        self.assertEqual(first, self.manager.list_model_configurations(bundle_id))
-        selected = self.manager.store.get_bundle(bundle_id).default_configuration_id
-        self.assertEqual(self.manager.store.get_profile(selected).bags.startup.requested, startup)
+        self.manager.memory_estimator.estimate(ModelEstimateRequest(bundle_id=bundle_id, startup=startup, basis="capacity"))
+        self.assertEqual(self.manager.list_model_configurations(bundle_id), [])
+        self.assertIsNone(self.manager.store.get_bundle(bundle_id).default_configuration_id)
+
+    def test_capacity_budget_ignores_live_availability_but_leaves_hardware_untouched(self):
+        bundle_id = self.manager.import_local(LocalImportRequest(source_path=str(self.model()))).bundle_id
+        capacity = self.manager.memory_estimator.estimate(ModelEstimateRequest(bundle_id=bundle_id, basis="capacity"))
+        available = self.manager.memory_estimator.estimate(ModelEstimateRequest(bundle_id=bundle_id))
+        self.assertEqual(capacity.gpu_budget_bytes, {"GPU-1": 7 * 1024**3})
+        self.assertEqual(capacity.ram_budget_bytes, 14 * 1024**3)
+        self.assertEqual(available.gpu_budget_bytes, {"GPU-1": 1024**3})
+        self.assertEqual(available.ram_budget_bytes, 8 * 1024**3)
+        self.assertEqual(capacity.hardware, available.hardware)
+        self.hardware.gpu_devices[0].available_bytes = 0
+        self.hardware.ram_available_bytes = 0
+        changed = self.manager.memory_estimator.estimate(ModelEstimateRequest(bundle_id=bundle_id, basis="capacity"))
+        self.assertEqual(changed.gpu_budget_bytes, capacity.gpu_budget_bytes)
+        self.assertEqual(changed.ram_budget_bytes, capacity.ram_budget_bytes)
+
+    def test_local_preview_reads_headers_without_install_load_or_weight_hash(self):
+        path = self.model()
+        before = path.read_bytes()
+        with patch.object(self.manager, "import_local", side_effect=AssertionError("no installation")), \
+                patch.object(self.manager.memory_estimator, "_native_prediction", side_effect=AssertionError("no inference")), \
+                patch("workbench_backend.inference.bundles.sha256_file", side_effect=AssertionError("no weight hashing")):
+            result = self.manager.memory_estimator.estimate(ModelEstimateRequest(source_path=str(path), basis="capacity"))
+        self.assertEqual(result.architecture, "llama")
+        self.assertEqual(result.context_maximum, 16384)
+        self.assertIsNotNone(result.weights_bytes)
+        self.assertEqual(self.manager.store.list_bundles(), [])
+        self.assertEqual(self.manager.store.list_profiles(), [])
+        self.assertEqual(path.read_bytes(), before)
+        with self.assertRaises(ManagerError):
+            self.manager.memory_estimator.estimate(ModelEstimateRequest(source_path=str(path), method="native"))
+
+    def test_local_preview_rejects_incomplete_shards_and_mixed_sources(self):
+        path = self.model()
+        shard = path.with_name("model-00001-of-00002.gguf")
+        path.rename(shard)
+        with self.assertRaises(ManagerError) as caught:
+            self.manager.memory_estimator.estimate(ModelEstimateRequest(source_path=str(shard)))
+        self.assertEqual(caught.exception.code, "bundle_incomplete_shards")
+        with self.assertRaises(ManagerError):
+            self.manager.memory_estimator.estimate(ModelEstimateRequest(source_path=str(shard), repo_id="org/model"))
+
+    def test_unknown_total_budget_remains_unknown(self):
+        self.hardware.gpu_devices[0].total_bytes = None
+        self.hardware.ram_total_bytes = None
+        result = self.manager.memory_estimator.estimate(ModelEstimateRequest(source_path=str(self.model()), basis="capacity"))
+        self.assertEqual(result.gpu_budget_bytes, {"GPU-1": None})
+        self.assertIsNone(result.ram_budget_bytes)
+        self.assertIsNone(result.context_marker)
 
     def test_ordinary_edits_never_plan_natively_or_verify_full_weights(self):
         bundle_id = self.manager.import_local(LocalImportRequest(source_path=str(self.model()))).bundle_id

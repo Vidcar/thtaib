@@ -164,6 +164,7 @@ export const api = {
   updatePresentationSettings: writePresentation,
   paths: () => request<PathsInfo>("/v1/paths"),
   bundles: () => request<ModelBundle[]>("/v1/bundles"),
+  renameModel: (id: string, display_name: string) => request<ModelBundle>(`/v1/bundles/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ display_name }) }),
   imports: () => request<ImportJob[]>("/v1/imports"),
   modelStorage: () => request<ModelStorageSummary>("/v1/models/storage"),
   setModelStorage: (path: string) => request<ModelStorageSummary>("/v1/models/storage", { method: "PUT", body: JSON.stringify({ path }) }),
@@ -178,19 +179,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ source_path, display_name, copy_files }),
     }),
-  searchHf: (query: string) => request<Array<{ repo_id: string; downloads: number | null; likes: number | null }>>(`/v1/models/huggingface/search?q=${encodeURIComponent(query)}&limit=20`),
+  searchHf: (query: string) => request<Array<{ repo_id: string; downloads: number | null; likes: number | null; complete_variants?: number | null; advertised_capabilities?: string[]; metadata_source?: string | null }>>(`/v1/models/huggingface/search?q=${encodeURIComponent(query)}&limit=20`),
   inspectHf: (repo_id: string, revision = "main") =>
     request<SchemaHubRepository>("/v1/models/huggingface/inspect", {
       method: "POST",
       body: JSON.stringify({ repo_id, revision }),
     }),
-  importHf: (repo_id: string, revision: string, allow_patterns: string[], recipe_ids: string[] = [], default_recipe_id: string | null = null, initial?: { startup: Record<string, unknown>; per_request?: Record<string, unknown>; recipe_id?: string | null }) =>
+  importHf: (repo_id: string, revision: string, allow_patterns: string[], recipe_ids: string[] = [], default_recipe_id: string | null = null) =>
     request<ImportJob>("/v1/imports/huggingface", {
       method: "POST",
-      body: JSON.stringify({ repo_id, revision, allow_patterns, recipe_ids, default_recipe_id, ...(initial ? { initial_startup: initial.startup, ...(initial.recipe_id ? { initial_recipe_id: initial.recipe_id, initial_per_request: initial.per_request ?? {} } : initial.per_request ? { initial_per_request: initial.per_request } : {}) } : {}) }),
+      body: JSON.stringify({ repo_id, revision, allow_patterns, recipe_ids, default_recipe_id }),
     }),
-  refreshResponseRecipes: (bundleId: string, restore_hidden = false) => request<ModelBundle>(`/v1/bundles/${bundleId}/response-recipes/refresh`, { method: "POST", body: JSON.stringify({ restore_hidden }) }),
-  setResponseRecipeVisibility: (bundleId: string, recipeId: string, visible: boolean) => request<ModelBundle>(`/v1/bundles/${bundleId}/response-recipes/${encodeURIComponent(recipeId)}/visibility`, { method: "PUT", body: JSON.stringify({ visible }) }),
+  refreshResponseRecipes: (bundleId: string) => request<ModelBundle>(`/v1/bundles/${bundleId}/response-recipes/refresh`, { method: "POST" }),
   modelCard: (bundleId: string) => request<ModelCard>(`/v1/bundles/${encodeURIComponent(bundleId)}/model-card`),
   createRecipeConfigurations: (bundleId: string, recipe_ids: string[], default_recipe_id: string | null = null) =>
     request<{ bundle: ModelBundle; configurations: RunProfile[] }>(`/v1/bundles/${bundleId}/response-recipes/configurations`, {
@@ -207,6 +207,8 @@ export const api = {
   selectModelChatTemplate: (id: string, origin: "gguf" | "repository" | "publisher") => request<ModelBundle>(`/v1/bundles/${id}/chat-template`, { method: "PUT", body: JSON.stringify({ origin }) }),
   capabilityProbe: (id: string, capability: string) => request<SchemaCapabilityEvidence>(`/v1/compatibility/deployments/${id}/probes`, { method: "POST", body: JSON.stringify({ capability }) }),
   capabilityStatus: (id: string) => request<SchemaCapabilityProbeReport>(`/v1/compatibility/deployments/${id}/probes`),
+  configurationCapabilities: (id: string, revision?: number) => request<SchemaCapabilityProbeReport>(`/v1/compatibility/configurations/${encodeURIComponent(id)}/probes${revision == null ? "" : `?expected_configuration_revision=${revision}`}`),
+  probeConfiguration: (id: string, capability: string, revision?: number) => request<SchemaCapabilityEvidence>(`/v1/compatibility/configurations/${encodeURIComponent(id)}/probes`, { method: "POST", body: JSON.stringify({ capability, ...(revision == null ? {} : { expected_configuration_revision: revision }) }) }),
   previewSettings: (startup: object, per_request: object, agent: object) =>
     request<SettingsBags>("/v1/settings/preview", {
       method: "POST",

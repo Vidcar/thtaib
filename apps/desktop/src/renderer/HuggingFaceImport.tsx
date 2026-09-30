@@ -1,286 +1,144 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { api } from "./api";
-import { formatBytes } from "./display";
 import { errorMessage } from "./errors";
-import { ContextSlider, Help } from "./ModelControls";
-import { Icon } from "./Icon";
-import { Notice } from "./Notice";
-import { presentVariant, variantFamilies } from "./modelVariantPresentation";
-import { ModelHardwareEstimate } from "./ModelHardwareEstimate";
-import { SettingRow, SettingSection } from "./CompactControls";
-import { CapabilityIconRow, type CapabilityIconItem } from "./CapabilityIcons";
-import type { ImportJob, ResponseRecipe } from "./types";
+import { formatBytes } from "./display";
+import { Icon, type IconName } from "./Icon";
+import { ImportJobDetails } from "./ImportJobDetails";
+import { MenuPopover } from "./MenuPopover";
+import { CompactSwitch } from "./CompactControls";
+import { PathBrowseButton } from "./PathField";
+import { variantFamilies } from "./modelVariantPresentation";
+import { ModelCapacityPreview, capacityFit, useCapacityEstimates } from "./ModelCapacityPreview";
+import type { ImportJob } from "./types";
 import type { SchemaHubRepository } from "../generated/shared-contracts/openapi";
-import "./HuggingFaceImport.css";
+import type { ModelEstimateSelection } from "./modelEstimateApi";
 
-type InspectedRepository = Omit<SchemaHubRepository, "response_recipes"> & {
-  file_hint?: string | null;
-  response_recipes: ResponseRecipe[];
-};
+type SearchResult = Awaited<ReturnType<typeof api.searchHf>>[number];
+const capabilityIcons: Record<string, { label: string; icon: IconName }> = { text: { label: "Text", icon: "chat" }, reasoning: { label: "Thinking", icon: "reasoning" }, image: { label: "Image", icon: "image" }, video: { label: "Video", icon: "video" }, audio: { label: "Audio", icon: "audio" } };
+const activeJob = (job: ImportJob) => ["pending", "running", "stopping"].includes(job.status);
 
-const recipeFields = new Set([
-  "temperature", "top_p", "top_k", "min_p", "typical_p",
-  "presence_penalty", "frequency_penalty", "repeat_penalty",
-  "max_tokens", "reasoning_budget_tokens",
-]);
-const cachePrecisions = ["f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "bf16", "f32", "iq4_nl"];
+export function HuggingFaceImport({ onStarted, active = true, onOpenModel, onBrowseModels }: { onStarted: (job: ImportJob) => Promise<void>; active?: boolean; onOpenModel?: (id: string) => void; onBrowseModels?: () => void }) {
+  const [step, setStep] = useState<0 | 1>(0), [query, setQuery] = useState("");
+  const [results, setResults] = useState<SearchResult[]>([]), [hub, setHub] = useState<SchemaHubRepository | null>(null);
+  const [, setSelectedRepo] = useState("");
+  const [variant, setVariant] = useState(""), [projector, setProjector] = useState("");
+  const [recipeIds, setRecipeIds] = useState<string[]>([]), [sourcePath, setSourcePath] = useState("");
+  const [local, setLocal] = useState(false), [copyLocal, setCopyLocal] = useState(true);
+  const [busy, setBusy] = useState(""), [error, setError] = useState("");
+  const [job, setJob] = useState<ImportJob | null>(null), [jobs, setJobs] = useState<ImportJob[]>([]);
+  const [speed, setSpeed] = useState<number | null>(null);
+  const speedSample = useRef<{ bytes: number; time: number } | null>(null);
+  const generation = useRef(0), pending = useRef(false), inspected = useRef("");
+  const [startup, setStartup] = useState<Record<string, unknown>>({ cache_type_k: "f32", cache_type_v: "f32", flash_attn: "off" });
+  const previewEdited = useRef(false), highestApplied = useRef("");
+  const selected = hub?.variants.find(item => item.name === variant);
+  const vision = hub?.projectors.find(item => item.name === projector);
+  const exactFiles = [...new Set([...(selected?.files ?? []), ...(vision?.files ?? []), ...(hub?.guidance_files ?? [])])];
+  const filesIdentity = JSON.stringify([local ? sourcePath : hub?.repo_id, hub?.resolved_revision, variant, projector]);
+  const [jobIdentity, setJobIdentity] = useState("");
+  const selections: Array<{ key: string; selection: ModelEstimateSelection }> = local ? sourcePath ? [{ key: "local", selection: { source_path: sourcePath, startup: {} } }] : [] : (hub?.variants.filter(item => item.complete) ?? []).map(item => ({ key: item.name, selection: { repo_id: hub!.repo_id, revision: hub!.resolved_revision, primary_files: item.files, projector_files: vision?.files ?? [], startup: {} } }));
+  const estimates = useCapacityEstimates(selections, startup, active && step === 1);
+  const estimate = estimates.answers[local ? "local" : variant];
+  const initialEstimate = estimate ?? Object.values(estimates.answers)[0];
+  useEffect(() => {
+    if (!initialEstimate || previewEdited.current || highestApplied.current === inspected.current) return;
+    highestApplied.current = inspected.current;
+    const next: Record<string, unknown> = { cache_type_k: "f32", cache_type_v: "f32", flash_attn: "off", ...(initialEstimate.context_maximum ? { ctx_size: initialEstimate.context_maximum } : {}), ...(initialEstimate.builtin_mtp ? { spec_type: "draft-mtp" } : initialEstimate.mtp_draft_files?.length ? { spec_type: "draft-mtp", spec_draft_model: initialEstimate.mtp_draft_files[0] } : {}) };
+    setStartup(next);
+  }, [initialEstimate]);
+  useEffect(() => { generation.current += 1; return () => { generation.current += 1; }; }, []);
+  useEffect(() => {
+    if (!active) return;
+    let disposed = false;
+    async function poll() {
+      try {
+        const next = await api.imports(); if (disposed) return; setJobs(next);
+        if (job) {
+          const updated = next.find(item => item.id === job.id);
+          if (updated) {
+            setJob(updated);
+            const bytes = updated.progress?.bytes_done ?? 0, time = Date.now(), prior = speedSample.current;
+            if (prior && bytes >= prior.bytes && time > prior.time) setSpeed((bytes - prior.bytes) / ((time - prior.time) / 1000));
+            speedSample.current = { bytes, time };
+            if (updated.status === "complete" && job.status !== "complete") await onStarted(updated);
+          }
+        }
+      } catch (failure) { if (!disposed && job) setError(errorMessage(failure)); }
+    }
+    void poll(); const timer = window.setInterval(() => void poll(), 1200);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [active, job?.id, job?.status]);
 
-function usableRecipe(value: unknown): ResponseRecipe | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const recipe = value as Record<string, unknown>;
-  const settings = recipe.per_request;
-  if (!settings || typeof settings !== "object" || Array.isArray(settings)) return null;
-  if (!Object.entries(settings).length || !Object.entries(settings).every(([key, entry]) =>
-    recipeFields.has(key) && typeof entry === "number" && Number.isFinite(entry))) return null;
-  if (["id", "name", "section", "source_repo_id", "source_revision", "card_sha256"].some(key =>
-    typeof recipe[key] !== "string" || !(recipe[key] as string).trim())) return null;
-  if (recipe.reasoning !== "on" && recipe.reasoning !== "off" && recipe.reasoning !== "preserve") return null;
-  if (recipe.notes !== undefined && (!Array.isArray(recipe.notes) || !recipe.notes.every(note => typeof note === "string"))) return null;
-  return recipe as unknown as ResponseRecipe;
-}
-
-function inspectedRepository(value: SchemaHubRepository): InspectedRepository {
-  return {
-    ...value,
-    response_recipes: (value.response_recipes ?? []).map(usableRecipe).filter((recipe): recipe is ResponseRecipe => recipe !== null),
-  };
-}
-
-const recipeSettingLabels: Record<string, string> = {
-  temperature: "Temp", top_p: "Top P", top_k: "Top K", min_p: "Min P",
-  presence_penalty: "Presence penalty", frequency_penalty: "Frequency penalty", repeat_penalty: "Repetition penalty", repetition_penalty: "Repetition penalty",
-};
-
-function recipeSummary(recipe: ResponseRecipe): string {
-  const values = Object.entries(recipe.per_request).map(([key, value]) => `${recipeSettingLabels[key] ?? key}: ${value}`);
-  return [recipe.reasoning === "preserve" ? "Thinking unchanged" : `Thinking ${recipe.reasoning}`, ...values].join(" · ");
-}
-
-function mtpGroups(files: string[]): Array<{ value: string; label: string; files: string[] }> {
-  const groups = new Map<string, string[]>();
-  for (const name of files) {
-    const key = name.replace(/-\d{5}-of-\d{5}\.gguf$/i, ".gguf");
-    groups.set(key, [...(groups.get(key) ?? []), name]);
-  }
-  return [...groups.entries()].map(([key, names]) => {
-    const sorted = [...names].sort();
-    const first = sorted.find(name => /-00001-of-\d{5}\.gguf$/i.test(name)) ?? sorted[0];
-    return { value: first, label: names.length > 1 ? key : first, files: sorted };
-  });
-}
-
-type ContextMode = "" | "fixed" | "auto" | "full";
-type HeaderPreview = { builtin: boolean; drafts: string[]; modalities: string[]; contextMaximum: number | null };
-
-export function HuggingFaceImport({ onStarted, active = true }: { onStarted: (job: ImportJob) => Promise<void>; active?: boolean }) {
-  const [query, setQuery] = useState("");
-  const [step, setStep] = useState<0 | 1 | 2>(0);
-  const [contextMode, setContextMode] = useState<ContextMode>("");
-  const [context, setContext] = useState("");
-  const [gpuLayers, setGpuLayers] = useState("");
-  const [flashAttention, setFlashAttention] = useState("");
-  const [keyPrecision, setKeyPrecision] = useState("");
-  const [valuePrecision, setValuePrecision] = useState("");
-  const [kvOffload, setKvOffload] = useState<boolean | null>(null);
-  const [mtpChoice, setMtpChoice] = useState("");
-  const [preview, setPreview] = useState<HeaderPreview>({ builtin: false, drafts: [], modalities: [], contextMaximum: null });
-  const [results, setResults] = useState<Array<{ repo_id: string; downloads: number | null }>>([]);
-  const [selectedRepo, setSelectedRepo] = useState("");
-  const [hub, setHub] = useState<InspectedRepository | null>(null);
-  const [variant, setVariant] = useState("");
-  const [projector, setProjector] = useState("");
-  const [recipeIds, setRecipeIds] = useState<string[]>([]);
-  const [initialRecipeId, setInitialRecipeId] = useState("");
-  const [bitFilter, setBitFilter] = useState<number | "all" | "unknown">("all");
-  const [sizeOrder, setSizeOrder] = useState<"asc" | "desc">("asc");
-  const [busy, setBusy] = useState<"search" | "inspect" | "download" | "">("");
-  const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
-  const generation = useRef(0);
-  const inspectedSource = useRef("");
-  const downloadPending = useRef(false);
-  useEffect(() => () => { generation.current += 1; }, []);
-
-  function resetLoadingChoices() {
-    setContextMode(""); setContext(""); setGpuLayers(""); setFlashAttention("");
-    setKeyPrecision(""); setValuePrecision(""); setKvOffload(null); setMtpChoice("");
-    setPreview({ builtin: false, drafts: [], modalities: [], contextMaximum: null });
-  }
-
+  function resetPreview(identity: string) { inspected.current = identity; highestApplied.current = ""; previewEdited.current = false; setStartup({ cache_type_k: "f32", cache_type_v: "f32", flash_attn: "off" }); }
   async function inspectRepository(repo: string) {
-    if (downloadPending.current) return;
-    const source = repo.trim();
-    if (hub && source === inspectedSource.current) {
-      setError(""); setMessage(""); setStep(1);
-      return;
-    }
-    const current = ++generation.current;
-    setSelectedRepo(repo); setHub(null); setVariant(""); setProjector(""); setBitFilter("all");
-    setRecipeIds([]); setInitialRecipeId("");
-    setError(""); setMessage(""); setBusy("inspect");
-    resetLoadingChoices();
+    if (pending.current) return;
+    if (hub && inspected.current === repo && !local) { setStep(1); return; }
+    const owner = ++generation.current; setBusy("inspect"); setError(""); setSelectedRepo(repo);
     try {
-      const next = inspectedRepository(await api.inspectHf(repo));
-      if (current !== generation.current) return;
-      inspectedSource.current = source;
-      setHub(next); setSelectedRepo(next.repo_id);
-      const hint = next.file_hint;
+      const next = await api.inspectHf(repo); if (owner !== generation.current) return;
+      setHub(next); setLocal(false); setRecipeIds((next.response_recipes ?? []).map(item => item.id)); setJob(null); setJobIdentity(""); setSelectedRepo(next.repo_id); resetPreview(next.repo_id);
+      const hint = (next as SchemaHubRepository & { file_hint?: string | null }).file_hint;
       const hinted = hint ? next.variants.find(item => item.name === hint || item.files.includes(hint)) : undefined;
-      setVariant(next.file_hint ? (hinted?.complete ? hinted.name : "") : next.variants.length === 1 && next.variants[0].complete ? next.variants[0].name : "");
-      setProjector(next.projectors.length ? "" : "text-only");
-      setStep(1);
-    } catch (failure) { if (current === generation.current) setError(errorMessage(failure)); }
-    finally { if (current === generation.current) setBusy(""); }
+      setVariant(hinted?.complete ? hinted.name : next.variants.length === 1 && next.variants[0].complete ? next.variants[0].name : "");
+      setProjector(next.projectors.length ? "" : "text-only"); setStep(1);
+      setResults(current => current.map(item => item.repo_id === next.repo_id ? { ...item, complete_variants: next.variants.filter(item => item.complete).length } : item));
+    } catch (failure) { if (owner === generation.current) setError(errorMessage(failure)); }
+    finally { if (owner === generation.current) setBusy(""); }
   }
-
   async function search() {
-    const value = query.trim();
-    if (!value || downloadPending.current) return;
-    if (/^https?:\/\//i.test(value) || /^[\w.-]+\/[\w.-]+$/.test(value)) {
-      setResults([]);
-      await inspectRepository(value);
-      return;
-    }
-    const current = ++generation.current;
-    setBusy("search"); setError(""); setMessage(""); setResults([]);
-    try {
-      const next = await api.searchHf(value);
-      if (current !== generation.current) return;
-      setResults(next);
-      if (!next.length) setMessage("No matching repositories. Try a model name, publisher, or Hugging Face link.");
-    } catch (failure) { if (current === generation.current) setError(errorMessage(failure)); }
-    finally { if (current === generation.current) setBusy(""); }
+    const value = query.trim(); if (!value || pending.current) return;
+    if (/^https?:\/\//i.test(value) || /^[\w.-]+\/[\w.-]+$/.test(value)) { await inspectRepository(value); return; }
+    const owner = ++generation.current; setBusy("search"); setError("");
+    try { const next = await api.searchHf(value); if (owner === generation.current) setResults(next); }
+    catch (failure) { if (owner === generation.current) setError(errorMessage(failure)); }
+    finally { if (owner === generation.current) setBusy(""); }
   }
-
-  const selectedVariant = hub?.variants.find(item => item.name === variant);
-  const selectedPresentation = selectedVariant ? presentVariant(selectedVariant) : null;
-  const selectedProjector = hub?.projectors.find(item => item.name === projector);
-  const groups = mtpGroups(preview.drafts);
-  const selectedMtp = groups.find(group => group.value === mtpChoice);
-  const mtpDownload = selectedMtp && preview.drafts.includes(selectedMtp.value) ? selectedMtp.files : [];
-  const files = [...new Set([...(selectedVariant?.files ?? []), ...(selectedProjector?.files ?? []), ...(hub?.guidance_files ?? []), ...mtpDownload])];
-  const mtpVariant = selectedMtp ? hub?.auxiliary_ggufs?.find(item => item.files.includes(selectedMtp.value)) : undefined;
-  const size = selectedVariant?.size_bytes == null || (selectedProjector && selectedProjector.size_bytes == null) || (mtpVariant && mtpVariant.size_bytes == null)
-    ? null : selectedVariant.size_bytes + (selectedProjector?.size_bytes ?? 0) + (mtpVariant?.size_bytes ?? 0);
-  const bits = [...new Set(hub?.variants.map(item => presentVariant(item).bits) ?? [])].sort((a, b) => a == null ? 1 : b == null ? -1 : a - b);
-  const families = variantFamilies(hub?.variants ?? [], bitFilter, sizeOrder);
-  const recipes = hub?.response_recipes ?? [];
-  const selectedRecipes = recipes.filter(recipe => recipeIds.includes(recipe.id));
-  const initialRecipe = recipes.find(recipe => recipe.id === initialRecipeId);
-  const initialResponse = initialRecipe ? { ...initialRecipe.per_request, ...(initialRecipe.reasoning === "preserve" ? {} : { reasoning: initialRecipe.reasoning }) } : {};
-  const startup: Record<string, unknown> = {};
-  if (keyPrecision) startup.cache_type_k = keyPrecision;
-  if (valuePrecision) startup.cache_type_v = valuePrecision;
-  if (kvOffload !== null) startup.kv_offload = kvOffload;
-  if (gpuLayers === "0") startup.n_gpu_layers = 0;
-  else if (gpuLayers) startup.n_gpu_layers = gpuLayers;
-  if (flashAttention) startup.flash_attn = flashAttention;
-  if (contextMode === "auto") startup.ctx_size = "auto";
-  else if (contextMode === "full") startup.ctx_size = 0;
-  else if (contextMode === "fixed" && context && Number.isSafeInteger(Number(context)) && Number(context) >= 0) startup.ctx_size = Number(context);
-  if (preview.builtin && mtpChoice === "builtin") startup.spec_type = "draft-mtp";
-  else if (selectedMtp && preview.drafts.includes(selectedMtp.value)) {
-    startup.spec_type = "draft-mtp";
-    startup.spec_draft_model = selectedMtp.value;
-  }
-  const canReview = Boolean(selectedVariant?.complete && projector);
-  const contextShown = contextMode === "fixed" && context && Number.isFinite(Number(context)) ? Number(context) : contextMode === "full" ? preview.contextMaximum : null;
-  const modalities = new Set(preview.modalities);
-  const imageKnown = Boolean(selectedProjector) || modalities.has("image");
-  const reviewCapabilities: CapabilityIconItem[] = [
-    { id: "text", label: "Text", icon: "chat", state: "untested", detail: "Language model file. Checked after the first load." },
-    { id: "tools", label: "Tools", icon: "wrench", state: "absent", detail: "Checked after the model loads." },
-    { id: "thinking", label: "Thinking", icon: "reasoning", state: "absent", detail: "Checked after the model loads." },
-    { id: "structured", label: "Structured output", icon: "braces", state: "absent", detail: "Checked after the model loads." },
-    { id: "image", label: "Image", icon: "image", state: imageKnown ? "untested" : "absent", detail: imageKnown ? (selectedProjector ? "A vision file is selected." : "The file header identifies image input.") : "No image input selected." },
-    { id: "video", label: "Video", icon: "video", state: modalities.has("video") ? "untested" : "absent", detail: modalities.has("video") ? "The file header identifies video." : "No video input reported." },
-    { id: "audio", label: "Audio", icon: "audio", state: modalities.has("audio") ? "untested" : "absent", detail: modalities.has("audio") ? "The file header identifies audio." : "No audio input reported." },
-  ];
-  const contextLabel = contextMode === "auto" ? "Automatic fit" : contextMode === "full" ? "Full" : contextMode === "fixed" && context ? Number(context).toLocaleString() : "Engine default";
-  const mtpLabel = !preview.builtin && !groups.length ? "" : mtpChoice === "builtin" ? "Built-in draft head" : selectedMtp ? selectedMtp.label : "Off";
-
-  function chooseContext(value: string) {
-    const mode = value as ContextMode;
-    setContextMode(mode);
-    if (mode === "fixed") { if (!context && preview.contextMaximum) setContext(String(preview.contextMaximum)); }
-    else setContext("");
-  }
-
-  function toggleRecipe(id: string, checked: boolean) {
-    setRecipeIds(current => checked ? [...current, id] : current.filter(item => item !== id));
-  }
-
+  function chooseLocal() { if (!sourcePath.trim() || pending.current) return; setLocal(true); setHub(null); setRecipeIds([]); setProjector("text-only"); setVariant(""); setJob(null); resetPreview(sourcePath.trim()); setStep(1); }
   async function download() {
-    if (!hub || !selectedVariant?.complete || !projector || downloadPending.current) return;
-    downloadPending.current = true;
-    const current = ++generation.current;
-    setBusy("download"); setError(""); setMessage("");
+    if (pending.current || !local && (!hub || !selected?.complete || !projector)) return;
+    pending.current = true; const owner = generation.current; setBusy("download"); setError("");
     try {
-      const exactFiles = files.map(file => file.replaceAll("[", "[[]").replaceAll("?", "[?]").replaceAll("*", "[*]"));
-      const job = await api.importHf(hub.repo_id, hub.resolved_revision, exactFiles, recipeIds, null, { startup, ...(initialRecipe ? { recipe_id: initialRecipe.id, per_request: initialResponse } : {}) });
-      if (current !== generation.current) return;
-      setMessage(job.error ? `Download ${job.status}: ${job.error}` : job.status === "complete" ? "Model added to your library." : "Download started. Track progress in Downloads.");
-      await onStarted(job);
-    } catch (failure) { if (current === generation.current) setError(errorMessage(failure)); }
-    finally { downloadPending.current = false; if (current === generation.current) setBusy(""); }
+      const next = local ? await api.importLocal(sourcePath.trim(), undefined, copyLocal) : await api.importHf(hub!.repo_id, hub!.resolved_revision, exactFiles.map(file => file.replaceAll("[", "[[]").replaceAll("?", "[?]").replaceAll("*", "[*]")), recipeIds);
+      if (owner === generation.current) { setJob(next); setJobIdentity(filesIdentity); speedSample.current = null; setSpeed(null); }
+      await onStarted(next);
+    } catch (failure) { if (owner === generation.current) setError(errorMessage(failure)); }
+    finally { pending.current = false; if (owner === generation.current) setBusy(""); }
   }
-
-  return <section className="card model-finder" aria-label="Find a model">
-    <div className="setting-title"><h3>Add a model</h3><Help label="Find a model">Search Hugging Face or paste an exact model file link.</Help></div>
-    <nav className="model-import-steps" aria-label="Model import steps">{["Find", "Choose", "Review"].map((label, index) => <span key={label} aria-current={step === index ? "step" : undefined}>{index + 1}. {label}</span>)}</nav>
-    {step === 0 ? <>
-    <form className="model-search" onSubmit={event => { event.preventDefault(); void search(); }}>
-      <label htmlFor="model-search-query" className="visually-hidden">Model name or Hugging Face repository</label>
-      <input id="model-search-query" maxLength={2048} value={query} disabled={busy === "download"} onChange={event => setQuery(event.target.value)} placeholder="Search models or paste a Hugging Face link" />
-      <button type="submit" disabled={!query.trim() || Boolean(busy)}><Icon name="search" size={15} />{busy === "search" ? "Searching…" : "Find model"}</button>
-    </form>
-    {results.length ? <ul className="model-search-results" aria-label="Matching repositories">{results.map(result => <li key={result.repo_id} className={selectedRepo === result.repo_id ? "is-selected" : ""}>
-      <div><strong>{result.repo_id}</strong>{result.downloads != null ? <span className="hint">{result.downloads.toLocaleString()} downloads</span> : null}</div>
-      <button type="button" disabled={busy === "download"} aria-pressed={selectedRepo === result.repo_id} onClick={() => void inspectRepository(result.repo_id)}>{selectedRepo === result.repo_id ? "Selected" : "Select repository"}</button>
-    </li>)}</ul> : null}
-    </> : null}
-    {busy === "inspect" ? <p role="status">Loading model files for <strong>{selectedRepo}</strong>…</p> : null}
-    {error ? <Notice tone="error" action={selectedRepo && !hub ? <button type="button" disabled={Boolean(busy)} onClick={() => void inspectRepository(selectedRepo)}>Retry loading files</button> : undefined}>{error}</Notice> : null}
-    {hub && step !== 0 ? <section className="model-download-selection" aria-label="Repository files">
-      <div className="actions"><button type="button" disabled={Boolean(busy)} onClick={() => setStep(step === 2 ? 1 : 0)}>Back</button></div>
-      <div className="section-heading"><strong>{hub.repo_id}</strong><a href={`https://huggingface.co/${hub.repo_id}/blob/${hub.resolved_revision}/README.md`} target="_blank" rel="noreferrer">Model guide ↗</a></div>
-      {hub.file_hint ? <p className="hint" role="status">{selectedVariant?.files.includes(hub.file_hint) ? "Linked GGUF file selected: " : "Linked GGUF file unavailable; choose a listed variant: "}<strong>{hub.file_hint}</strong></p> : null}
-      {hub.source ? <details className="technical-details"><summary>Publisher settings</summary><p className="hint">{hub.source.repo_id}{hub.source.resolved_revision ? ` @ ${hub.source.resolved_revision.slice(0, 8)}` : ""} · {hub.source.verified ? "source commit verified" : "source unverified; publisher settings will not be applied"}</p></details> : null}
-      {step === 1 ? <>
-      {hub.variants.length ? <div className="variant-picker">
-        <div className="variant-picker-heading"><div><h4>Quantization <Help label="Quantization">Labels come from filenames. Memory and capability checks are on Review.</Help></h4></div><label>Sort<select value={sizeOrder} onChange={event => setSizeOrder(event.target.value as "asc" | "desc")}><option value="asc">Smallest first</option><option value="desc">Largest first</option></select></label></div>
-        <div className="variant-filters" role="group" aria-label="Filter by bit family"><button type="button" aria-pressed={bitFilter === "all"} onClick={() => setBitFilter("all")}>All <span>{hub.variants.length}</span></button>{bits.map(bit => <button key={bit ?? "unknown"} type="button" aria-pressed={bitFilter === (bit ?? "unknown")} onClick={() => setBitFilter(bit ?? "unknown")}>{bit == null ? "Unknown" : `${bit}-bit`}</button>)}</div>
-        <div className="variant-table-scroll"><table className="variant-table"><thead><tr><th scope="col"><span className="visually-hidden">Select</span></th><th scope="col">Variant</th><th scope="col">Disk size</th><th scope="col">Files</th><th scope="col">Availability</th></tr></thead>{families.map(group => <tbody key={group.family}><tr className="variant-family"><th scope="rowgroup" colSpan={5}>{group.family}</th></tr>{group.items.map(({ variant: item, quant, flavour }) => <tr key={item.name} className={variant === item.name ? "is-selected" : undefined}><td><input type="radio" name="model-variant" value={item.name} aria-label={`${quant} ${flavour}, ${item.name}, ${item.size_bytes == null ? "size unknown" : formatBytes(item.size_bytes)}, ${item.complete ? "complete" : "missing files"}`} checked={variant === item.name} disabled={Boolean(busy) || !item.complete} onChange={() => setVariant(item.name)} /></td><td><label title={item.name} onClick={() => { if (!busy && item.complete) setVariant(item.name); }}><strong>{quant} · {flavour}</strong><small>{item.name}</small></label></td><td>{item.size_bytes == null ? "Unknown" : formatBytes(item.size_bytes)}</td><td>{item.files.length} {item.files.length === 1 ? "file" : "files"}</td><td><span className={item.complete ? "variant-ready" : "variant-missing"}>{item.complete ? "Complete" : "Missing shards"}</span></td></tr>)}</tbody>)}</table></div>
-        {hub.projectors.length ? <fieldset className="projector-choices"><legend>Image input</legend><p className="hint">Choose a vision file explicitly or use text only. Listed files may still be incompatible.</p><label><input type="radio" name="image-input" value="text-only" checked={projector === "text-only"} disabled={Boolean(busy)} onChange={() => setProjector("text-only")} />Text only</label>{hub.projectors.map(item => <label key={item.name} title={item.name}><input type="radio" name="image-input" value={item.name} checked={projector === item.name} disabled={Boolean(busy) || !item.complete} onChange={() => setProjector(item.name)} /><span>{item.name}</span><small>{item.size_bytes == null ? "Size unknown" : formatBytes(item.size_bytes)}{item.complete ? "" : " · missing files"}</small></label>)}</fieldset> : null}
-      </div> : <><Notice tone="warn">This repository has no primary GGUF weights. Choose a GGUF conversion to download.</Notice>
-        {hub.gguf_candidates?.length ? <ul className="model-search-results" aria-label="GGUF conversions">{hub.gguf_candidates.map(candidate => <li key={candidate.repo_id}>
-          <strong>{candidate.repo_id}</strong><button type="button" disabled={Boolean(busy)} onClick={() => void inspectRepository(candidate.repo_id)}>Inspect GGUF</button>
-        </li>)}</ul> : <p className="hint">No GGUF conversion declared this exact publisher model. Search by model name to inspect other repositories.</p>}</>}
-      {hub.warnings.length ? <details className="technical-details"><summary>Repository notes ({hub.warnings.length})</summary>{hub.warnings.map(warning => <p key={warning}>{warning}</p>)}</details> : null}
-      {hub.auxiliary_ggufs?.length ? <details className="technical-details auxiliary-files"><summary>Auxiliary GGUF files <span>{hub.auxiliary_ggufs.length}</span></summary><p className="hint">MTP and imatrix files are separate from primary model weights. A separate draft head is offered on Review only after its header contains a NextN tensor.</p><ul>{hub.auxiliary_ggufs.map(item => <li key={item.name}>{item.name} · {item.size_bytes == null ? "size unknown" : formatBytes(item.size_bytes)}{item.complete ? "" : " · missing shards"}</li>)}</ul></details> : null}
-      {recipes.length ? <SettingSection title="Generation"><SettingRow layout="models" label="Model card preset" htmlFor="import-initial-recipe" provenance={initialRecipe ? `${initialRecipe.source_repo_id} · ${initialRecipe.source_revision.slice(0, 8)}` : "Compatible publisher and native values are resolved from the installed template."} help={initialRecipe ? recipeSummary(initialRecipe) : "After download, use a compatible publisher preset matching native Thinking, or native/template values when no unambiguous preset exists."}><select id="import-initial-recipe" value={initialRecipeId} disabled={Boolean(busy)} onChange={event => setInitialRecipeId(event.target.value)}><option value="">Publisher/native baseline</option>{recipes.map(recipe => <option key={recipe.id} value={recipe.id}>{recipe.name}</option>)}</select></SettingRow><details className="technical-details response-recipe-choices"><summary>Create additional setups</summary>{recipes.map(recipe => <label key={recipe.id}><input type="checkbox" checked={recipeIds.includes(recipe.id)} disabled={Boolean(busy)} onChange={event => toggleRecipe(recipe.id, event.target.checked)} /><span><strong>{recipe.name}</strong><small>{recipeSummary(recipe)}</small>{recipe.notes?.length ? <small>{recipe.notes.join(" · ")}</small> : null}</span></label>)}</details></SettingSection> : null}
-      <div className="actions"><button type="button" className="primary-button" disabled={Boolean(busy) || !canReview} onClick={() => setStep(2)}>Review download</button></div>
-      </> : null}
-      {step === 2 && selectedVariant ? <>
-        <CapabilityIconRow items={reviewCapabilities} />
-        <SettingSection title="Loading">
-          <SettingRow layout="models" label="Context" help={<>Total shared context in tokens. Leave this alone to keep the engine default.<code>--ctx-size</code></>} onReset={contextMode ? () => { setContextMode(""); setContext(""); } : undefined} resetLabel="Reset">
-            <ContextSlider label="Import context" value={contextShown} maximum={preview.contextMaximum} unknownLabel={contextMode === "auto" ? "Automatic fit" : "Engine default"} disabled={Boolean(busy)} onChange={value => { setContextMode("fixed"); setContext(String(value)); }} />
-          </SettingRow>
-          <SettingRow layout="models" label="Context mode" help="Automatic fit and Full are explicit choices. Engine default sends no context flag."><select aria-label="Import context mode" value={contextMode} disabled={Boolean(busy)} onChange={event => chooseContext(event.target.value)}><option value="">Engine default</option><option value="fixed">Fixed</option><option value="auto">Automatic fit</option><option value="full" disabled={!preview.contextMaximum}>Full</option></select></SettingRow>
-          <SettingRow layout="models" label="GPU layers" help={<>Weight placement. Other offloads remain independent.<code>--n-gpu-layers</code></>}><select aria-label="Import GPU layers" value={gpuLayers} disabled={Boolean(busy)} onChange={event => setGpuLayers(event.target.value)}><option value="">Engine default</option><option value="auto">Auto</option><option value="all">All</option><option value="0">CPU</option></select></SettingRow>
-          <SettingRow layout="models" label="K cache precision" help={<code>--cache-type-k</code>}><select aria-label="Import key cache precision" value={keyPrecision} onChange={event => setKeyPrecision(event.target.value)} disabled={Boolean(busy)}><option value="">Engine default</option>{cachePrecisions.map(value => <option key={value}>{value}</option>)}</select></SettingRow>
-          <SettingRow layout="models" label="V cache precision" help={<code>--cache-type-v</code>}><select aria-label="Import value cache precision" value={valuePrecision} onChange={event => setValuePrecision(event.target.value)} disabled={Boolean(busy)}><option value="">Engine default</option>{cachePrecisions.map(value => <option key={value}>{value}</option>)}</select></SettingRow>
-          <SettingRow layout="models" label="Flash attention" help={<code>--flash-attn</code>}><select aria-label="Import Flash attention" value={flashAttention} disabled={Boolean(busy)} onChange={event => setFlashAttention(event.target.value)}><option value="">Engine default</option><option value="auto">Auto</option><option value="on">On</option><option value="off">Off</option></select></SettingRow>
-          {preview.builtin || groups.length ? <SettingRow layout="models" label="MTP" help={<>Off sends no speculation flag. A built-in head uses tensors already inside the model file. A separate file is downloaded with the model.<code>--spec-type</code></>}><select aria-label="Import MTP" value={selectedMtp || mtpChoice === "builtin" ? mtpChoice : ""} disabled={Boolean(busy)} onChange={event => setMtpChoice(event.target.value)}><option value="">Off</option>{preview.builtin ? <option value="builtin">Built-in draft head</option> : null}{groups.map(group => <option key={group.value} value={group.value}>{group.label}</option>)}</select></SettingRow> : null}
-          <SettingRow layout="models" label="Cache location" help={<code>--no-kv-offload</code>}><select aria-label="Import cache location" value={kvOffload === null ? "" : kvOffload ? "gpu" : "cpu"} onChange={event => setKvOffload(event.target.value === "" ? null : event.target.value === "gpu")} disabled={Boolean(busy)}><option value="">Engine default</option><option value="gpu">GPU</option><option value="cpu">CPU / RAM</option></select></SettingRow>
-        </SettingSection>
-        <ModelHardwareEstimate active={active && step === 2} selection={{ repo_id: hub.repo_id, revision: hub.resolved_revision, primary_files: selectedVariant.files, projector_files: selectedProjector?.files ?? [], startup }} onEstimate={estimate => setPreview({ builtin: estimate.builtin_mtp === true, drafts: estimate.mtp_draft_files ?? [], modalities: estimate.advertised_modalities ?? [], contextMaximum: estimate.context_maximum ?? null })} />
-        <div className="model-download-footer"><span className="hint">{size == null ? "Size unknown" : formatBytes(size)} · {selectedVariant.files.length} model file{selectedVariant.files.length === 1 ? "" : "s"}{selectedProjector ? " + vision file" : ""}{mtpDownload.length ? " + draft head" : ""}</span><Help label="Download and vision files">Allow room for temporary and installed copies, roughly twice the selected size. Vision compatibility is checked after loading the model; a file being listed does not prove it is compatible.</Help><button type="button" className="primary-button" disabled={Boolean(busy) || !canReview} onClick={() => void download()}><Icon name="download" size={15} />{busy === "download" ? "Starting…" : "Download model"}</button></div>
-        <p className="hint">Context: {contextLabel} · K cache: {keyPrecision || "Engine default"} · V cache: {valuePrecision || "Engine default"} · Cache location: {kvOffload === null ? "Engine default" : kvOffload ? "GPU" : "CPU / RAM"}{mtpLabel ? ` · MTP: ${mtpLabel}` : ""}</p>
-        <div className="selected-download-files"><strong>Download selection: {selectedPresentation?.quant} · {selectedPresentation?.flavour}</strong><span className="hint">Pinned revision <code>{hub.resolved_revision}</code></span><ul>{files.map(file => <li key={file}>{file}</li>)}{hub.source?.verified ? (hub.source.guidance_files ?? []).map(file => <li key={`source-${file}`}>{hub.source?.repo_id} / {file}</li>) : null}</ul>{selectedRecipes.length ? <p className="hint">Create {selectedRecipes.length} additional setup{selectedRecipes.length === 1 ? "" : "s"}: {selectedRecipes.map(item => item.name).join(", ")}. First setup recipe: {initialRecipe?.name ?? "model defaults"}.</p> : null}</div>
-      </> : null}
-    </section> : null}
-    {message ? <p role="status">{message}</p> : null}
+  async function changeJob(operation: "cancel" | "retry" | "discard", item = job) {
+    if (!item || pending.current) return; pending.current = true; setBusy(operation); setError("");
+    try { const next = operation === "cancel" ? await api.cancelImport(item.id) : operation === "discard" ? await api.discardImport(item.id) : await api.retryImport(item.id); setJob(next); if (item.id !== job?.id) setJobIdentity(""); await onStarted(next); }
+    catch (failure) { setError(errorMessage(failure)); }
+    finally { pending.current = false; setBusy(""); }
+  }
+  function quantKey(event: KeyboardEvent<HTMLButtonElement>) {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    event.preventDefault(); const controls = Array.from(event.currentTarget.closest(".model-quant-grid")!.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
+    const index = controls.indexOf(event.currentTarget), next = event.key === "Home" ? 0 : event.key === "End" ? controls.length - 1 : (index + (["ArrowLeft", "ArrowUp"].includes(event.key) ? controls.length - 1 : 1)) % controls.length;
+    controls[next]?.click(); controls[next]?.focus();
+  }
+  const sameJob = jobIdentity === filesIdentity ? job : null;
+  const jobRunning = Boolean(sameJob && activeJob(sameJob));
+  const progress = sameJob?.progress;
+  const percent = progress?.bytes_total ? Math.min(100, Math.round(progress.bytes_done / progress.bytes_total * 100)) : null;
+  const canAdd = local ? Boolean(sourcePath.trim()) : Boolean(selected?.complete && projector);
+  return <section className="models-add-journey" aria-label="Add a model">
+    <header className="models-journey-header"><div className="models-journey-title"><button type="button" className="icon-button models-browse-button" aria-label="Browse model sections" onClick={onBrowseModels}><Icon name="panel" /></button><div><h2>Add a model</h2><p>Find and choose.</p></div></div><nav className="models-flow-steps" aria-label="Find and choose"><button type="button" aria-current={step === 0 ? "step" : undefined} onClick={() => setStep(0)}><span>1</span>Find</button><button type="button" aria-current={step === 1 ? "step" : undefined} disabled={!hub && !local} onClick={() => setStep(1)}><span>2</span>Choose</button></nav></header>
+    <div className="models-journey-scroll">{sameJob?.error ? <p className="models-job-error" role="status">{sameJob.error}</p> : null}{sameJob?.configuration_error ? <p className="hint" role="status">Model files are installed. Selected setups need attention: {sameJob.configuration_error}</p> : null}{error ? <p role="status" className="models-flow-error">{error}</p> : null}
+      {step === 0 ? <>
+        <section className="models-find"><h3>Model name, repository or exact file link</h3><form className="models-find-search" onSubmit={event => { event.preventDefault(); void search(); }}><input type="search" aria-label="Find a model" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search models or paste a Hugging Face link" /><button type="submit" className="primary-button" disabled={!query.trim() || Boolean(busy)}>{busy === "search" ? "Finding…" : "Find model"}</button></form></section>
+        {results.length ? <div className="models-repository-table-wrap"><table className="models-repository-table"><thead><tr><th>Repository</th><th>Downloads</th><th>Likes</th><th>Variants</th><th>Capabilities</th></tr></thead><tbody>{results.map(item => <tr key={item.repo_id}><td><button type="button" disabled={Boolean(busy)} onClick={() => void inspectRepository(item.repo_id)}>{item.repo_id}</button></td><td>{item.downloads?.toLocaleString() ?? "—"}</td><td>{item.likes?.toLocaleString() ?? "—"}</td><td>{item.complete_variants?.toLocaleString() ?? "—"}</td><td><span className="models-advertised-icons" title={item.metadata_source ?? "Publisher metadata"}>{item.advertised_capabilities?.length ? item.advertised_capabilities.map(id => capabilityIcons[id] ? <span key={id} role="img" aria-label={capabilityIcons[id].label + ", advertised by publisher"} title={capabilityIcons[id].label + " · advertised by publisher"}><Icon name={capabilityIcons[id].icon} size={16} /></span> : null) : "—"}</span></td></tr>)}</tbody></table></div> : query && !busy ? <p className="hint">Search by a model name or publisher.</p> : null}
+        <section className="models-local-import"><h3>Already on your computer?</h3><form onSubmit={event => { event.preventDefault(); chooseLocal(); }}><input aria-label="Model file or folder" value={sourcePath} onChange={event => setSourcePath(event.target.value)} placeholder="Choose a GGUF file or folder" /><PathBrowseButton kind="file" label="Browse file" icon="files" disabled={Boolean(busy)} onPicked={setSourcePath} onError={failure => setError(errorMessage(failure))} /><PathBrowseButton kind="folder" label="Browse folder" icon="folder" disabled={Boolean(busy)} onPicked={setSourcePath} onError={failure => setError(errorMessage(failure))} /><button type="submit" disabled={!sourcePath.trim() || Boolean(busy)}>Choose</button></form></section>
+        {jobs.some(item => activeJob(item) || ["failed", "stopped", "interrupted"].includes(item.status)) ? <details className="models-disclosure"><summary>Downloads in progress <span className="models-show-hide" /></summary>{jobs.filter(item => activeJob(item) || ["failed", "stopped", "interrupted"].includes(item.status)).map(item => <div key={item.id} className="models-pending-job"><span>{item.display_name ?? item.repo_id ?? "Local import"} · {item.status}</span><button type="button" disabled={Boolean(busy)} onClick={() => void changeJob(activeJob(item) ? "cancel" : "retry", item)}>{activeJob(item) ? "Cancel" : "Retry"}</button><ImportJobDetails job={item}>{!activeJob(item) ? <button type="button" disabled={Boolean(busy)} onClick={() => void changeJob("discard", item)}>Discard temporary files</button> : null}</ImportJobDetails></div>)}</details> : null}
+        {jobs.some(item => item.status === "complete") ? <details className="models-disclosure"><summary>Recent downloads <span className="models-show-hide" /></summary>{jobs.filter(item => item.status === "complete").slice(-10).reverse().map(item => <ImportJobDetails key={item.id} job={item} />)}</details> : null}
+      </> : <>
+        <div className="models-choice-heading"><div><h3>{local ? sourcePath.split(/[\\/]/).at(-1) : hub?.repo_id.split("/").at(-1)}</h3><p>{local ? "Local GGUF" : hub?.repo_id}</p></div>{!local && hub ? <a href={"https://huggingface.co/" + hub.repo_id + "/blob/" + hub.resolved_revision + "/README.md"} target="_blank" rel="noopener noreferrer">Model guide <Icon name="knowledge" size={16} /></a> : null}</div>
+        <div className="models-choice-grid"><section className="models-quant-panel"><div className="models-quant-heading"><h3>{local ? "Local file" : "Quantization"}</h3>{hub ? <div className="models-quant-tools"><select aria-label="Image input" value={projector} onChange={event => setProjector(event.target.value)}><option value="" disabled>Image input</option><option value="text-only">Text only</option>{hub.projectors.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select><MenuPopover label="Model card presets" panelClassName="models-menu" placement="below" trigger={<>Model card</>}>{hub.response_recipes?.length ? hub.response_recipes.map(item => <label className="models-recipe-choice" key={item.id}><input type="checkbox" checked={recipeIds.includes(item.id)} onChange={event => setRecipeIds(current => event.target.checked ? [...current, item.id] : current.filter(id => id !== item.id))} /><span><strong>{item.name}</strong><small>{item.reasoning === "preserve" ? "Thinking unchanged" : "Thinking " + item.reasoning}</small></span></label>) : <p className="hint">No model-card setups.</p>}</MenuPopover></div> : null}</div>
+          {local ? <p className="model-local-filename">{sourcePath}</p> : <><div className="models-quant-legend"><span><i className="model-fit-dot" data-fit="green" />Fits VRAM</span><span><i className="model-fit-dot" data-fit="amber" />RAM spill</span><span><i className="model-fit-dot" data-fit="red" />Unlikely</span></div><div className="model-quant-grid" role="radiogroup" aria-label="Quantization">{variantFamilies(hub?.variants ?? [], "all", "asc").map(group => <div className="models-quant-row" key={group.family}><span className="models-quant-axis">{group.family}</span><div className="models-quant-cells">{group.items.map(({ variant: item, quant, flavour }) => { const fit = capacityFit(estimates.answers[item.name]); return <button type="button" key={item.name} role="radio" aria-checked={item.name === variant} tabIndex={item.name === variant || !variant && item === hub?.variants.find(item => item.complete) ? 0 : -1} aria-label={quant + " " + flavour + ", " + (item.size_bytes == null ? "size unknown" : formatBytes(item.size_bytes)) + (item.complete ? "" : ", missing shards")} title={item.name + " · " + (fit === "unknown" ? "Memory estimate unknown" : "Advisory memory estimate")} className="models-quant-tile" disabled={!item.complete || jobRunning} onClick={() => setVariant(item.name)} onKeyDown={quantKey}><strong>{quant}{item.name === variant ? <Icon name="check" size={12} /> : null}</strong>{flavour !== "Standard" ? <small className="models-quant-flavour">{flavour}</small> : null}<span className="models-quant-size" data-fit={fit}>{item.size_bytes == null ? "—" : formatBytes(item.size_bytes)}{!item.complete ? " !" : ""}</span></button>; })}</div></div>)}</div></>}
+          <details className="models-disclosure"><summary>Files &amp; source <span className="models-show-hide" /></summary><p className="hint">{local ? sourcePath : hub?.repo_id + " @ " + hub?.resolved_revision}</p><ul className="plain-list">{exactFiles.map(file => <li key={file}>{file}</li>)}</ul>{local ? <CompactSwitch label="Copy into model storage" checked={copyLocal} onChange={setCopyLocal} description="Turn off to use original files without making a copy." /> : null}{hub?.warnings.map((warning, index) => <p className="hint" key={index}>{warning}</p>)}{hub?.gguf_candidates?.map(candidate => <button type="button" key={candidate.repo_id} onClick={() => void inspectRepository(candidate.repo_id)}>Inspect GGUF · {candidate.repo_id}</button>)}</details>
+          {sameJob ? <ImportJobDetails job={sameJob} /> : null}
+        </section><ModelCapacityPreview estimate={estimate} startup={startup} onChange={next => { previewEdited.current = true; if (next.spec_type === "draft-mtp" && !estimate?.builtin_mtp && estimate?.mtp_draft_files?.length) next.spec_draft_model = estimate.mtp_draft_files[0]; else delete next.spec_draft_model; setStartup(next); }} error={estimates.error} /></div>
+      </>}
+    </div>
+    <footer className="models-add-footer"><div>{step ? <button type="button" className="text-button" onClick={() => setStep(0)}><Icon name="back" size={16} />Back to Find</button> : <span className="hint">Find a model or choose a local file.</span>}</div>{step === 1 ? <div className="models-download-action">{sameJob ? <span className="models-download-progress" role="status">{progress ? <><progress max={100} value={percent ?? undefined} />{formatBytes(progress.bytes_done)}{speed != null && jobRunning ? " · " + (speed * 8 / 1_000_000).toFixed(1) + " Mb/s" : ""}{percent != null ? " · " + percent + "%" : ""}</> : sameJob.status}</span> : null}{jobRunning ? <button type="button" disabled={Boolean(busy)} onClick={() => void changeJob("cancel")}>Cancel</button> : sameJob?.status === "failed" || ["stopped", "interrupted"].includes(sameJob?.status ?? "") ? <button type="button" className="primary-button" disabled={Boolean(busy)} onClick={() => void changeJob("retry")}>Retry</button> : sameJob?.status === "complete" && sameJob.bundle_id ? <button type="button" className="primary-button" onClick={() => onOpenModel?.(sameJob.bundle_id!)}>Open model</button> : <button type="button" className="primary-button" disabled={!canAdd || Boolean(busy)} onClick={() => void download()}>{busy === "download" ? "Starting…" : local ? "Add model" : "Download"}</button>}</div> : null}</footer>
   </section>;
 }

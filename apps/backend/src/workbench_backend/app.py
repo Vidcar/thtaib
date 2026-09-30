@@ -133,6 +133,7 @@ async def _app_lifespan(application: FastAPI) -> AsyncIterator[None]:
             closer()
     manager = getattr(application.state, "manager", None)
     if manager is not None:
+        manager.capability_checks.close()
         manager.imports.close()
     store = getattr(application.state, "app_store", None)
     if store is not None:

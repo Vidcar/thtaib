@@ -160,8 +160,10 @@ class CompatibilityService:
     def assess_bundle(self, bundle: ModelBundle) -> CompatibilityAssessment:
         return self.assess(
             selector=bundle.id,
-            display_name=bundle.display_name,
-            extra_selectors=(bundle.id, bundle.display_name),
+            extra_selectors=tuple(value for value in (
+                bundle.source.repo_id, bundle.source.original_path,
+                *[item.name for item in bundle.files],
+            ) if value),
         )
 
     def assess(

@@ -585,7 +585,8 @@ export interface paths {
         delete: operations["delete_bundle_v1_bundles__bundle_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** Rename Bundle */
+        patch: operations["rename_bundle_v1_bundles__bundle_id__patch"];
         trace?: never;
     };
     "/v1/bundles/{bundle_id}/chat-template": {
@@ -805,23 +806,6 @@ export interface paths {
         put?: never;
         /** Refresh Response Recipes */
         post: operations["refresh_response_recipes_v1_bundles__bundle_id__response_recipes_refresh_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/bundles/{bundle_id}/response-recipes/{recipe_id}/visibility": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /** Set Response Recipe Visibility */
-        put: operations["set_response_recipe_visibility_v1_bundles__bundle_id__response_recipes__recipe_id__visibility_put"];
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1114,6 +1098,24 @@ export interface paths {
         put?: never;
         /** Assess */
         post: operations["assess_v1_compatibility_assess_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/compatibility/configurations/{configuration_id}/probes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Configuration Evidence */
+        get: operations["configuration_evidence_v1_compatibility_configurations__configuration_id__probes_get"];
+        put?: never;
+        /** Probe Configuration */
+        post: operations["probe_configuration_v1_compatibility_configurations__configuration_id__probes_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3651,6 +3653,13 @@ export interface components {
         };
         /** CapabilityProbeReport */
         CapabilityProbeReport: {
+            /** Applicable Capabilities */
+            applicable_capabilities?: ("text_stream" | "tools" | "structured_native" | "structured_tools" | "structured_with_tools" | "structured_tools_with_tools" | "reasoning" | "reasoning_replay" | "image" | "tool_image")[];
+            /**
+             * Automatic Running
+             * @default false
+             */
+            automatic_running: boolean;
             /** Current Fingerprint */
             current_fingerprint: string;
             /** Current Support */
@@ -3660,6 +3669,8 @@ export interface components {
             /** Evidence */
             evidence: components["schemas"]["CapabilityEvidence"][];
             image_setup: components["schemas"]["ImageProbeSetup"];
+            /** Running Capability */
+            running_capability?: ("text_stream" | "tools" | "structured_native" | "structured_tools" | "structured_with_tools" | "structured_tools_with_tools" | "reasoning" | "reasoning_replay" | "image" | "tool_image") | null;
         };
         /** CapabilityProbeRequest */
         CapabilityProbeRequest: {
@@ -3668,6 +3679,10 @@ export interface components {
              * @enum {string}
              */
             capability: "text_stream" | "tools" | "structured_native" | "structured_tools" | "structured_with_tools" | "structured_tools_with_tools" | "reasoning" | "reasoning_replay" | "image" | "tool_image";
+            /** Configuration Id */
+            configuration_id?: string | null;
+            /** Expected Configuration Revision */
+            expected_configuration_revision?: number | null;
             /** Per Request */
             per_request?: {
                 [key: string]: unknown;
@@ -5374,10 +5389,16 @@ export interface components {
         };
         /** HubSearchResult */
         HubSearchResult: {
+            /** Advertised Capabilities */
+            advertised_capabilities?: string[];
+            /** Complete Variants */
+            complete_variants?: number | null;
             /** Downloads */
             downloads?: number | null;
             /** Likes */
             likes?: number | null;
+            /** Metadata Source */
+            metadata_source?: string | null;
             /** Repo Id */
             repo_id: string;
         };
@@ -5417,8 +5438,6 @@ export interface components {
             generation_defaults?: {
                 [key: string]: unknown;
             };
-            /** Hidden Response Recipe Ids */
-            hidden_response_recipe_ids?: string[];
             /** Metadata Refreshed At */
             metadata_refreshed_at?: string | null;
             /** Response Recipes */
@@ -5462,16 +5481,6 @@ export interface components {
             default_recipe_id?: string | null;
             /** Display Name */
             display_name?: string | null;
-            /** Initial Per Request */
-            initial_per_request?: {
-                [key: string]: unknown;
-            };
-            /** Initial Recipe Id */
-            initial_recipe_id?: string | null;
-            /** Initial Startup */
-            initial_startup?: {
-                [key: string]: unknown;
-            };
             /** Recipe Ids */
             recipe_ids?: string[];
             /** Repo Id */
@@ -5546,16 +5555,6 @@ export interface components {
             finished_at?: string | null;
             /** Id */
             id: string;
-            /** Initial Per Request */
-            initial_per_request?: {
-                [key: string]: unknown;
-            };
-            /** Initial Recipe Id */
-            initial_recipe_id?: string | null;
-            /** Initial Startup */
-            initial_startup?: {
-                [key: string]: unknown;
-            };
             /** Install Root */
             install_root?: string | null;
             kind: components["schemas"]["BundleSourceKind"];
@@ -6377,16 +6376,6 @@ export interface components {
             copy_files: boolean;
             /** Display Name */
             display_name?: string | null;
-            /** Initial Per Request */
-            initial_per_request?: {
-                [key: string]: unknown;
-            };
-            /** Initial Recipe Id */
-            initial_recipe_id?: string | null;
-            /** Initial Startup */
-            initial_startup?: {
-                [key: string]: unknown;
-            };
             /** Source Path */
             source_path: string;
         };
@@ -6612,6 +6601,12 @@ export interface components {
         };
         /** ModelEstimateRequest */
         ModelEstimateRequest: {
+            /**
+             * Basis
+             * @default available
+             * @enum {string}
+             */
+            basis: "available" | "capacity";
             /** Bundle Id */
             bundle_id?: string | null;
             /**
@@ -6636,6 +6631,8 @@ export interface components {
              * @default main
              */
             revision: string;
+            /** Source Path */
+            source_path?: string | null;
             /** Startup */
             startup?: {
                 [key: string]: unknown;
@@ -6667,6 +6664,12 @@ export interface components {
             assumptions?: string[];
             /** Attention Cache Bytes */
             attention_cache_bytes?: number | null;
+            /**
+             * Basis
+             * @default available
+             * @enum {string}
+             */
+            basis: "available" | "capacity";
             /**
              * Builtin Mtp
              * @default false
@@ -6704,8 +6707,17 @@ export interface components {
             evaluated_startup?: {
                 [key: string]: unknown;
             };
+            /** Gpu Budget Bytes */
+            gpu_budget_bytes?: {
+                [key: string]: number | null;
+            };
             /** Gpu Bytes */
             gpu_bytes?: number | null;
+            /**
+             * Gpu Headroom Bytes
+             * @default 0
+             */
+            gpu_headroom_bytes: number;
             hardware: components["schemas"]["HardwareMemoryObservation"];
             /** Kv Bytes */
             kv_bytes?: number | null;
@@ -6725,8 +6737,15 @@ export interface components {
             projector_bytes?: number | null;
             /** Projector Disk Bytes */
             projector_disk_bytes?: number | null;
+            /** Ram Budget Bytes */
+            ram_budget_bytes?: number | null;
             /** Ram Bytes */
             ram_bytes?: number | null;
+            /**
+             * Ram Headroom Bytes
+             * @default 0
+             */
+            ram_headroom_bytes: number;
             /** Recurrent State Bytes */
             recurrent_state_bytes?: number | null;
             /** Runtime Overhead Bytes */
@@ -7204,6 +7223,11 @@ export interface components {
             /** Path */
             path: string;
         };
+        /** RenameBundleRequest */
+        RenameBundleRequest: {
+            /** Display Name */
+            display_name: string;
+        };
         /** RenameProfileRequest */
         RenameProfileRequest: {
             /** Display Name */
@@ -7373,19 +7397,6 @@ export interface components {
             source_repo_id: string;
             /** Source Revision */
             source_revision: string;
-        };
-        /** ResponseRecipeRefreshRequest */
-        ResponseRecipeRefreshRequest: {
-            /**
-             * Restore Hidden
-             * @default false
-             */
-            restore_hidden: boolean;
-        };
-        /** ResponseRecipeVisibilityRequest */
-        ResponseRecipeVisibilityRequest: {
-            /** Visible */
-            visible: boolean;
         };
         /** RetainedAsset */
         RetainedAsset: {
@@ -8703,6 +8714,7 @@ export type SchemaProjectorCandidate = components['schemas']['ProjectorCandidate
 export type SchemaProjectorSelectionRequest = components['schemas']['ProjectorSelectionRequest'];
 export type SchemaReconfigureDeploymentRequest = components['schemas']['ReconfigureDeploymentRequest'];
 export type SchemaRelatedFile = components['schemas']['RelatedFile'];
+export type SchemaRenameBundleRequest = components['schemas']['RenameBundleRequest'];
 export type SchemaRenameProfileRequest = components['schemas']['RenameProfileRequest'];
 export type SchemaResizeAction = components['schemas']['ResizeAction'];
 export type SchemaResolvedSetting = components['schemas']['ResolvedSetting'];
@@ -8713,8 +8725,6 @@ export type SchemaResponseRecipe = components['schemas']['ResponseRecipe'];
 export type SchemaResponseRecipeConfigurationRequest = components['schemas']['ResponseRecipeConfigurationRequest'];
 export type SchemaResponseRecipeConfigurationResult = components['schemas']['ResponseRecipeConfigurationResult'];
 export type SchemaResponseRecipeOrigin = components['schemas']['ResponseRecipeOrigin'];
-export type SchemaResponseRecipeRefreshRequest = components['schemas']['ResponseRecipeRefreshRequest'];
-export type SchemaResponseRecipeVisibilityRequest = components['schemas']['ResponseRecipeVisibilityRequest'];
 export type SchemaRetainedAsset = components['schemas']['RetainedAsset'];
 export type SchemaRetainedAssetContent = components['schemas']['RetainedAssetContent'];
 export type SchemaRetainedAssetDeletionPreview = components['schemas']['RetainedAssetDeletionPreview'];
@@ -10052,6 +10062,41 @@ export interface operations {
             };
         };
     };
+    rename_bundle_v1_bundles__bundle_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bundle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameBundleRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelBundle"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     select_bundle_chat_template_v1_bundles__bundle_id__chat_template_put: {
         parameters: {
             query?: never;
@@ -10527,47 +10572,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["ResponseRecipeRefreshRequest"] | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ModelBundle"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    set_response_recipe_visibility_v1_bundles__bundle_id__response_recipes__recipe_id__visibility_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                bundle_id: string;
-                recipe_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ResponseRecipeVisibilityRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -11252,9 +11257,80 @@ export interface operations {
             };
         };
     };
-    probe_evidence_v1_compatibility_deployments__deployment_id__probes_get: {
+    configuration_evidence_v1_compatibility_configurations__configuration_id__probes_get: {
+        parameters: {
+            query?: {
+                expected_configuration_revision?: number | null;
+            };
+            header?: never;
+            path: {
+                configuration_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilityProbeReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    probe_configuration_v1_compatibility_configurations__configuration_id__probes_post: {
         parameters: {
             query?: never;
+            header?: never;
+            path: {
+                configuration_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CapabilityProbeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilityEvidence"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    probe_evidence_v1_compatibility_deployments__deployment_id__probes_get: {
+        parameters: {
+            query?: {
+                configuration_id?: string | null;
+                expected_configuration_revision?: number | null;
+            };
             header?: never;
             path: {
                 deployment_id: string;

@@ -237,7 +237,7 @@ class SetupService:
 
     def _record_missing_model_issues(self, configuration: SetupConfiguration, issues: list[SetupDependencyIssue]) -> None:
         if configuration.bundle_id and not configuration.deployment_id and not configuration.model_configuration_id:
-            issues.append(SetupDependencyIssue(kind="deployment_id", id=configuration.bundle_id, reason="choose a saved deployment for this model"))
+            issues.append(SetupDependencyIssue(kind="deployment_id", id=configuration.bundle_id, reason="create or choose a saved setup in Models"))
         for field, getter in [("deployment_id", self.manager.store.get_deployment), ("embedding_deployment_id", self.manager.store.get_deployment), ("profile_id", self.manager.store.get_profile), ("model_configuration_id", self.manager.store.get_profile), ("bundle_id", self.manager.store.get_bundle)]:
             selected = getattr(configuration, field)
             if selected and getter(selected) is None:
@@ -526,10 +526,8 @@ class SetupService:
     def _apply_model_configuration(self, values: dict, effective: dict, *, read_only: bool, prepare_model: bool) -> None:
         configuration_id = values.get("model_configuration_id")
         if not configuration_id and values.get("bundle_id") and not values.get("deployment_id") and hasattr(self, "manager"):
-            # A preview may inspect this bundle but must not synthesize or
-            # persist its default configuration. Actual apply may prepare it.
-            if not read_only:
-                self.manager.list_model_configurations(values["bundle_id"])
+            # A bundle with no preferred setup remains unselected. Reading or
+            # applying it must never manufacture a setup or pick another one.
             bundle = self.manager.store.get_bundle(values["bundle_id"])
             configuration_id = bundle.default_configuration_id if bundle else None
             if configuration_id:
@@ -558,7 +556,7 @@ class SetupService:
                 candidate_bags.startup = resolve_bags(startup=requested_startup, startup_defaults={
                     key: value for key, value in profile.bags.startup.applied.items()
                     if key not in profile.bags.startup.requested}).startup
-                selected = self.manager.compatible_deployment(profile.bundle_id, candidate_bags)
+                selected = self.manager.compatible_deployment(profile.bundle_id, candidate_bags, require_named_origin=True)
                 if selected is None and prepare_model:
                     from workbench_backend.inference.schemas import ManagedDeploymentRequest
                     selected = self.manager.create_managed(ManagedDeploymentRequest(bundle_id=profile.bundle_id,

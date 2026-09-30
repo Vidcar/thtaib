@@ -11,7 +11,7 @@ export function startupPayload(settings: Record<string, string>, advanced: strin
   }
   const numeric = ["ctx_size", "n_gpu_layers", "threads", "threads_batch", "parallel", "port", "batch_size", "ubatch_size", "reasoning_budget", "spec_draft_n_max", "spec_draft_n_min", "spec_draft_ngl", "spec_draft_threads", "spec_draft_threads_batch"];
   const decimal = ["spec_draft_p_min", "spec_draft_p_split"];
-  const boolean = new Set(["kv_offload", "kv_unified", "op_offload", "mmproj_use_gpu"]);
+  const boolean = new Set(["kv_offload", "kv_unified", "op_offload", "mmproj_use_gpu", "swa_full"]);
   if (profileStartup) {
     const edits: Record<string, unknown> = {};
     for (const key of new Set([...Object.keys(extra), ...Object.keys(profileStartup).filter(key => !(key in settings))])) {

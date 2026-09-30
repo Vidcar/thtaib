@@ -44,22 +44,6 @@ from workbench_backend.paths import WorkbenchPaths
 FUTURE_INSTALL_ROOT_KEY = "models.future_install_root"
 
 
-def _installed_draft_path(bundle: ModelBundle, startup: dict) -> dict:
-    """Point a pre-download MTP file name at the installed GGUF, or drop an unresolved draft."""
-    draft = startup.get("spec_draft_model")
-    if not isinstance(draft, str) or not draft or Path(draft).is_file():
-        return startup
-    normalized = draft.replace("\\", "/")
-    match = next((item for item in bundle.files if item.name.replace("\\", "/") == normalized), None)
-    if match is not None and Path(match.path).is_file():
-        startup["spec_draft_model"] = match.path
-        return startup
-    startup.pop("spec_draft_model", None)
-    if startup.get("spec_type") == "draft-mtp":
-        startup.pop("spec_type", None)
-    return startup
-
-
 class ImportJobRunner:
     """Owns asynchronous import workers and durable job state.
 
@@ -149,15 +133,11 @@ class ImportJobRunner:
 
     def start_huggingface(self, request: HuggingFaceImportRequest, *, retry_of: str | None = None) -> ImportJob:
         with self._job_lock:
-            from workbench_backend.inference.settings import resolve_bags
-            initial = resolve_bags(startup=request.initial_startup, per_request=request.initial_per_request)
-            if initial.startup.unsupported or initial.per_request.unsupported:
-                raise ManagerError("Check the selected setup values before downloading.", code="import_initial_settings", status_code=400)
             listing = self.bundles.hf.inspect(repo_id=request.repo_id, revision=request.revision)
             if request.default_recipe_id and request.default_recipe_id not in request.recipe_ids:
                 raise ManagerError("The default recipe must also be selected.", code="recipe_default", status_code=400)
             selected_files = list(request.allow_patterns or [])
-            chosen_recipes = list(request.recipe_ids) + ([request.initial_recipe_id] if request.initial_recipe_id else [])
+            chosen_recipes = list(request.recipe_ids)
             if chosen_recipes:
                 with_recipes = self.bundles.hf.inspect(repo_id=listing.repo_id,
                     revision=listing.resolved_revision, include_recipes=True)
@@ -197,9 +177,6 @@ class ImportJobRunner:
                 allow_patterns=pinned.allow_patterns,
                 recipe_ids=list(request.recipe_ids),
                 default_recipe_id=request.default_recipe_id,
-                initial_startup=dict(request.initial_startup),
-                initial_per_request=dict(request.initial_per_request),
-                initial_recipe_id=request.initial_recipe_id,
                 staging_path=str(staging),
                 install_root=str(self._future_install_root()),
                 retry_of=retry_of,
@@ -212,12 +189,6 @@ class ImportJobRunner:
 
     def start_local(self, request: LocalImportRequest, *, retry_of: str | None = None) -> ImportJob:
         with self._job_lock:
-            from workbench_backend.inference.settings import resolve_bags
-            initial = resolve_bags(startup=request.initial_startup, per_request=request.initial_per_request)
-            if initial.startup.unsupported or initial.per_request.unsupported:
-                raise ManagerError("Check the selected setup values before importing.", code="import_initial_settings", status_code=400)
-            if request.initial_recipe_id:
-                raise ManagerError("Local files do not have a pinned publisher recipe. Import them first, then choose response settings in Models.", code="recipe_source", status_code=400)
             job = ImportJob(
                 id=new_id("import"),
                 kind=BundleSourceKind.local,
@@ -226,8 +197,6 @@ class ImportJobRunner:
                 created_at=utc_now(),
                 updated_at=utc_now(),
                 source_path=request.source_path,
-                initial_startup=dict(request.initial_startup),
-                initial_per_request=dict(request.initial_per_request),
                 install_root=str(self._future_install_root()),
                 retry_of=retry_of,
                 progress=ImportProgress(stage=ImportStage.queued, message="Waiting to start"),
@@ -344,9 +313,6 @@ class ImportJobRunner:
                 display_name=job.display_name,
                 recipe_ids=list(job.recipe_ids),
                 default_recipe_id=job.default_recipe_id,
-                initial_startup=dict(job.initial_startup),
-                initial_per_request=dict(job.initial_per_request),
-                initial_recipe_id=job.initial_recipe_id,
             )
             retried = self.start_huggingface(request, retry_of=job.id)
         else:
@@ -354,7 +320,7 @@ class ImportJobRunner:
                 raise ManagerError("Local retry is missing its source path.", code="job_retry_source", status_code=400)
             copy_files = self.store.get_setting(self._copy_files_key(job.id)) != "false"
             retried = self.start_local(LocalImportRequest(source_path=job.source_path, display_name=job.display_name,
-                copy_files=copy_files, initial_startup=job.initial_startup, initial_per_request=job.initial_per_request), retry_of=job.id)
+                copy_files=copy_files), retry_of=job.id)
         if job.kind == BundleSourceKind.local:
             self.store.put_setting(self._copy_files_key(retried.id), self.store.get_setting(self._copy_files_key(job.id)) or "true")
         return retried
@@ -935,7 +901,7 @@ class ImportJobRunner:
         )
 
     def _create_job_recipes(self, job: ImportJob, bundle: ModelBundle, *, recovering: bool = False) -> str | None:
-        if not job.recipe_ids and not (job.initial_startup or job.initial_per_request or job.initial_recipe_id):
+        if not job.recipe_ids:
             return None
         try:
             if recovering and bundle.huggingface_configuration is None:
@@ -959,7 +925,7 @@ class ImportJobRunner:
                 bundle = self.store.put_bundle(bundle.model_copy(update={"huggingface_configuration": configured}))
             elif recovering and bundle.huggingface_configuration is not None and not all(
                 recipe_id in {item.id for item in bundle.huggingface_configuration.response_recipes}
-                for recipe_id in [*job.recipe_ids, *([job.initial_recipe_id] if job.initial_recipe_id else [])]
+                for recipe_id in job.recipe_ids
             ):
                 from workbench_backend.inference.hf_configuration import response_recipes_from_bundle_card
                 from workbench_backend.inference.schemas import ResponseRecipe
@@ -969,11 +935,8 @@ class ImportJobRunner:
                         "response_recipes": [ResponseRecipe.model_validate(item) for item in recipes]})
                     bundle = self.store.put_bundle(bundle.model_copy(update={"huggingface_configuration": refreshed}))
             from workbench_backend.inference.recipe_configurations import create_recipe_configurations
-            self._create_initial_configuration(job, bundle)
-            initial_id = self._initial_configuration_id(job) if job.initial_startup or job.initial_per_request or job.initial_recipe_id else None
-            if job.recipe_ids:
-                create_recipe_configurations(self.store, bundle.id, job.recipe_ids, job.default_recipe_id,
-                    base_configuration_id=initial_id, configuration_namespace=initial_id)
+            create_recipe_configurations(self.store, bundle.id, job.recipe_ids, job.default_recipe_id,
+                configuration_namespace=self._recipe_configuration_namespace(job))
             return None
         except (ManagerError, OSError, ValueError) as exc:
             return exc.message if isinstance(exc, ManagerError) else str(exc)
@@ -981,49 +944,8 @@ class ImportJobRunner:
             logging.getLogger(__name__).exception("Response configuration creation failed after model installation")
             return "Model installed, but response configurations could not be saved. Open the model card and try again."
 
-    def _create_initial_configuration(self, job: ImportJob, bundle: ModelBundle) -> None:
-        """Freeze import choices before recipe cloning, including restart/retry."""
-        if not (job.initial_startup or job.initial_per_request or job.initial_recipe_id):
-            return
-        from workbench_backend.inference.configurations import ensure_model_configurations, model_default_values
-        from workbench_backend.inference.schemas import ResponseRecipeOrigin, RunProfile
-        from workbench_backend.inference.settings import resolve_bags
-        with self.store.configuration_lock():
-            ensure_model_configurations(self.store)
-            identity = self._initial_configuration_id(job)
-            if self.store.get_profile(identity) is not None:
-                return
-            current = self.store.get_bundle(bundle.id)
-            base = self.store.get_profile(current.default_configuration_id) if current else None
-            response = dict(base.bags.per_request.requested) if base else {}
-            origin = None
-            if job.initial_recipe_id:
-                from workbench_backend.inference.recipe_configurations import validate_response_recipe
-                recipe = validate_response_recipe(bundle, job.initial_recipe_id)
-                response.update(recipe.per_request)
-                if recipe.reasoning != "preserve":
-                    response["reasoning"] = recipe.reasoning
-                origin = ResponseRecipeOrigin(recipe_id=recipe.id, name=recipe.name,
-                    source_repo_id=recipe.source_repo_id, source_revision=recipe.source_revision,
-                    card_sha256=recipe.card_sha256, section=recipe.section)
-            response.update(job.initial_per_request)
-            now = utc_now()
-            startup = _installed_draft_path(bundle, dict(job.initial_startup))
-            initial_startup, response_defaults = model_default_values(self.store, bundle, startup=startup)
-            profile = RunProfile(id=identity, bundle_id=bundle.id, display_name="Import settings",
-                settings_schema_version=2,
-                bags=resolve_bags(startup=startup,
-                    startup_defaults=initial_startup,
-                    per_request={key: value for key, value in response.items() if value is not None},
-                    per_request_defaults=response_defaults),
-                recipe_origin=origin,
-                created_at=now, updated_at=now)
-            self.store.put_profile(profile)
-            if current is not None:
-                self.store.put_bundle(current.model_copy(update={"default_configuration_id": profile.id}))
-
-    def _initial_configuration_id(self, job: ImportJob) -> str:
-        """Keep one initial choice through a chain of retried jobs."""
+    def _recipe_configuration_namespace(self, job: ImportJob) -> str:
+        """Keep selected card setup identities through retried import jobs."""
         identity = job.id
         current = job
         seen = {identity}

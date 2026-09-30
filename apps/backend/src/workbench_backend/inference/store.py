@@ -214,8 +214,8 @@ class RecordStore:
         deployments = self._read_list(self.deployments_path, Deployment)
         bundles = {bundle.id: bundle for bundle in self.list_bundles()}
         runtime = self.read_runtime_manifest()
+        all_evidence = self.list_capability_evidence()
         for deployment in deployments:
-            deployment.capability_evidence = self.list_capability_evidence(deployment.id)
             bundle = bundles.get(deployment.bundle_id)
             deployment.inference_identity = {
                 "runtime": ({"release": runtime.release_tag, "executable": runtime.executable, "sha256": runtime.sha256,
@@ -223,8 +223,30 @@ class RecordStore:
                 "bundle_files": ([{"path": item.path, "sha256": item.sha256, "role": item.role.value}
                                   for item in [*bundle.files, *bundle.shards, *bundle.companions]] if bundle else []),
             }
+            if (bundle and bundle.huggingface_configuration and bundle.huggingface_configuration.template_file
+                    and not any(deployment.applied_startup.get(key) for key in ("chat_template", "chat_template_file"))):
+                deployment.inference_identity["selected_template_file"] = bundle.huggingface_configuration.template_file
+            if deployment.applied_startup.get("spec_draft_model"):
+                from workbench_backend.inference.hashes import observed_file_identity
+                draft_path = Path(str(deployment.applied_startup["spec_draft_model"]))
+                draft = observed_file_identity(draft_path)
+                if not draft.get("sha256"):
+                    for item in reversed(all_evidence):
+                        setup = item.get("setup")
+                        recorded = setup.get("external_draft_model") if isinstance(setup, dict) else None
+                        if isinstance(recorded, dict) and recorded.get("signature") == draft.get("signature"):
+                            draft = observed_file_identity(draft_path, recorded)
+                            break
+                deployment.inference_identity["external_draft_model"] = draft
             if deployment.inference_identity == {"runtime": None, "bundle_files": []}:
                 deployment.inference_identity = {}
+            from workbench_backend.inference.capabilities import artifact_proof_scope, setup_identity
+            current_scope = artifact_proof_scope(setup_identity(deployment))
+            deployment.capability_evidence = [item for item in all_evidence
+                if item.get("deployment_id") == deployment.id or (
+                    isinstance(item.get("setup"), dict)
+                    and item["setup"].get("probe_version") == 3
+                    and artifact_proof_scope(item["setup"]) == current_scope)]
         return deployments
 
     def put_deployment(self, deployment: Deployment) -> Deployment:
@@ -239,11 +261,11 @@ class RecordStore:
             )
             conn.commit()
 
-    def list_capability_evidence(self, deployment_id: str) -> list[dict[str, Any]]:
+    def list_capability_evidence(self, deployment_id: str | None = None) -> list[dict[str, Any]]:
         with _STORE_LOCK, closing(self._connect()) as conn:
             rows = conn.execute(
-                "SELECT payload FROM capability_evidence WHERE deployment_id = ? ORDER BY tested_at, rowid",
-                (deployment_id,),
+                "SELECT payload FROM capability_evidence" + (" WHERE deployment_id = ?" if deployment_id else "") + " ORDER BY tested_at, rowid",
+                (deployment_id,) if deployment_id else (),
             ).fetchall()
         return [json.loads(row["payload"]) for row in rows]
 
@@ -257,9 +279,21 @@ class RecordStore:
         with _STORE_LOCK:
             remaining = [item for item in self.list_deployments() if item.id != deployment_id]
             self._write_list(self.deployments_path, remaining)
-            with closing(self._connect()) as conn:
-                conn.execute("DELETE FROM capability_evidence WHERE deployment_id=?", (deployment_id,))
-                conn.commit()
+            # Evidence belongs to the proven artifact/setup scope. Replacing or
+            # clearing a deployment record must not force the same checks again.
+
+    def delete_bundle_capability_evidence(self, bundle_id: str, deployment_ids: set[str]) -> None:
+        """Permanent model removal also clears proof from replaced deployments."""
+        with _STORE_LOCK, closing(self._connect()) as conn:
+            rows = conn.execute("SELECT id, deployment_id, payload FROM capability_evidence").fetchall()
+            identifiers = []
+            for row in rows:
+                evidence = json.loads(row["payload"])
+                setup = evidence.get("setup") or {}
+                if row["deployment_id"] in deployment_ids or setup.get("bundle_id") == bundle_id:
+                    identifiers.append((row["id"],))
+            conn.executemany("DELETE FROM capability_evidence WHERE id = ?", identifiers)
+            conn.commit()
 
     def read_runtime_manifest(self) -> RuntimeManifest | None:
         if not self.runtime_manifest_path.is_file():

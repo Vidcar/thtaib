@@ -23,14 +23,13 @@ from workbench_backend.inference.schemas import (
     HuggingFaceConfiguration,
     RuntimeControlDescriptor,
     RuntimeControlOption,
-    ResponseRecipe,
     ResponsePreset,
     SettingsBag,
 )
 from workbench_backend.inference.settings import (
     DEFAULT_GPU_PROFILE, NATIVE_REQUEST_DEFAULTS, NATIVE_STARTUP_DEFAULTS,
     STARTUP_ENUMS, STARTUP_KEYS, PER_REQUEST_KEYS,
-    REQUEST_STARTUP_ALIASES, control_facts, normalize_per_request_requested,
+    REQUEST_STARTUP_ALIASES, control_facts,
 )
 
 SMALL_CONTEXT_VALUES = (1024, 2048, 4096, 8192, 16384)
@@ -85,18 +84,6 @@ def bundle_configuration_options(
                     default_value=value, default_source=source,
                     supported=True,
                 )
-        recipe = preferred_response_recipe(metadata, huggingface_configuration, deployment=deployment)
-        if recipe is not None:
-            values = {key: value for key, value in recipe.per_request.items() if key != "max_tokens"}
-            if recipe.reasoning != "preserve":
-                values["reasoning"] = recipe.reasoning
-            source = f"Model card {recipe.source_repo_id} · {recipe.name}"
-            for key, value in values.items():
-                descriptor = per_request_defaults.get(key)
-                if descriptor is not None:
-                    per_request_defaults[key] = descriptor.model_copy(update={
-                        "applied": value, "default_value": value, "default_source": source,
-                    })
     startup_defaults = {**_startup_catalogue(), **_startup_defaults(recommended_threads=recommended_threads),
         **_speculative_descriptors(metadata)}
     history = reasoning_history_descriptor(metadata, deployment)
@@ -307,32 +294,6 @@ def _startup_catalogue() -> dict[str, RuntimeControlDescriptor]:
             + [RuntimeControlOption(value=value, label=value.replace("-", " ").title())
                  for value in sorted(STARTUP_ENUMS.get(key, ()))],
     ) for key, flag in STARTUP_KEYS.items() if key not in REQUEST_STARTUP_ALIASES and key not in {"host", "port", "alias"}}
-
-
-def preferred_response_recipe(
-    metadata: GgufRuntimeMetadata, config: HuggingFaceConfiguration | None,
-    *, deployment: Deployment | None = None,
-) -> ResponseRecipe | None:
-    """Choose only one compatible recommendation matching the template default."""
-    if config is None:
-        return None
-    descriptors = _per_request_defaults(metadata, deployment)
-    mode = descriptors["reasoning"].default_value
-    candidates = []
-    for recipe in config.response_recipes:
-        if recipe.reasoning != "preserve" and (descriptors["reasoning"].supported is not True or recipe.reasoning != mode):
-            continue
-        _, invalid = normalize_per_request_requested(recipe.per_request)
-        if invalid:
-            continue
-        effort = recipe.per_request.get("reasoning_effort")
-        descriptor = descriptors["reasoning_effort"]
-        if effort not in {None, "default", "none"} and (
-            descriptor.supported is not True or descriptor.accepted_values is not None and effort not in descriptor.accepted_values
-        ):
-            continue
-        candidates.append(recipe)
-    return candidates[0] if len(candidates) == 1 else None
 
 
 def response_default_values(options: BundleConfigurationOptions) -> dict[str, Any]:

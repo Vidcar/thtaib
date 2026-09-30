@@ -26,10 +26,11 @@ class ResponseRebindingTests(unittest.TestCase):
         self.addCleanup(fixture.cleanup)
         self.paths = WorkbenchPaths(Path(fixture.name)).ensure()
         self.manager = ModelManager(self.paths)
+        self.addCleanup(self.manager.capability_checks.close)
         self.addCleanup(self.manager.imports.close)
         source_file = write_tiny_gguf(Path(fixture.name) / "model.gguf")
         self.bundle_id = self.manager.import_local(LocalImportRequest(source_path=str(source_file))).bundle_id
-        initial = self.manager.list_model_configurations(self.bundle_id)[0]
+        initial = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(display_name="Initial setup"))
         self.startup = {"ctx_size": 16384, "n_gpu_layers": "all", "reasoning_preserve": True}
         source = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
             configuration_id=initial.id, display_name="Thinking", startup=self.startup,

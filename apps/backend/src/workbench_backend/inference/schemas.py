@@ -103,7 +103,6 @@ class HuggingFaceConfiguration(BaseModel):
     template_compatible: bool | None = None
     generation_defaults: dict[str, Any] = Field(default_factory=dict)
     response_recipes: list[ResponseRecipe] = Field(default_factory=list)
-    hidden_response_recipe_ids: list[str] = Field(default_factory=list)
     metadata_refreshed_at: str | None = None
     unsupported: dict[str, str] = Field(default_factory=dict)
 
@@ -124,6 +123,11 @@ class ModelBundle(BaseModel):
     disk_matches: bool = True
     default_configuration_id: str | None = None
     huggingface_configuration: HuggingFaceConfiguration | None = None
+
+
+class RenameBundleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    display_name: str
 
 
 class ProjectorSelectionRequest(BaseModel):
@@ -186,9 +190,6 @@ class ImportJob(BaseModel):
     recipe_ids: list[str] = Field(default_factory=list)
     default_recipe_id: str | None = None
     configuration_error: str | None = None
-    initial_startup: dict[str, Any] = Field(default_factory=dict)
-    initial_per_request: dict[str, Any] = Field(default_factory=dict)
-    initial_recipe_id: str | None = None
 
 
 class StorageLocation(BaseModel):
@@ -213,15 +214,13 @@ class StorageSummary(BaseModel):
 
 
 class HuggingFaceImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     repo_id: str
     revision: str = "main"
     allow_patterns: list[str] | None = None
     display_name: str | None = None
     recipe_ids: list[str] = Field(default_factory=list)
     default_recipe_id: str | None = None
-    initial_startup: dict[str, Any] = Field(default_factory=dict)
-    initial_per_request: dict[str, Any] = Field(default_factory=dict)
-    initial_recipe_id: str | None = None
 
 
 class ChatTemplateSelectionRequest(BaseModel):
@@ -258,6 +257,8 @@ class HardwareMemoryObservation(BaseModel):
 class ModelEstimateRequest(BaseModel):
     bundle_id: str | None = None
     repo_id: str | None = None
+    source_path: str | None = None
+    basis: Literal["available", "capacity"] = "available"
     revision: str = "main"
     primary_files: list[str] = Field(default_factory=list, max_length=256)
     projector_files: list[str] = Field(default_factory=list, max_length=16)
@@ -268,6 +269,11 @@ class ModelEstimateRequest(BaseModel):
 
 class ModelMemoryEstimate(BaseModel):
     source: Literal["metadata", "native_prediction"] = "metadata"
+    basis: Literal["available", "capacity"] = "available"
+    gpu_headroom_bytes: int = 0
+    ram_headroom_bytes: int = 0
+    gpu_budget_bytes: dict[str, int | None] = Field(default_factory=dict)
+    ram_budget_bytes: int | None = None
     source_identity: str
     estimated_at: str
     calculation_ms: float | None = None
@@ -316,6 +322,9 @@ class HubSearchResult(BaseModel):
     repo_id: str
     downloads: int | None = None
     likes: int | None = None
+    complete_variants: int | None = None
+    advertised_capabilities: list[str] = Field(default_factory=list)
+    metadata_source: str | None = None
 
 
 class HubSource(BaseModel):
@@ -343,12 +352,10 @@ class HubRepository(BaseModel):
 
 
 class LocalImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     source_path: str
     display_name: str | None = None
     copy_files: bool = True
-    initial_startup: dict[str, Any] = Field(default_factory=dict)
-    initial_per_request: dict[str, Any] = Field(default_factory=dict)
-    initial_recipe_id: str | None = None
 
 
 class SettingNote(BaseModel):
@@ -412,14 +419,6 @@ class DefaultConfigurationRequest(BaseModel):
 class ResponseRecipeConfigurationRequest(BaseModel):
     recipe_ids: list[str] = Field(default_factory=list)
     default_recipe_id: str | None = None
-
-
-class ResponseRecipeVisibilityRequest(BaseModel):
-    visible: bool
-
-
-class ResponseRecipeRefreshRequest(BaseModel):
-    restore_hidden: bool = False
 
 
 class ResponseRecipeConfigurationResult(BaseModel):

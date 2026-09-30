@@ -25,61 +25,17 @@ try {
   await configurationNavigationOwnership(DeploymentsPanel);
   await configurationNavigationOwnership(DeploymentsPanel, true);
   await failedReloadFacts(DeploymentsPanel);
-  await draftCheckOwnership(DeploymentsPanel);
+  await import("./check-models-workspace.mjs");
   await projectKnowledgeOwnership(SetupConfigurationEditor);
   await agentOwnedSettings(SetupConfigurationEditor);
   await toolGroupSelection(SetupConfigurationEditor);
 } finally { globalThis.fetch = originalFetch; await vite.close(); }
 console.log("Unified settings save, revision, inheritance and explicit-none checks passed.");
 
-async function draftCheckOwnership(Panel) {
-  const models = ["first", "second"].map(id => ({ id, display_name: id, default_configuration_id: `${id}-default`, disk_matches: true, files: [], companions: [] }));
-  const profiles = ["first", "second"].map(id => ({ id: `${id}-default`, bundle_id: id, display_name: `${id} setup`, revision: 1, bags: { startup: bag({ ctx_size: 8192, fit: "off" }), per_request: bag({ temperature: 0.4 }), agent: bag({}) } }));
-  let selected = "first", renderer, release, delay = false, rejectResponse = false;
-  const calls = [];
-  globalThis.fetch = async (url, init = {}) => {
-    const address = String(url), body = init.body ? JSON.parse(init.body) : null; calls.push({ address, body });
-    if (address.endsWith("/v1/runtime")) return response({ status: "ready" });
-    if (address.endsWith("/v1/deployments")) return response([]);
-    if (address.endsWith("/v1/setup-resolution")) return response({ configuration: body.overrides, effective_values: {}, instruction_layers: [] });
-    if (address.includes("/configuration-options")) return response({ bundle_id: address.includes("/first/") ? "first" : "second", context_size: { maximum: 32768, options: [] }, gpu_layers: { maximum: 32, options: [] }, startup_defaults: {}, per_request_defaults: { temperature: { supported: true } }, metadata: {} });
-    if (address.endsWith("/v1/settings/preview")) {
-      const result = { startup: bag(body.startup), per_request: { ...bag(body.per_request), unsupported: rejectResponse ? ["invalid-response-marker"] : [] }, agent: bag({}) };
-      if (delay) return await new Promise(resolve => { release = () => resolve(response(result)); });
-      return response(result);
-    }
-    if (address.endsWith("/v1/hardware/estimate")) return response({ completeness: "unavailable", reasons: [], unknown_costs: [], gpu: {}, ram: {}, components: [], devices: [] });
-    throw new Error(`Unexpected check request ${address}`);
-  };
-  const props = () => ({ selectedBundleId: selected, initialBundles: models, initialProfiles: profiles });
-  const button = label => renderer.root.findAllByType("button").find(node => text(node) === label);
-  const results = () => renderer.root.findByProps({ className: "model-check-results" });
-  try {
-    await act(async () => { renderer = create(React.createElement(Panel, props())); await tick(); });
-    await act(async () => { button("Validate draft").props.onClick(); await tick(); });
-    assert.match(text(results()), /first setup.*Loading settings.*Response settings/);
-    assert.equal(calls.findLast(call => call.address.endsWith("/settings/preview")).body.startup.fit, "off");
-    await act(async () => { renderer.root.findByProps({ "aria-label": "GPU layers" }).props.onChange({ target: { value: "auto" } }); await tick(); });
-    await act(async () => { renderer.root.findAllByType("input").find(node => node.props.id === "model-response-temperature").props.onChange({ target: { value: "0.7" } }); await tick(); });
-    assert.match(text(results()), /Out of date/, "editing marks the exact checked draft obsolete");
-    rejectResponse = true;
-    await act(async () => { button("Validate draft").props.onClick(); await tick(); });
-    assert.match(text(results()), /Unsupported response: invalid-response-marker/, "response validation is visible beside loading validation");
-    assert.equal(calls.findLast(call => call.address.endsWith("/settings/preview")).body.startup.fit, "off", "GPU Auto preserves independent memory-fitting settings");
-    delay = true;
-    await act(async () => { button("Validate draft").props.onClick(); await tick(); });
-    assert.match(text(results()), /Checking this setup/);
-    await act(async () => { selected = "second"; renderer.update(React.createElement(Panel, props())); await tick(); });
-    assert.ok(!text(results()).includes("invalid-response-marker"), "another setup cannot inherit the previous check result");
-    await act(async () => { release(); await tick(); });
-    assert.ok(!text(results()).includes("invalid-response-marker"), "a late response cannot publish into the newly selected setup");
-    assert.equal(calls.some(call => call.address.endsWith("/configurations") || call.address.endsWith("/deployments/managed")), false, "checking never saves or loads");
-  } finally { if (release) release(); if (renderer) await act(async () => renderer.unmount()); }
-}
 
 async function configurations(Panel) {
   const calls = [];
-  const bundle = { id: "model", display_name: "Example model", default_configuration_id: "default", disk_matches: true, files: [], companions: [] };
+  const bundle = { id: "model", display_name: "Example model", default_configuration_id: "default", source: { kind: "local" }, disk_matches: true, files: [], companions: [] };
   let profiles = [{ id: "default", bundle_id: "model", display_name: "Example model", revision: 4, bags: { startup: bag({ ctx_size: 8192, parallel: 1 }), per_request: bag({ temperature: 0.5, max_tokens: 512 }), agent: bag({}) } }];
   let renderer;
   const options = { bundle_id: "model", context_size: { maximum: 32768, options: [4096, 8192, 16384, 32768].map(value => ({ value, label: String(value) })) }, gpu_layers: { maximum: 32, options: [] }, startup_defaults: {}, per_request_defaults: { reasoning: { supported: true }, reasoning_preserve: { supported: true } }, metadata: {} };
@@ -132,11 +88,11 @@ async function configurations(Panel) {
     await act(async () => { renderer.root.findAllByType('input').find(node => node.props.id === 'model-response-max_tokens').props.onChange({ target: { value: '512' } }); await tick(); });
 
     assert.match(settingDetails(contextInput(renderer)), /8,192 tokens.*Configuration default/, 'startup control displays its resolved value and saved source');
-    await act(async () => { renderer.root.findByProps({ 'aria-label': 'Advanced context mode' }).props.onChange({ target: { value: 'full' } }); await tick(); });
+    await act(async () => { renderer.root.findByProps({ 'aria-label': 'Context mode' }).props.onChange({ target: { value: 'full' } }); await tick(); });
     assert.equal(lastPreview().overrides.startup_overrides.ctx_size, 0, 'Full uses the native maximum directive rather than an exact numeric custom capacity');
     assert.equal(contextInput(renderer).props["data-token-value"], 32768, 'Full displays the supported maximum rather than zero tokens');
     await act(async () => { ownerControl(contextInput(renderer), "ContextSlider").props.onChange(32768); await tick(); });
-    assert.equal(renderer.root.findByProps({ 'aria-label': 'Advanced context mode' }).props.value, 'fixed', 'an exact maximum remains a fixed request');
+    assert.equal(renderer.root.findByProps({ 'aria-label': 'Context mode' }).props.value, 'fixed', 'an exact maximum remains a fixed request');
     await act(async () => { ownerControl(contextInput(renderer), "ContextSlider").props.onChange(16384); await tick(); });
     assert.equal(lastPreview().overrides.startup_overrides.ctx_size, 16384, 'staged launch changes reach the shared setup preview');
     const selectedOptions = calls.findLast(call => call.path.endsWith('/configuration-options'));
@@ -149,7 +105,7 @@ async function configurations(Panel) {
     assert.deepEqual(lastPreview().overrides.startup_overrides, {}, 'returning to the saved startup value removes the preview override');
     assert.match(settingDetails(contextInput(renderer)), /8,192 tokens.*Configuration default/, 'a reverted field follows the saved configuration again');
     assert.ok(!settingDetails(contextInput(renderer)).includes('Unsaved change'), 'reverted field clears its dirty provenance');
-    assert.equal(renderer.root.findByProps({ className: 'model-edit-state' }).props['data-dirty'], false, 'reverted editor clears its dirty indicator');
+    assert.equal(renderer.root.findByProps({ className: 'model-save-state' }).props['data-dirty'], false, 'reverted editor clears its dirty indicator');
     await act(async () => { ownerControl(contextInput(renderer), "ContextSlider").props.onChange(16384); await tick(); });
     const numeric = label => {
       const ids = { Temperature: 'model-response-temperature', 'Reply limit': 'model-response-max_tokens' };
@@ -187,15 +143,16 @@ async function configurations(Panel) {
     assert.equal(profiles[0].revision, 6);
     assert.equal(profiles[0].bags.startup.requested.port, undefined, "automatic port is not frozen into a saved configuration");
     assert.equal(calls.some(call => call.path.includes("/deployments/managed")), false, "saving never creates a deployment");
-    await act(async () => { button("Save a copy").props.onClick(); });
-    await act(async () => { button("Save copy").props.onClick(); await tick(); });
+    const menu = renderer.root.findAll(node => node.type?.name === "MenuPopover" && node.props.label === "Setup actions")[0];
+    await act(async () => { menu.props.children(() => {}).props.children.find(node => node?.props?.children === "Save a copy").props.onClick(); });
+    await act(async () => { renderer.root.findByProps({ className: "compact-dialog" }).findAllByType("button").find(node => text(node) === "Save").props.onClick(); await tick(); });
     assert.equal(profiles.length, 2, "only explicit Save a copy creates another configuration");
     assert.equal(profiles[1].display_name, "Example model copy");
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
 
 async function retainedModelDrafts(Panel) {
-  const bundles = ["first", "second"].map(id => ({ id, display_name: id, default_configuration_id: `${id}-default`, disk_matches: true, files: [], companions: [] }));
+  const bundles = ["first", "second"].map(id => ({ id, display_name: id, default_configuration_id: `${id}-default`, source: { kind: "local" }, disk_matches: true, files: [], companions: [] }));
   const profiles = [
     { id: "first-default", bundle_id: "first", display_name: "First default", revision: 1, bags: { startup: bag({ ctx_size: 8192 }), per_request: bag({}), agent: bag({}) } },
     { id: "first-variant", bundle_id: "first", display_name: "First variant", revision: 1, bags: { startup: bag({ ctx_size: 4096 }), per_request: bag({}), agent: bag({}) } },
@@ -252,7 +209,7 @@ async function projectKnowledgeOwnership(Editor) {
 }
 
 async function configurationNavigationOwnership(Panel, navigateBack = false) {
-  const bundles = ['first', 'second'].map(id => ({ id, display_name: id, default_configuration_id: `${id}-default`, disk_matches: true, files: [], companions: [] }));
+  const bundles = ['first', 'second'].map(id => ({ id, display_name: id, default_configuration_id: `${id}-default`, source: { kind: "local" }, disk_matches: true, files: [], companions: [] }));
   const profiles = bundles.map(bundle => ({ id: bundle.default_configuration_id, bundle_id: bundle.id, display_name: `${bundle.id} configuration`, revision: 1, bags: { startup: bag({ ctx_size: 8192 }), per_request: bag({}), agent: bag({}) } }));
   const saves = [];
   let selected = 'first', renderer, releasePreview;
@@ -285,7 +242,7 @@ async function configurationNavigationOwnership(Panel, navigateBack = false) {
     assert.equal(saves.length, 1);
     assert.ok(saves[0].path.includes('/first/'), 'a pending save remains owned by its original model');
     assert.equal(saves[0].body.startup.ctx_size, 16384, 'navigation cannot remove staged edits from an already requested save');
-    assert.equal(renderer.root.findAllByType('select').some(node => node.props.id === 'model-configuration'), false, 'a single setup does not add a selector');
+    assert.equal(renderer.root.findAllByType('select').some(node => node.props.id === 'model-configuration'), false, 'one saved setup uses a compact label');
     assert.equal(renderer.root.find(node => node.type?.name === 'DeploymentsPanel').props.selectedBundleId, selected, 'old completion cannot replace the newly selected model');
     if (navigateBack) assert.equal(Number(contextInput(renderer).props["data-token-value"]), 16384, 'the saved revision is visible after returning');
     assert.equal(text(renderer.root).includes('Setup saved.'), false, 'old status is not shown as completion for the new model');
@@ -295,7 +252,7 @@ async function configurationNavigationOwnership(Panel, navigateBack = false) {
 
 async function failedReloadFacts(Panel) {
   const profile = { id: 'config', bundle_id: 'model', display_name: 'Default', revision: 1, bags: { startup: bag({ ctx_size: 8192 }), per_request: bag({}), agent: bag({}) } };
-  const bundle = { id: 'model', display_name: 'Example', default_configuration_id: 'config', disk_matches: true, files: [], companions: [] };
+  const bundle = { id: 'model', display_name: 'Example', default_configuration_id: 'config', source: { kind: "local" }, disk_matches: true, files: [], companions: [] };
   let deployment = { id: 'deploy', bundle_id: 'model', profile_id: 'config', display_name: 'Example', scope: 'managed', status: 'running', health: { healthy: true }, server_props: { n_ctx: 8192 }, applied_startup: { ctx_size: 8192 }, settings: profile.bags, updated_at: 'old', startup_overrides: {} };
   let renderer, reads = 0;
   const originalError = 'The previous configuration is saved; recovery is needed.';
@@ -328,7 +285,7 @@ async function failedReloadFacts(Panel) {
 }
 
 async function sameBundleVariantsLoadSeparately(Panel) {
-  const bundle = { id: "model", display_name: "Example", default_configuration_id: "variant-a", disk_matches: true, files: [], companions: [] };
+  const bundle = { id: "model", display_name: "Example", default_configuration_id: "variant-a", source: { kind: "local" }, disk_matches: true, files: [], companions: [] };
   const profiles = ["a", "b"].map(name => ({ id: `variant-${name}`, bundle_id: "model", display_name: `Variant ${name.toUpperCase()}`, revision: 1, bags: { startup: bag({ ctx_size: name === "a" ? 8192 : 16384 }), per_request: bag({}), agent: bag({}) } }));
   const deployment = (name, ctx) => ({ id: `deploy-${name}`, bundle_id: "model", profile_id: `variant-${name}`, display_name: `managed:Variant ${name.toUpperCase()}`, scope: "managed", status: "running", health: { healthy: true }, server_props: { n_ctx: ctx }, applied_startup: { ctx_size: ctx }, settings: profiles.find(profile => profile.id === `variant-${name}`).bags, updated_at: "current", startup_overrides: {} });
   let deployments = [deployment("a", 8192)];

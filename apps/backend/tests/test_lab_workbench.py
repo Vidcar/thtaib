@@ -15,7 +15,7 @@ from workbench_backend.agents.harness import HarnessService
 
 from workbench_backend.errors import LabError, ManagerError
 from workbench_backend.inference.ids import utc_now
-from workbench_backend.inference.schemas import DeploymentStatus, LocalImportRequest, ManagedDeploymentRequest, PinRuntimeRequest, ServerProperties
+from workbench_backend.inference.schemas import DeploymentStatus, LocalImportRequest, ManagedDeploymentRequest, PinRuntimeRequest, ServerProperties, ModelConfigurationWriteRequest
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.lab.native import LabStopped, NativeLabClient, timing_sample
 from workbench_backend.lab.needles import needle_task, needle_text, score_needle
@@ -76,7 +76,7 @@ class LabWorkbenchTests(unittest.TestCase):
         gguf = write_tiny_gguf(Path(self.tmp.name) / "source" / "tiny.gguf", context_length=8192, block_count=8)
         imported = self.manager.import_local(LocalImportRequest(source_path=str(gguf)))
         self.bundle = self.manager.get_bundle(imported.bundle_id)
-        self.configuration = self.manager.list_model_configurations(self.bundle.id)[0]
+        self.configuration = self.manager.save_model_configuration(self.bundle.id, ModelConfigurationWriteRequest(display_name="Lab setup"))
         self.store = ApplicationStore(self.paths)
         self.service = LabWorkbenchService(lambda: self.manager, lambda: None, self.store, client_factory=FakeNative)
         self.service._recovered = True
@@ -319,7 +319,7 @@ class LabOwnershipTests(unittest.TestCase):
         self.manager = ModelManager(self.paths)
         imported = self.manager.import_local(LocalImportRequest(source_path=str(write_tiny_gguf(Path(self.tmp.name) / "source.gguf"))))
         self.bundle_id = imported.bundle_id
-        self.config = self.manager.list_model_configurations(self.bundle_id)[0]
+        self.config = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(display_name="Lab setup"))
         self.normal = self.manager.create_managed(ManagedDeploymentRequest(bundle_id=self.bundle_id, profile_id=self.config.id, auto_start=False))
 
     def tearDown(self):

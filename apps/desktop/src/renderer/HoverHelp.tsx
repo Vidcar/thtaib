@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
 
 /** Help is available to pointer, keyboard and touch without occupying the page. */
-export function HoverHelp({ title = "About this setting", children, triggerContent, triggerClassName, bubbleClassName, placement = "below", interactive = false }: {
+export function HoverHelp({ title = "About this setting", children, triggerContent, triggerClassName, bubbleClassName, placement = "below", interactive = false, mode = "hover" }: {
   title?: string;
   children: ReactNode;
   triggerContent?: ReactNode;
@@ -11,6 +11,7 @@ export function HoverHelp({ title = "About this setting", children, triggerConte
   bubbleClassName?: string;
   placement?: "above" | "below";
   interactive?: boolean;
+  mode?: "hover" | "click";
 }) {
   const id = useId();
   const trigger = useRef<HTMLButtonElement>(null);
@@ -68,10 +69,10 @@ export function HoverHelp({ title = "About this setting", children, triggerConte
     };
   }, [open, locate, dismiss]);
   useEffect(() => clearClose, [clearClose]);
-  return <span className="hover-help" onMouseEnter={() => { hovered.current = true; show(); }} onMouseLeave={() => { hovered.current = false; leave(); }}>
+  return <span className="hover-help" onMouseEnter={() => { if (mode === "hover") { hovered.current = true; show(); } }} onMouseLeave={() => { if (mode === "hover") { hovered.current = false; leave(); } }}>
     <button ref={trigger} type="button" className={triggerClassName ?? "help-icon"} aria-label={title} aria-describedby={open && !interactive ? id : undefined}
       aria-haspopup={interactive ? "dialog" : undefined} aria-expanded={interactive ? open : undefined} aria-controls={open && interactive ? id : undefined}
-      onFocus={() => { focused.current = true; show(); }} onBlur={() => { focused.current = false; leave(); }} onClick={show}
+      onFocus={() => { focused.current = true; if (mode === "hover") show(); }} onBlur={() => { focused.current = false; if (mode === "hover") leave(); }} onClick={() => mode === "click" && open ? dismiss() : show()}
       onKeyDown={(event) => {
         if (open && event.key === "Tab" && !event.shiftKey) {
           const control = bubble.current?.querySelector<HTMLElement>("button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex='0']");

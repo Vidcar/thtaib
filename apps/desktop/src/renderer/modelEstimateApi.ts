@@ -1,7 +1,7 @@
 import { request } from "./api";
 import type { SchemaModelEstimateRequest, SchemaModelMemoryEstimate } from "../generated/shared-contracts/openapi";
 
-export type ModelEstimateSelection = Omit<SchemaModelEstimateRequest, "refresh" | "revision" | "method"> & { revision?: string; method?: "metadata" | "native" };
+export type ModelEstimateSelection = Omit<SchemaModelEstimateRequest, "refresh" | "revision" | "method" | "basis"> & { revision?: string; method?: "metadata" | "native"; basis?: "available" | "capacity"; source_path?: string };
 export type ModelMemoryEstimate = SchemaModelMemoryEstimate;
 
 export function estimateModel(selection: ModelEstimateSelection, refresh = false, signal?: AbortSignal): Promise<ModelMemoryEstimate> {

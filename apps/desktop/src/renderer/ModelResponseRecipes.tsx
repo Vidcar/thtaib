@@ -42,6 +42,15 @@ export function ModelResponseRecipes({ bundle, onChanged, panel = false }: {
   bundle: ModelBundle; profiles?: RunProfile[]; onChanged: () => Promise<void>; panel?: boolean;
 }) {
   const recipes = bundle.huggingface_configuration?.response_recipes ?? [];
+  const [selectedRecipes, setSelectedRecipes] = useState(recipes.map(item => item.id));
+  const recipeIds = JSON.stringify(recipes.map(item => item.id));
+  useEffect(() => {
+    const offered = new Set<string>(JSON.parse(recipeIds));
+    setSelectedRecipes(current => {
+      const retained = current.filter(id => offered.has(id));
+      return retained.length === current.length ? current : retained;
+    });
+  }, [recipeIds]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [cardOpen, setCardOpen] = useState(panel);
@@ -95,6 +104,15 @@ export function ModelResponseRecipes({ bundle, onChanged, panel = false }: {
     }
   }
 
+  async function createSetups() {
+    const selected = selectedRecipes.filter(id => recipes.some(recipe => recipe.id === id));
+    if (!selected.length || busy) return;
+    setBusy(true); setNotice(null);
+    try { await api.createRecipeConfigurations(bundle.id, selected); await updateLibrary("Selected model-card setups added."); }
+    catch (failure) { setNotice({ tone: "error", text: errorMessage(failure) }); }
+    finally { setBusy(false); }
+  }
+
   async function refreshCard() {
     setBusy(true); setNotice(null);
     try {
@@ -117,7 +135,12 @@ export function ModelResponseRecipes({ bundle, onChanged, panel = false }: {
         img({ alt }) { return <span className="hint">{alt ? `[Image omitted: ${alt}]` : "[Image omitted]"}</span>; },
       }}>{card.markdown}</ReactMarkdown></div></> : null}
     </div> : null}
-    {!panel ? <><div className="section-heading"><div><h3 id="model-recipes-heading">Publisher recommendations</h3><p className="hint">Use model-card presets from the setup's Response section.</p></div><button type="button" disabled={busy} onClick={() => void refreshCard()}>{busy ? "Refreshing…" : "Refresh model card"}</button></div>
+    <details className="models-disclosure"><summary>Model-card setups <span className="models-show-hide" /></summary>
+      {notice ? <Notice tone={notice.tone}>{notice.text}</Notice> : null}
+      {recipes.length ? <>{recipes.map(recipe => <label key={recipe.id} className="models-recipe-choice"><input type="checkbox" checked={selectedRecipes.includes(recipe.id)} disabled={busy} onChange={event => setSelectedRecipes(current => event.target.checked ? [...current, recipe.id] : current.filter(id => id !== recipe.id))} /><span>{recipe.name}</span></label>)}<button type="button" disabled={busy || !selectedRecipes.length} onClick={() => void createSetups()}>Add selected setups</button></> : <p className="hint">No model-card setups are recorded.</p>}
+      <button type="button" className="text-button" disabled={busy} onClick={() => void refreshCard()}>Refresh model card</button>
+    </details>
+    {!panel ? <><div className="section-heading"><div><h3 id="model-recipes-heading">Publisher recommendations</h3><p className="hint">Select model-card setups above to add them to your library.</p></div><button type="button" disabled={busy} onClick={() => void refreshCard()}>{busy ? "Refreshing…" : "Refresh model card"}</button></div>
     <p className="hint">Refresh reads the recorded revision without downloading weights or changing saved setups.</p>
     {notice ? <Notice tone={notice.tone}>{notice.text}</Notice> : null}
     {recipes.length ? <dl className="model-recipe-reference">{recipes.map(recipe => <div key={recipe.id}><dt>{recipe.name}</dt><dd>{recipe.reasoning === "preserve" ? "Thinking unchanged" : `Thinking ${recipe.reasoning}`} · {Object.entries(recipe.per_request).map(([key, value]) => `${fieldNames[key] ?? key.replaceAll("_", " ")} ${settingValue(value)}`).join(" · ")}<small>{recipe.section} · <a href={cardUrl(recipe)} target="_blank" rel="noreferrer noopener">Pinned source ↗</a></small></dd></div>)}</dl> : <p className="hint">No clear response recipes are saved for this model.</p>}</> : null}

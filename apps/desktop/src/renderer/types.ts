@@ -101,7 +101,6 @@ export interface ModelBundle {
     template_compatible: boolean | null;
     generation_defaults: Record<string, unknown>;
     response_recipes?: ResponseRecipe[];
-    hidden_response_recipe_ids?: string[];
     metadata_refreshed_at?: string | null;
     unsupported: Record<string, string>;
   } | null;
@@ -114,6 +113,11 @@ export interface ImportJob {
   bundle_id: string | null;
   error: string | null;
   configuration_error?: string | null;
+  allow_patterns?: string[] | null;
+  source_path?: string | null;
+  retry_of?: string | null;
+  created_at?: string;
+  updated_at?: string | null;
   recipe_ids?: string[];
   default_recipe_id?: string | null;
   display_name?: string | null;

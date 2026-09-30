@@ -8,7 +8,7 @@ from pathlib import Path
 from jinja2 import Environment, TemplateSyntaxError, nodes
 
 from workbench_backend.errors import ManagerError
-from workbench_backend.inference.configurations import ensure_model_configurations, model_default_values
+from workbench_backend.inference.configurations import model_default_values
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.inspect import read_gguf_runtime_metadata
 from workbench_backend.inference.schemas import (
@@ -29,7 +29,6 @@ def create_recipe_configurations(
     recipe_ids: list[str],
     default_recipe_id: str | None = None,
     *,
-    base_configuration_id: str | None = None,
     configuration_namespace: str | None = None,
 ) -> ResponseRecipeConfigurationResult:
     """Validate the full choice first, then save each configuration once.
@@ -53,14 +52,9 @@ def create_recipe_configurations(
         if any(recipe_id not in available for recipe_id in recipe_ids):
             raise ManagerError("Selected response recipes no longer match this pinned model card. Refresh the card and choose again.",
                 code="recipe_stale", status_code=409)
-        selected = [validate_response_recipe(bundle, recipe_id) for recipe_id in recipe_ids]
-        ensure_model_configurations(store)
-        bundle = store.get_bundle(bundle_id)
-        assert bundle is not None
-        base_id = base_configuration_id or bundle.default_configuration_id
-        base = store.get_profile(base_id) if base_id else None
-        if base is None:
-            raise ManagerError("This model has no saved default configuration.", code="configuration_missing", status_code=409)
+        # Card order, rather than checkbox click order, determines the first
+        # preferred setup. Validate the complete choice before writing any.
+        selected = [validate_response_recipe(bundle, recipe_id) for recipe_id in available if recipe_id in recipe_ids]
         profiles = [item for item in store.list_profiles() if item.bundle_id == bundle_id]
         names = {item.display_name.strip().casefold() for item in profiles}
         by_recipe = {_origin_key(item.recipe_origin): item for item in profiles if item.recipe_origin is not None}
@@ -73,11 +67,11 @@ def create_recipe_configurations(
                 repr((configuration_namespace, origin_key)).encode()).hexdigest()[:24]) if configuration_namespace else None
             profile = store.get_profile(identity) if identity else by_recipe.get(origin_key)
             if profile is None:
-                requested = {**base.bags.per_request.requested, **recipe.per_request}
+                requested = dict(recipe.per_request)
                 if recipe.reasoning != "preserve":
                     requested["reasoning"] = recipe.reasoning
                 now = utc_now()
-                initial_startup, response_defaults = model_default_values(store, bundle, startup=base.bags.startup.requested)
+                initial_startup, response_defaults = model_default_values(store, bundle)
                 profile = RunProfile(
                     id=identity or new_id("profile"),
                     display_name=_unique_name(recipe.name, names),
@@ -90,7 +84,7 @@ def create_recipe_configurations(
                         card_sha256=recipe.card_sha256,
                         section=recipe.section,
                     ),
-                    bags=resolve_bags(startup=dict(base.bags.startup.requested), per_request=requested,
+                    bags=resolve_bags(per_request=requested,
                         startup_defaults=initial_startup, per_request_defaults=response_defaults),
                     settings_schema_version=2,
                     created_at=now,
@@ -99,8 +93,8 @@ def create_recipe_configurations(
                 store.put_profile(profile)
             by_recipe[origin_key] = profile
             results.append(profile)
-        if default_recipe_id:
-            chosen = by_recipe[_recipe_key(available[default_recipe_id])]
+        if default_recipe_id or results and not profiles:
+            chosen = by_recipe[_recipe_key(available[default_recipe_id])] if default_recipe_id else results[0]
             bundle = store.put_bundle(bundle.model_copy(update={"default_configuration_id": chosen.id}))
         return ResponseRecipeConfigurationResult(bundle=bundle, configurations=results)
 

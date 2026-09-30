@@ -83,3 +83,22 @@ def cached_sha256_file(path: Path) -> str:
                     _HASH_CACHE.popitem(last=False)
             return digest
     raise OSError(f"File changed while hashing: {path}")
+
+
+def observed_file_identity(path: Path, recorded: dict | None = None) -> dict:
+    """Read a bounded file signature and reuse only a previously verified hash.
+
+    Ordinary capability reads must not hash external draft-model weights. A
+    launch verifies those bytes with cached_sha256_file; persisted proof can
+    retain that result across app restarts while the same cache key still holds.
+    """
+    try:
+        key = _cache_key(path)
+    except OSError:
+        return {"path": str(path.resolve()), "state": "missing"}
+    signature = list(key)
+    with _HASH_CACHE_LOCK:
+        digest = _HASH_CACHE.get(key)
+    if digest is None and recorded and recorded.get("signature") == signature:
+        digest = recorded.get("sha256")
+    return {"signature": signature, "sha256": digest}
