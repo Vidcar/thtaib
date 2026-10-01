@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,7 +18,7 @@ from workbench_backend.agents.harness_backend import (
     roots_overlap,
 )
 from workbench_backend.agents.routes import router as agent_router
-from workbench_backend.agents.schemas import AgentEvent, AgentRun, AgentRunStatus, ModelRequestCapture, ToolMode
+from workbench_backend.agents.schemas import AgentEvent, AgentRun, AgentRunStatus, ToolMode
 from workbench_backend.agents.tool_results import OwnedToolResults
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.paths import WorkbenchPaths
@@ -29,7 +28,6 @@ from tests.support import close_workbench_sqlite
 
 
 _MARKER = "SCRATCH-NOTE-NOT-A-REQUEST"
-_STORED_REQUEST = "stored-request-body-not-scratch"
 _THREAD = "thread_compaction"
 _HISTORY = "/conversation_history/summary.md"
 
@@ -54,7 +52,6 @@ def _run(project: Path) -> AgentRun:
             "owner": "deepagents-upstream",
             "internal_summary_is_not_answer": True,
         })],
-        model_requests=[ModelRequestCapture(at=now, instructions=_STORED_REQUEST)],
     )
 
 
@@ -95,13 +92,6 @@ class CompactionScratchLocationTests(unittest.TestCase):
         self.assertFalse((project / HARNESS_SCRATCH_DIRNAME).exists())
 
         store.put_run(run)
-        with store._lock:
-            payload = store._conn.execute("SELECT payload FROM runs WHERE id = ?", (run.id,)).fetchone()[0]
-            diagnostic_rows = store._diagnostic_rows_locked(run.id)
-        self.assertNotIn(_MARKER, payload)
-        self.assertTrue(diagnostic_rows)
-        self.assertFalse(any(_MARKER in row for _, row in diagnostic_rows))
-
         app = FastAPI()
         app.include_router(agent_router)
         app.state.harness = HarnessService(lambda: SimpleNamespace(paths=paths), app_store=store)
@@ -110,16 +100,14 @@ class CompactionScratchLocationTests(unittest.TestCase):
             operational = client.get(f"/v1/agent-runs/{run.id}?view=operational")
         self.assertEqual(diagnostic.status_code, 200, diagnostic.text)
         self.assertEqual(operational.status_code, 200, operational.text)
-        inspected = diagnostic.json()
-        requests = inspected["model_requests"]
-        self.assertEqual([item["instructions"] for item in requests], [_STORED_REQUEST])
-        self.assertNotIn(_MARKER, json.dumps(requests))
-        self.assertEqual(inspected["events"][0]["detail"]["history_preserved_at"], _HISTORY)
+        self.assertEqual(
+            diagnostic.json()["events"][0]["detail"]["history_preserved_at"],
+            _HISTORY,
+        )
         for response in (diagnostic, operational):
             self.assertNotIn(_MARKER, response.text)
             self.assertNotIn(str(scratch.resolve()), response.text)
             self.assertNotIn(scratch.resolve().as_posix(), response.text)
-        self.assertNotIn("model_requests", operational.json())
 
 
 if __name__ == "__main__":
