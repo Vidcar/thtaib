@@ -8,9 +8,11 @@ from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 from workbench_backend.agents.schemas import RunFailure, ToolMode, ToolOutcome
 from workbench_backend.inference.ids import utc_now
+from workbench_backend.errors import HarnessError
 
 READ_ONLY_TOOLS = frozenset({"ls", "read_file", "glob", "grep", "read_attachment", "search_knowledge",
-    "web_search", "time_now", "echo", "write_todos", "ask_user", "browser_snapshot", "browser_take_screenshot"})
+    "web_search", "time_now", "echo", "write_todos", "ask_user", "browser_snapshot", "browser_take_screenshot",
+    "read_tool_result", "read_reference", "list_connection_resources", "read_connection_resource", "command_status"})
 
 
 def file_evidence(run: Any, name: str, args: dict) -> dict:
@@ -18,7 +20,7 @@ def file_evidence(run: Any, name: str, args: dict) -> dict:
     if getattr(run, "tool_mode", None) == ToolMode.recorded_tool:
         return {}
     path = args.get("file_path")
-    if name not in {"write_file", "edit_file"} or not run.project_path or not isinstance(path, str):
+    if name not in {"write_file", "edit_file", "apply_edits"} or not run.project_path or not isinstance(path, str):
         return {}
     from workbench_backend.agents.harness_backend import resolve_project_tool_path, is_reserved_framework_path
     if is_reserved_framework_path(path):
@@ -41,10 +43,13 @@ def file_evidence(run: Any, name: str, args: dict) -> dict:
                 new = new.replace("\r\n", "\n").replace("\r", "\n")
             if isinstance(old, str) and old and isinstance(new, str) and (text.count(old) == 1 or args.get("replace_all") and old in text):
                 expected = text.replace(old, new)
+        if name == "apply_edits" and before is not None and args.get("base_sha256") == evidence.get("before_sha256"):
+            from workbench_backend.agents.file_operations import ExactEdit, edited_original
+            expected, _ = edited_original(before.decode("utf-8"), [ExactEdit.model_validate(edit) for edit in args.get("edits", [])])
         if isinstance(expected, str):
             evidence["expected_sha256"] = hashlib.sha256(expected.encode("utf-8")).hexdigest()
         return evidence
-    except (OSError, ValueError, UnicodeError):
+    except (OSError, ValueError, UnicodeError, HarnessError):
         return {}
 
 
@@ -56,21 +61,26 @@ def result_outcome(call_id: str, name: str, result: Any, evidence: dict | None =
     # Native execute reports successful delivery separately from command exit.
     # Its artifact is structured evidence; never infer exit from output text.
     artifact = result.artifact if isinstance(result, ToolMessage) else None
-    exit_code = artifact.get("exit_code") if name == "execute" and isinstance(artifact, dict) else None
+    exit_code = artifact.get("exit_code") if name in {"execute", "execute_skill_script"} and isinstance(artifact, dict) else None
     command_failed = isinstance(exit_code, int) and not isinstance(exit_code, bool) and exit_code != 0
     interrupted_command = command_failed and exit_code in {124, 130}
     error = isinstance(result, ToolMessage) and (result.status == "error" or command_failed)
     content = result.content if isinstance(result, ToolMessage) else None
     settled_evidence = {**(evidence or {}), **({"exit_code": exit_code} if isinstance(exit_code, int) and not isinstance(exit_code, bool) else {})}
-    if name == "execute" and process_stopped is not None and "exit_code" in settled_evidence:
+    deletion_uncertain = name == "delete" and settled_evidence.get("expected_absent") and (
+        settled_evidence.get("after_inspected") is False
+        or settled_evidence.get("after_exists") is True and (not error or any(
+            settled_evidence.get(f"after_{key}") != settled_evidence.get(f"before_{key}") for key in ("entries", "files", "bytes"))))
+    if name in {"execute", "execute_skill_script"} and process_stopped is not None and "exit_code" in settled_evidence:
         # Supplied by the application-owned backend contract, never inferred
         # from a command's output text or a recorded fixture.
         settled_evidence["process_stopped"] = process_stopped
-    return ToolOutcome(call_id=call_id, name=name, outcome="uncertain" if interrupted_command else "failed" if error else "succeeded",
-        failure_category=("cancelled" if exit_code == 130 else "runtime") if interrupted_command else "tool" if error else None,
-        recovery_action="inspect_effects" if interrupted_command else "continue" if error else "none",
+    return ToolOutcome(call_id=call_id, name=name, outcome="uncertain" if interrupted_command or deletion_uncertain else "failed" if error else "succeeded",
+        failure_category="runtime" if deletion_uncertain else ("cancelled" if exit_code == 130 else "runtime") if interrupted_command else "tool" if error else None,
+        recovery_action="inspect_effects" if interrupted_command or deletion_uncertain else "continue" if error else "none",
         detail=("The command was interrupted. Its changes may be partial even when its processes have stopped. Inspect before continuing or repeating it."
-                if interrupted_command else str(content)[:8000] if error else None), result=content,
+                if interrupted_command else "Deletion effects may be partial or unconfirmed. Inspect the remaining target before repeating deletion."
+                if deletion_uncertain else str(content)[:8000] if error else None), result=content,
         result_metadata={key: value for key, value in result.additional_kwargs.items() if key.startswith(("read_file_", "capture_"))} if isinstance(result, ToolMessage) else {},
         evidence=settled_evidence, updated_at=utc_now())
 
@@ -85,7 +95,7 @@ def reconcile_effects(run: Any) -> None:
             "detail": "The action started but its effects could not be confirmed. Inspect before repeating it.", "updated_at": utc_now()}
         if item.name in READ_ONLY_TOOLS:
             update.update(outcome="failed", recovery_action="continue", detail="The read did not return a result; it can be retried.")
-        elif item.name == "execute" and item.evidence.get("exit_code") in {124, 130}:
+        elif item.name in {"execute", "execute_skill_script"} and item.evidence.get("exit_code") in {124, 130}:
             update.update(failure_category="cancelled" if item.evidence["exit_code"] == 130 else "runtime",
                 recovery_action="inspect_effects",
                 detail="The command was interrupted. Its changes may be partial even when its processes have stopped. Inspect before continuing or repeating it.")
@@ -94,7 +104,10 @@ def reconcile_effects(run: Any) -> None:
                 path = resolve_project_tool_path(run.project_path, item.evidence["path"])
                 content = path.read_bytes() if path.is_file() and path.stat().st_size <= 4_000_000 else None
                 digest = hashlib.sha256(content).hexdigest() if content is not None else None
-                if digest is not None and digest == item.evidence.get("expected_sha256"):
+                if item.name == "delete" and item.evidence.get("expected_absent") and not path.exists():
+                    update.update(outcome="succeeded", failure_category=None, recovery_action="none",
+                        detail="The requested project target is absent (verified after interruption).", result="The deletion target is absent.")
+                elif digest is not None and digest == item.evidence.get("expected_sha256"):
                     update.update(outcome="succeeded", failure_category=None, recovery_action="none",
                         detail="Confirmed by inspecting the file after interruption.",
                         result="The file now contains the exact requested content (verified after interruption).")

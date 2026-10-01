@@ -2252,7 +2252,7 @@
       "type": "object"
     },
     "MatchedPermissionGrant": {
-      "description": "The exact grant used for a tool call, retained even after revocation.",
+      "description": "The particular grant used for a tool call, retained even after revocation.",
       "properties": {
         "action": {
           "title": "Action",
@@ -2271,9 +2271,48 @@
           "title": "Display Name",
           "type": "string"
         },
+        "excluded_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Excluded Paths",
+          "type": "array"
+        },
         "id": {
           "title": "Id",
           "type": "string"
+        },
+        "kind": {
+          "default": "exact_action",
+          "enum": [
+            "exact_action",
+            "project_files"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "operations": {
+          "items": {
+            "enum": [
+              "write_file",
+              "edit_file"
+            ],
+            "type": "string"
+          },
+          "title": "Operations",
+          "type": "array"
+        },
+        "project_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Id"
         },
         "project_path": {
           "anyOf": [
@@ -3463,6 +3502,7 @@
       "properties": {
         "answer_type": {
           "default": "text",
+          "description": "Requested task-answer type; answering never grants tool access.",
           "enum": [
             "text",
             "choice",
@@ -3473,6 +3513,7 @@
           "type": "string"
         },
         "choices": {
+          "description": "Required nonempty options when answer_type is choice.",
           "items": {
             "type": "string"
           },

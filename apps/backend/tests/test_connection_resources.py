@@ -1,0 +1,193 @@
+"""Real pinned MCP client resource protocol and selected-owner boundaries."""
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+from fastmcp import Client, FastMCP
+from pydantic import ValidationError
+from workbench_backend.agents.tool_disclosure import compact_tool, input_tool_schemas
+from workbench_backend.agents.schemas import AgentRun
+from workbench_backend.agents.tool_results import OwnedToolResults
+from workbench_backend.connections.resources import connection_resource_tools, MAX_RESOURCE_BYTES, MAX_OUTPUT_BYTES, _encode_cursor
+from workbench_backend.connections.schemas import ConnectionSnapshot
+from workbench_backend.errors import HarnessError
+from workbench_backend.paths import WorkbenchPaths
+
+
+class ConnectionResourceTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.area = TemporaryDirectory()
+        self.addCleanup(self.area.cleanup)
+        self.paths = WorkbenchPaths(Path(self.area.name) / "data")
+        self.server = FastMCP("audit resources")
+        @self.server.resource("audit://long")
+        def long_resource():
+            return "café " * 5_000 + "LATE_EVIDENCE"
+        for index in range(7):
+            self.server.resource(f"audit://item{index}", name=f"item{index}")(lambda: "bounded reference data")
+        self.snapshot = ConnectionSnapshot(id="selected-mcp", name="audit fixture", version=1, kind="mcp", transport="stdio")
+        self.run = AgentRun(id="resource-run", deployment_id="fixture", task="Read selected resources", thread_id="resource-owner",
+            connection_snapshots=[self.snapshot], enabled_tools=["list_connection_resources", "read_connection_resource"],
+            presented_tools=["list_connection_resources", "read_connection_resource"], created_at="2026-10-01T00:00:00Z", updated_at="2026-10-01T00:00:00Z")
+        self.active = True
+        self.opens = 0
+        @asynccontextmanager
+        async def adapter(record, unsupported):
+            self.opens += 1
+            async with Client(self.server) as client:
+                yield SimpleNamespace(client=client)
+        def revalidate(snapshot):
+            if not self.active:
+                raise HarnessError("Connection revoked", code="connection_disabled", status_code=403)
+            if snapshot.version != self.snapshot.version:
+                raise HarnessError("Connection changed", code="connection_changed", status_code=409)
+            return self.snapshot
+        self.service = SimpleNamespace(application=SimpleNamespace(paths=self.paths), _adapter=adapter, _revalidate=revalidate)
+        self.tools = {tool.name: tool for tool in connection_resource_tools(self.service, self.run)}
+
+    async def test_frozen_selected_ids_names_and_versions_survive_compact_and_cold_schema_projection(self):
+        # Resource-only selections have no remote tool manifest from which a
+        # model could infer the owner ID.
+        self.assertEqual(self.snapshot.tools, [])
+        self.snapshot.credential_ref = "private-vault-identity"
+        projected = input_tool_schemas(list(self.tools), extra_tools=list(self.tools.values()))
+        for name, operation in self.tools.items():
+            schema = compact_tool(operation).args_schema
+            field = schema["properties"]["connection_id"]
+            self.assertEqual(field.get("enum", [field.get("const")]), ["selected-mcp"])
+            self.assertIn("audit fixture", field["description"])
+            self.assertIn("version 1", field["description"])
+            self.assertNotIn("private-vault", json.dumps(schema))
+            self.assertNotIn("unselected", json.dumps(schema))
+            self.assertIn("selected-mcp", json.dumps(projected[name]))
+        self.snapshot.name = "Renamed after acceptance"
+        self.snapshot.version = 2
+        self.assertIn("audit fixture", self.tools["list_connection_resources"].args_schema.model_json_schema()["properties"]["connection_id"]["description"])
+        with self.assertRaises(HarnessError):
+            await self.tools["list_connection_resources"].ainvoke({"connection_id":self.snapshot.id})
+        self.assertEqual(self.opens, 0)
+
+    async def test_real_native_resource_pages_reach_all_matches_and_bind_version(self):
+        operation = self.tools["list_connection_resources"]
+        cursor, names = None, []
+        while True:
+            result = json.loads(await operation.ainvoke({"connection_id": self.snapshot.id, "cursor": cursor, "limit": 2}))
+            names.extend(item["uri"] for item in result["resources"])
+            cursor = result["next_cursor"]
+            if cursor is None:
+                break
+        self.assertEqual(len(names), 8)
+        self.assertEqual(len(set(names)), 8)
+        first = json.loads(await operation.ainvoke({"connection_id": self.snapshot.id, "limit": 2}))
+        self.snapshot.version += 1
+        with self.assertRaises(HarnessError):
+            await operation.ainvoke({"connection_id": self.snapshot.id, "cursor": first["next_cursor"]})
+
+    async def test_real_resource_text_retains_late_evidence_and_owner_isolation(self):
+        result = json.loads(await self.tools["read_connection_resource"].ainvoke({"connection_id": self.snapshot.id, "uri": "audit://long"}))
+        item = result["contents"][0]
+        self.assertFalse(item["preview_complete"])
+        self.assertNotIn("LATE_EVIDENCE", item["preview"])
+        retained = OwnedToolResults(self.paths, self.run).read(item["result_path"], query="LATE_EVIDENCE")
+        self.assertIn("LATE_EVIDENCE", retained["matches"][0]["content"])
+        self.assertEqual(retained["result"]["source"]["uri"], "audit://long")
+        other = self.run.model_copy(update={"thread_id": "another-owner"})
+        with self.assertRaises(Exception):
+            OwnedToolResults(self.paths, other).read(item["result_path"])
+
+    async def test_actual_native_binary_resource_is_explicitly_unsupported(self):
+        @self.server.resource("audit://binary", mime_type="application/octet-stream")
+        def binary_resource():
+            return b"\x00\xffprivate-binary-body"
+        output = await self.tools["read_connection_resource"].ainvoke({"connection_id":self.snapshot.id,"uri":"audit://binary"})
+        result = json.loads(output)
+        self.assertEqual(result["contents"][0]["status"], "binary_not_supported")
+        self.assertEqual(result["acquired_text_bytes"], 0)
+        self.assertNotIn("private-binary-body", output)
+        self.assertNotIn("result_path", result["contents"][0])
+        self.assertLessEqual(len(output.encode("utf-8")), MAX_OUTPUT_BYTES)
+
+    async def test_actual_native_utf8_acquisition_bound_rejects_before_any_retention(self):
+        @self.server.resource("audit://oversize")
+        def oversize_resource():
+            return "😀" * (MAX_RESOURCE_BYTES // 4 + 1)
+        with patch.object(OwnedToolResults, "retain", side_effect=AssertionError("Oversize acquisition must retain nothing")):
+            output = await self.tools["read_connection_resource"].ainvoke({"connection_id":self.snapshot.id,"uri":"audit://oversize"})
+        self.assertIn("resource_size_limit", output)
+        self.assertIn("no complete result", output)
+        self.assertNotIn("result_path", output)
+        # A handled read-only input error must not poison the next valid read.
+        valid = json.loads(await self.tools["read_connection_resource"].ainvoke({"connection_id":self.snapshot.id,"uri":"audit://long"}))
+        self.assertEqual(valid["contents"][0]["acquired_utf8_bytes"], len(("café "*5000+"LATE_EVIDENCE").encode("utf-8")))
+        self.assertLessEqual(len(json.dumps(valid,ensure_ascii=False).encode("utf-8")), MAX_OUTPUT_BYTES)
+
+    async def test_actual_native_utf8_exact_acquisition_bound_is_complete_and_retrievable(self):
+        text = "😀" * (MAX_RESOURCE_BYTES // 4 - 1) + "LAST"
+        self.assertEqual(len(text.encode("utf-8")), MAX_RESOURCE_BYTES)
+        @self.server.resource("audit://boundary")
+        def boundary_resource():
+            return text
+        output = await self.tools["read_connection_resource"].ainvoke({"connection_id":self.snapshot.id,"uri":"audit://boundary"})
+        result = json.loads(output)
+        self.assertEqual(result["acquired_text_bytes"], MAX_RESOURCE_BYTES)
+        self.assertFalse(result["contents"][0]["preview_complete"])
+        retained = OwnedToolResults(self.paths, self.run).read(result["contents"][0]["result_path"], query="LAST")
+        self.assertIn("LAST", retained["matches"][0]["content"])
+        self.assertTrue(retained["result"]["complete"])
+        self.assertLessEqual(len(output.encode("utf-8")), MAX_OUTPUT_BYTES)
+
+    async def test_native_post_read_revocation_and_version_changes_fail_closed_before_retention(self):
+        @self.server.resource("audit://revoke")
+        def revoke_resource():
+            self.active = False
+            return "Contents acquired after revoked authority"
+        @self.server.resource("audit://change")
+        def change_resource():
+            self.snapshot.version += 1
+            return "Contents acquired from changed authority"
+        for uri, code in [("audit://revoke", "connection_disabled"), ("audit://change", "connection_changed")]:
+            self.active = True
+            with patch.object(OwnedToolResults, "retain", side_effect=AssertionError("Changed authority must retain nothing")):
+                with self.assertRaises(HarnessError) as raised:
+                    await self.tools["read_connection_resource"].ainvoke({"connection_id":self.snapshot.id,"uri":uri})
+            self.assertEqual(raised.exception.code, code)
+
+    async def test_native_unknown_resource_and_invalid_cursors_are_handled_inputs(self):
+        read = self.tools["read_connection_resource"]
+        missing = await read.ainvoke({"connection_id":self.snapshot.id,"uri":"audit://missing"})
+        self.assertIn("resource_read_failed", missing)
+        listing = self.tools["list_connection_resources"]
+        opened = self.opens
+        for cursor in ["not-json", _encode_cursor([]), _encode_cursor({"binding":"different-run","offset":0,"page":None})]:
+            output = await listing.ainvoke({"connection_id":self.snapshot.id,"cursor":cursor})
+            self.assertIn("resource_cursor_invalid", output)
+        self.assertEqual(self.opens, opened)
+        valid = json.loads(await listing.ainvoke({"connection_id":self.snapshot.id,"limit":1}))
+        self.assertEqual(len(valid["resources"]), 1)
+
+    async def test_deselection_plan_revocation_fail_before_adapter_call(self):
+        operation = self.tools["list_connection_resources"]
+        with self.assertRaises(ValidationError):
+            await operation.ainvoke({"connection_id": "unselected"})
+        # Runtime checks remain authoritative even if a caller bypasses schema
+        # validation rather than inventing a model-visible choice.
+        with self.assertRaises(HarnessError):
+            await operation.coroutine(connection_id="unselected")
+        self.run.work_mode = "plan"
+        with self.assertRaises(HarnessError):
+            await operation.ainvoke({"connection_id": self.snapshot.id})
+        self.run.work_mode = "work"
+        self.active = False
+        with self.assertRaises(HarnessError):
+            await operation.ainvoke({"connection_id": self.snapshot.id})
+        self.assertEqual(self.opens, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

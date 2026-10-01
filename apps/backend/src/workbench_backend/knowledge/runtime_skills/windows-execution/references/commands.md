@@ -1,0 +1,3 @@
+Use the project's actual tools, such as uv, pnpm or npm, only when its manifest or current environment supports them. Do not hardcode an unobserved installation. Invoke PowerShell explicitly with a quoted argument or script file; escape for cmd.exe and PowerShell as separate layers. A PowerShell command invoking a native program should propagate its exit status with exit $LASTEXITCODE when needed.
+
+Treat command text as code. Do not interpolate untrusted output into it, repurpose system environment variables, or print credentials. Test paths with spaces, Unicode output, nonzero exits, timeout and cancellation through the actual command owner. Report uncertain outcomes and cleanup failures truthfully.

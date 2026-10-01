@@ -62,6 +62,7 @@ class SkillResourceView(SkillResource):
     content: str | None = None
     binary: bool = False
     execution_available: Literal[False] = False
+    execution_supported: bool = False
 
 
 class SkillResourceChange(BaseModel):

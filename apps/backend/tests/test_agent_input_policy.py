@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from deepagents.backends.protocol import FileDownloadResponse
+from langchain_core.tools import ToolException
 
 from workbench_backend.agents.effective_setup import compose_system_prompt
 from workbench_backend.agents.input_sources import (
@@ -127,6 +128,36 @@ class AgentInputPolicyTests(unittest.TestCase):
         result = builder.compile().invoke({"messages": [AIMessage(content="", tool_calls=[
             {"name": "read_reference", "args": {"entry_id": "one"}, "id": "native-reference-call"}])]})
         self.assertEqual(result['messages'][-1].content, 'Entire frozen source')
+        invalid = builder.compile().invoke({"messages": [AIMessage(content="", tool_calls=[
+            {"name": "read_reference", "args": {"entry_id": "one", "offset": 12000}, "id": "invalid-range"}])]})
+        self.assertEqual(invalid["messages"][-1].status, "error")
+        self.assertIn("reference_range_invalid", invalid["messages"][-1].content)
+        self.assertIn("offset 0", invalid["messages"][-1].content)
+
+    def test_large_frozen_reference_character_pages_cover_unicode_and_keep_version_identity(self):
+        import hashlib
+        import json
+        body = "漢字 😀 reference title\n" * 900
+        plan = plan_knowledge_materialization([version(body)], input_policy=AgentInputPolicy())
+        backend = FrozenBackend(plan)
+        reader = reference_tool_for_plan(backend, plan)
+        args, excerpts = {"entry_id": "one", "offset": 0, "limit": 731}, []
+        while args is not None:
+            result = json.loads(reader.func(runtime=None, **args))
+            self.assertEqual(result["version_id"], "v-one")
+            self.assertEqual(result["sha256"], hashlib.sha256(body.encode()).hexdigest())
+            self.assertLessEqual(len(result["text"]), 731)
+            self.assertEqual(result["text"], body[result["offset"]:result["end"]])
+            excerpts.append(result["text"])
+            args = result["next_read"]
+        self.assertEqual("".join(excerpts), body)
+        with self.assertRaises(ToolException) as outside:
+            reader.func("one", None, offset=len(body) + 1)
+        self.assertIn("reference_range_invalid", str(outside.exception))
+        backend.files[plan.references[0].path] = b"replacement"
+        with self.assertRaises(HarnessError) as changed:
+            reader.func("one", None, offset=731, limit=731)
+        self.assertEqual(changed.exception.code, "reference_version_changed")
 
     def test_always_and_legacy_memory_reset_without_duplicate_v1_notice(self):
         full = version("Full original")

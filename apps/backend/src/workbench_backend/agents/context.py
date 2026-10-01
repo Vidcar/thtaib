@@ -163,6 +163,25 @@ def observe_payload(base: ContextObservation, payload: dict[str, Any], *, native
     return observation
 
 
+def _native_text_history(message: BaseMessage, blocks: list[Any]) -> bool:
+    """Recognize SDK text and duplicate call blocks, without rewriting history.
+
+    llama.cpp accepts OpenAI text blocks even when its template reports string
+    content only. The pinned serializer moves canonical AI call blocks into
+    ``tool_calls``. Only accept those duplicates when the retained call agrees;
+    other structured content still needs explicit template support.
+    """
+    calls = getattr(message, "tool_calls", [])
+    return all(
+        isinstance(block, dict) and (
+            block.get("type") == "text" and isinstance(block.get("text"), str)
+            or message.type == "ai" and block.get("type") == "tool_call"
+            and any(all(block.get(key) == call.get(key) for key in ("id", "name", "args"))
+                    for call in calls)
+        ) for block in blocks
+    )
+
+
 def validate_retained_messages(deployment: Deployment, messages: list[BaseMessage], *, allow_recovery: bool = False) -> None:
     """Validate a native repair preview without altering checkpoints or effects."""
     if allow_recovery:
@@ -181,7 +200,8 @@ def validate_retained_messages(deployment: Deployment, messages: list[BaseMessag
             if kind == "system" and props.chat_template_caps.get("supports_system_role") is False:
                 raise HarnessError("This setup cannot preserve the conversation's system instructions.", code="context_system_unsupported", status_code=409)
             blocks = message.content if isinstance(message.content, list) else []
-            if blocks and props.chat_template_caps.get("supports_typed_content") is False:
+            if (blocks and props.chat_template_caps.get("supports_typed_content") is False
+                    and not _native_text_history(message, blocks)):
                 raise HarnessError("This setup cannot preserve structured content blocks in the conversation.", code="context_content_unsupported", status_code=409)
             if any(isinstance(b, dict) and b.get("type") in {"image", "image_url"} for b in blocks) and props.modalities.get("vision") is False:
                 raise HarnessError("This setup cannot read images retained in the conversation. Select a vision setup or start a fresh conversation.", code="context_image_unsupported", status_code=409)

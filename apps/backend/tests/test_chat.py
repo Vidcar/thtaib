@@ -471,9 +471,9 @@ class ChatHarnessTests(unittest.TestCase):
             [
                 AIMessage(
                     content="",
-                    tool_calls=[{"name": "echo", "args": {"text": "no-project"}, "id": "call_echo"}],
+                    tool_calls=[{"name": "time_now", "args": {}, "id": "call_clock"}],
                 ),
-                AIMessage(content="echoed without a project folder."),
+                AIMessage(content="UTC time checked without a project folder."),
             ]
         )
 
@@ -495,20 +495,21 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertIsNone(conversation["project_path"])
         self.assertFalse(conversation["filesystem_tools_available"])
         self.assertFalse(conversation["shell_tools_available"])
-        self.assertEqual(conversation["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory"])
-        started = self._start(conversation["id"], task="Echo no-project.")
+        self.assertEqual(conversation["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory", "read_tool_result", "list_connection_resources", "read_connection_resource"])
+        started = self._start(conversation["id"], task="Check the current UTC time.")
         self.assertFalse(started["filesystem_tools_available"])
         self.assertFalse(started["shell_tools_available"])
-        self.assertEqual(started["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory"])
+        self.assertEqual(started["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory", "read_tool_result", "list_connection_resources", "read_connection_resource"])
         run = started["current_run"]
-        self.assertEqual(run["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory", "find_tools", "read_file"])
+        self.assertEqual(run["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory", "read_tool_result", "list_connection_resources", "read_connection_resource", "find_tools", "read_file"])
         self.assertEqual(run["framework_read_paths"], ["/large_tool_results/", "/conversation_history/"])
-        self.assertEqual(run["presented_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory", "find_tools"])
+        self.assertEqual(run["presented_tools"], ["time_now", "write_todos", "ask_user", "propose_memory", "read_tool_result", "find_tools"])
         self.assertIsNone(run["project_path"])
         body = wait_for_chat(self.client, conversation["id"])
         self.assertEqual(body["current_run"]["status"], "completed", body["current_run"].get("error"))
         names = [item["name"] for item in body["current_run"]["tool_invocations"]]
-        self.assertIn("echo", names)
+        self.assertIn("time_now", names)
+        self.assertNotIn("echo", run["presented_tools"])
         self.assertFalse(any(self.project.rglob("large_tool_results")))
         surprise = [path for path in self.root.rglob("*") if path.is_file() and "harness" not in path.parts]
         written_outside_data = [

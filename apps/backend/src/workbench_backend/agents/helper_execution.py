@@ -9,7 +9,7 @@ from langgraph.errors import GraphInterrupt
 
 from workbench_backend.agents.context import observe_context
 from workbench_backend.agents.effective_setup import resolve_effective_setup
-from workbench_backend.agents.execution_policy import CURRENT_TOOL_CALL, PLAN_INSTRUCTIONS, PLAN_TOOLS, require_setup_capabilities
+from workbench_backend.agents.execution_policy import CURRENT_TOOL_CALL, PLAN_INSTRUCTIONS, plan_tool_names, require_setup_capabilities
 from workbench_backend.agents.host_shell import approval_mode_instructions
 from workbench_backend.agents.schemas import AgentRun, AgentRunStatus, AgentStartRequest, ChildRunActivity, ReviewObservation, TaskCriteria, ToolOutcome
 from workbench_backend.agents.tool_outcomes import reconcile_effects, failure_for_run
@@ -44,7 +44,7 @@ def _narrow_presented_tools(parent, config, input_policy):
         presented = [name for name in presented if f"tool:{name}" not in input_policy.excluded_sources]
     work_mode = "plan" if parent.work_mode == "plan" or config.work_mode == "plan" else "work"
     if work_mode == "plan":
-        presented = [name for name in presented if name in PLAN_TOOLS]
+        presented = [name for name in presented if name in plan_tool_names(parent.connection_snapshots)]
     require_setup_capabilities(config, project_bound=bool(parent.project_path), presented_tools=presented)
     return selected_tools, presented, work_mode
 

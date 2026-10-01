@@ -97,6 +97,29 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls, ["live"])
         self.assertEqual(self.store.list_effects(run_id=run.id, unresolved_only=True), [])
 
+    async def test_real_mcp_title_and_literal_default_survive_cold_and_model_projection(self):
+        from workbench_backend.agents.tool_disclosure import compact_tool, input_tool_schemas
+        from workbench_backend.agents.tool_schema import model_tool_schema
+        received = []
+        @self.server.tool
+        async def create_issue(title: str, metadata: dict[str, str] = {'title': 'literal default'}) -> dict:
+            received.append((title, metadata))
+            return {'title': title, 'metadata': metadata}
+        run = await self.run_record()
+        descriptor = next(item for item in run.connection_snapshots[0].tools if item.remote_name == 'create_issue')
+        cold = input_tool_schemas([descriptor.name], extra_tools=[descriptor])[descriptor.name]['function']['parameters']
+        self.assertIn('title', cold['properties'])
+        self.assertIn('title', cold['required'])
+        self.assertEqual(cold['properties']['metadata']['default'], {'title': 'literal default'})
+        async with self.service.open_tools(run) as tools:
+            tool = next(item for item in tools if item.name == descriptor.name)
+            live = model_tool_schema(compact_tool(tool))['function']['parameters']
+            self.assertEqual(live, cold)
+            result = await tool.ainvoke({'name': tool.name, 'args': {'title': 'Test issue'}, 'id': 'title-call', 'type': 'tool_call'})
+        self.assertEqual(result.status, 'success')
+        self.assertEqual(received, [('Test issue', {'title': 'literal default'})])
+        self.assertEqual(self.store.list_effects(run_id=run.id, unresolved_only=True), [])
+
     async def test_tools_off_and_unselected_never_open_session(self):
         self.assertEqual(self.service.snapshot(["missing"], tools_enabled=False), [])
         async with self.service.open_tools(SimpleNamespace(connection_snapshots=[], presented_tools=[])) as tools:

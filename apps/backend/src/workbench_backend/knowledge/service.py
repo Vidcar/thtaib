@@ -541,7 +541,9 @@ class KnowledgeService:
                 text = None
         except UnicodeDecodeError:
             text = None
-        return SkillResourceView(version_id=version.id, path=relative_path, sha256=hashlib.sha256(data).hexdigest(), size_bytes=len(data), content=text, binary=text is None)
+        supported = relative_path.startswith("scripts/") and relative_path.endswith(".py")
+        return SkillResourceView(version_id=version.id, path=relative_path, sha256=hashlib.sha256(data).hexdigest(), size_bytes=len(data), content=text, binary=text is None,
+            execution_supported=supported)
 
     def scope_options(self, *, include_inactive: bool = False) -> list[KnowledgeScopeOption]:
         options = [KnowledgeScopeOption(scope="user", label="Personal knowledge")]
@@ -616,6 +618,13 @@ class KnowledgeService:
                 self._assert_base_version(entry, base_version or "")
             elif base_version is not None:
                 raise KnowledgeError("A base version requires an existing memory entry.", code="knowledge_base_invalid", status_code=400)
+            # Retry the same proposal without multiplying review cards. Scope
+            # and stale-base validation above always run before this reuse.
+            for existing in self.list_proposals(run_id=run_id):
+                if (existing.status == "pending" and
+                    (existing.scope, existing.scope_id, existing.entry_id, existing.base_version, existing.content, existing.display_name)
+                    == (scope, scope_id, entry_id, base_version, content, display_name)):
+                    return existing
             now = utc_now()
             proposal = KnowledgeProposal(id=new_id("proposal"), entry_id=entry_id, base_version=base_version, scope=scope, scope_id=scope_id, content=content, display_name=display_name, provenance=KnowledgeProvenance(actor="agent", run_id=run_id), created_at=now, updated_at=now)
             self.store.put_proposal(proposal)

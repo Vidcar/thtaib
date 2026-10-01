@@ -11,7 +11,7 @@ from copy import deepcopy
 from typing import Any, Literal
 
 from langchain_core.messages import AIMessage, BaseMessage, convert_to_messages
-from langchain_core.utils.function_calling import convert_to_openai_tool
+from workbench_backend.agents.tool_schema import model_tool_schema
 from langchain_openai.chat_models.base import _convert_message_to_dict, _convert_from_v1_to_chat_completions
 
 from workbench_backend.errors import HarnessError
@@ -56,7 +56,7 @@ def project_context_payload(messages: list[Any], *, tools: list[Any] | None = No
         for message in native
     ]}
     if tools:
-        payload["tools"] = [convert_to_openai_tool(tool) for tool in tools]
+        payload["tools"] = [model_tool_schema(tool) for tool in tools]
     if response_format is not None:
         payload["response_format"] = response_format
     return project_outbound_payload(payload, native, reasoning_scope=reasoning_scope)

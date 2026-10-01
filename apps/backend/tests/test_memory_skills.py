@@ -127,7 +127,7 @@ class MemorySkillsGlueTests(unittest.TestCase):
             project_bound=False,
             knowledge_routes=True,
         )
-        self.assertEqual(presented, ["echo", "time_now", "write_todos", "ask_user", "propose_memory", "ls", "read_file"])
+        self.assertEqual(presented, ["time_now", "write_todos", "ask_user", "propose_memory", "read_tool_result", "ls", "read_file"])
         self.assertEqual(denied, [])
         self.assertEqual(blocked, [])
         self.assertEqual(shell, [])
@@ -137,7 +137,7 @@ class MemorySkillsGlueTests(unittest.TestCase):
             knowledge_routes=True,
         )
         self.assertEqual(write_blocked, ["write_file"])
-        self.assertIsNone(filesystem_permissions_for_run(_run()))
+        self.assertEqual(filesystem_permissions_for_run(_run())[0].paths, ["/large_tool_results/owned/**"])
         skills_rules = filesystem_permissions_for_run(_run(skill_refs=["knv_skill"]))
         self.assertIsNotNone(skills_rules)
         assert skills_rules is not None

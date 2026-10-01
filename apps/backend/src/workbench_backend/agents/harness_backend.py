@@ -240,6 +240,7 @@ def build_run_backend(
     if run.tool_mode is ToolMode.recorded_tool:
         default = StateBackend()
     elif host_shell_requested(run):
+        from workbench_backend.agents.tool_results import OwnedToolResults
         # Host shell cwd is the user-chosen project. inherit_env so PATH and
         # the Windows host environment are the real machine, not an empty env.
         # virtual_mode does not restrict execute() (LocalShellBackend docs).
@@ -249,6 +250,7 @@ def build_run_backend(
             inherit_env=True,
             image_inputs_allowed=image_inputs_allowed,
             cancel_requested=cancel_requested,
+            result_retainer=OwnedToolResults(paths, run).retain,
         )
     elif run.project_path:
         default = BoundedImageFilesystemBackend(root_dir=run.project_path, virtual_mode=True,

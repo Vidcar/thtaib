@@ -14,6 +14,13 @@ from workbench_backend.agents.setup_schemas import (
 
 router = APIRouter(prefix="/v1")
 
+from workbench_backend.agents.setup_templates import AgentSetupTemplate, setup_templates
+
+
+@router.get("/agent-setup-templates", response_model=list[AgentSetupTemplate])
+def agent_setup_templates(request: Request):
+    return setup_templates(request.app.state.knowledge)
+
 
 @router.get("/projects", response_model=list[ProjectRecord])
 def projects(request: Request, include_inactive: bool = False):

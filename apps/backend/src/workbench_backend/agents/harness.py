@@ -178,6 +178,7 @@ class HarnessService:
         assets: Any = None,
         browser: Any = None,
         preview: Any = None,
+        managed_commands: Any = None,
         desktop_automation: Any = None,
     ) -> None:
         self._manager_provider = manager_provider
@@ -193,6 +194,7 @@ class HarnessService:
             browser.screenshot_reader = self.screenshot_reading_available
             browser.state_invalidator = self.invalidate_browser_state
         self.preview = preview
+        self.managed_commands = managed_commands
         self.desktop_automation = desktop_automation
         self._runs: dict[str, AgentRun] = {}
         self._cancels: dict[str, threading.Event] = {}
@@ -483,6 +485,8 @@ class HarnessService:
             submit_checkpoint_task(self.manager.paths.checkpoints_db, self._abort_native_run(run_id))
         for thread in threads:
             thread.join(timeout=timeout)
+        if self.managed_commands is not None:
+            self.managed_commands.shutdown()
         with self._lock:
             self._threads = {run_id: worker for run_id, worker in self._threads.items() if worker.is_alive()}
             if self._threads:
@@ -1195,6 +1199,27 @@ class HarnessService:
             self._persist_and_notify(run)
 
     def _finish(self, run: AgentRun, status: AgentRunStatus, stop_reason: str) -> None:
+        commands_settled = True
+        if self.managed_commands is not None and run.status not in TERMINAL_RUN_LIFECYCLE_STATUSES:
+            command_stop_errors = []
+            for owner_id in [run.id, *(child.run_id for child in run.child_runs)]:
+                try:
+                    self.managed_commands.stop_run(owner_id)
+                except Exception as error:
+                    command_stop_errors.append(str(error))
+            try:
+                # Settle owned children before final snapshot/terminal state,
+                # outside the run lock used by observer/effect persistence.
+                if command_stop_errors:
+                    raise RuntimeError("; ".join(command_stop_errors))
+            except Exception as error:
+                commands_settled = False
+                run.error = str(error)
+                run.tool_outcomes["owned-command-cleanup"] = ToolOutcome(call_id="owned-command-cleanup", name="start_command",
+                    outcome="uncertain", failure_category="runtime", recovery_action="inspect_effects",
+                    detail="An owned command could not be confirmed stopped. Inspect its effects; it was not replayed.",
+                    evidence={"process_stop_confirmed": False}, updated_at=utc_now())
+                status, stop_reason = AgentRunStatus.failed, "effects_unconfirmed"
         with self._lock:
             if run.status in TERMINAL_RUN_LIFECYCLE_STATUSES:
                 if run.status is AgentRunStatus.cancelled and status is not AgentRunStatus.cancelled:
@@ -1209,14 +1234,18 @@ class HarnessService:
                     return
                 # A restart may have interrupted only snapshot persistence. The
                 # graph outcome was already durable; never rerun its tools.
-                status = AgentRunStatus(run.settled_status or "failed")
-                stop_reason = run.settled_stop_reason or status.value
+                if commands_settled:
+                    status = AgentRunStatus(run.settled_status or "failed")
+                    stop_reason = run.settled_stop_reason or status.value
+                else:
+                    run.settled_status = status.value
+                    run.settled_stop_reason = stop_reason
                 snapshot_id = self._settled_snapshot_id(run)
             else:
                 if run.stop_reason == "tool_budget_exhausted" and status == AgentRunStatus.failed:
                     stop_reason = run.stop_reason
                 cancel = self._cancels.get(run.id)
-                if cancel is not None and cancel.is_set() and status is not AgentRunStatus.cancelled:
+                if commands_settled and cancel is not None and cancel.is_set() and status is not AgentRunStatus.cancelled:
                     status, stop_reason = AgentRunStatus.cancelled, "cancelled"
                 if not run.project_path or run.final_snapshot_id is not None:
                     self._commit_terminal_run(run, status, stop_reason)

@@ -176,6 +176,8 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         assets=application.state.assets,
     )
     application.state.preview = PreviewService(application.state.manager.paths)
+    from workbench_backend.agents.managed_commands import ManagedCommandService
+    application.state.managed_commands = ManagedCommandService(application.state.manager.paths, app_store=application.state.app_store)
     application.state.desktop_automation = DesktopAutomationService(
         application.state.manager.paths,
         capture_sink=application.state.assets.register_capture,
@@ -235,6 +237,7 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         assets=application.state.assets,
         browser=application.state.browser,
         preview=application.state.preview,
+        managed_commands=application.state.managed_commands,
         desktop_automation=application.state.desktop_automation,
     )
     application.state.browser.state_invalidator = application.state.harness.invalidate_browser_state

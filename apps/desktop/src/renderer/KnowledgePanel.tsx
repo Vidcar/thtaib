@@ -10,7 +10,7 @@ import { knowledgeActorLabel, knowledgeKindLabel, redactionModeLabel } from "./l
 import { Notice } from "./Notice";
 import { LifecycleAction } from "./LifecycleAction";
 import { StatusBadge } from "./StatusBadge";
-import { SkillPackageImport, SkillResources } from "./SkillPackageControls";
+import { BundledRuntimeSkills, SkillPackageImport, SkillResources } from "./SkillPackageControls";
 import { knowledgeApi, type KnowledgeScopeOption, type KnowledgeProposal, type SkillResourceChange } from "./knowledgeApi";
 import { SkillEditor } from "./SkillEditor";
 import { MemoryProposalCard } from "./MemoryProposalCard";
@@ -235,7 +235,7 @@ export function KnowledgePanel({ active = true, openEntryId, openRequest }: { ac
       {scopesError ? <Notice tone="warn" action={<button type="button" onClick={() => void refreshScopes()}>Retry destinations</button>}>Project and agent destinations could not load. Personal entries remain available. {scopesError}</Notice> : null}
 
       <nav className="model-tabs" aria-label="Knowledge types">{([["memory", "Memories"], ["skill", "Skills"], ["protected_instruction", "Instructions"]] as const).map(([value, label]) => <button type="button" key={value} disabled={busy} aria-current={filterKind === value ? "page" : undefined} onClick={() => { setFilterKind(value); setKind(value); setCreating(false); setSelected(entries.find(entry => entry.kind === value) ?? null); }}>{label} <span>{entries.filter(entry => entry.kind === value).length}</span></button>)}</nav>
-      {filterKind === "skill" ? <details className="card"><summary>Import a skill package</summary><SkillPackageImport onImported={async next => { await refresh(); setSelected(next); setCreating(false); }} /></details> : null}
+      {filterKind === "skill" ? <><BundledRuntimeSkills onImported={async next => { await refresh(); setSelected(next); setCreating(false); }} /><details className="card"><summary>Import a skill package</summary><SkillPackageImport onImported={async next => { await refresh(); setSelected(next); setCreating(false); }} /></details></> : null}
 
       <CatalogueWorkspace title="Knowledge" search={query} onSearch={setQuery} searchPlaceholder="Search names and content" items={visibleEntries.map(item => ({ id: item.id, name: entryTitle(item), icon: item.kind === "skill" ? "sparkles" : item.kind === "protected_instruction" ? "shield" : "knowledge", detail: scopeLabel(item), status: [item.enabled === false ? "Disabled" : "", item.scope_bound === false ? "Unavailable scope" : "", drafts[item.id] ? "Unsaved changes" : ""].filter(Boolean).join(" · "), selectorLabel: `${entryTitle(item)} · ${scopeLabel(item)}` }))} selectedId={creating ? "" : selected?.id ?? ""} onSelect={id => { if (!busy) { setSelected(entries.find(item => item.id === id) ?? null); setCreating(false); } }} loading={loading} emptyLabel={query.trim() ? "No matching entries" : "No entries yet"}>
         <div className="knowledge-editor workspace-editor">

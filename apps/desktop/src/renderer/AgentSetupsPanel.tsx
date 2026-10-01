@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { workspaceApi, type AgentSetup, type AgentSetupVersion, type SetupConfiguration } from "./workspaceApi";
+import { workspaceApi, type AgentSetup, type AgentSetupTemplate, type AgentSetupVersion, type SetupConfiguration } from "./workspaceApi";
 import { SetupConfigurationEditor, scopedSetupConfiguration, setupModelLabel, useSetupCatalogue, visualSetupCompatibilityIssue, type SetupCatalogue } from "./SetupConfigurationEditor";
 import { CatalogueWorkspace } from "./CatalogueWorkspace";
 import { SettingRow } from "./CompactControls";
@@ -18,6 +18,10 @@ import "./AgentSetupsPanel.css";
 interface SetupDraft { name: string; role: string; configuration: SetupConfiguration; base_version: string; }
 type AgentTab = "role" | "model" | "knowledge" | "helpers" | "review";
 const draftOf = (record?: AgentSetup): SetupDraft => ({ name: record?.name ?? "", role: record?.role ?? "", configuration: record?.configuration ?? {}, base_version: record?.current_version_id ?? "" });
+function templateConfiguration(current: SetupConfiguration, template: SetupConfiguration): SetupConfiguration {
+  const modelFields = ["deployment_id", "bundle_id", "model_configuration_id", "startup_overrides", "profile_id", "inherit_deployment_settings", "per_request_overrides"] as const;
+  return { ...template, ...Object.fromEntries(modelFields.filter(key => Object.hasOwn(current, key)).map(key => [key, current[key]])) };
+}
 function comparable(value: unknown): string {
   if (Array.isArray(value)) return JSON.stringify(value.map(item => comparable(item)).sort());
   if (value && typeof value === "object") return JSON.stringify(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, comparable(item)]));
@@ -58,6 +62,9 @@ export function AgentSetupsPanel({ openAgentId, openRequest, active = true, onNa
   const [query, setQuery] = useState("");
   const [drafts, setDrafts] = useState<Record<string, SetupDraft>>({});
   const [newDraft, setNewDraft] = useState<SetupDraft>(() => draftOf());
+  const [templates, setTemplates] = useState<AgentSetupTemplate[]>([]);
+  const [templateId, setTemplateId] = useState("");
+  const [templateNote, setTemplateNote] = useState("");
   const [versions, setVersions] = useState<AgentSetupVersion[]>([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [versionsError, setVersionsError] = useState("");
@@ -74,6 +81,12 @@ export function AgentSetupsPanel({ openAgentId, openRequest, active = true, onNa
   const selected = activeRecords.find(record => record.id === selectedId);
   const draft = creating ? newDraft : selected ? drafts[selected.id] ?? draftOf(selected) : newDraft;
   const visualCompatibilityIssue = visualSetupCompatibilityIssue(draft.configuration, catalogue);
+  useEffect(() => {
+    if (!active || !creating) return;
+    let cancelled = false;
+    void workspaceApi.agentSetupTemplates().then(next => { if (!cancelled) setTemplates(next); }).catch(failure => { if (!cancelled) setError(errorMessage(failure)); });
+    return () => { cancelled = true; };
+  }, [active, creating]);
   async function refresh(preferredId?: string) {
     const next = await workspaceApi.agentSetups(true);
     const available = next.filter(record => record.active !== false);
@@ -147,6 +160,7 @@ export function AgentSetupsPanel({ openAgentId, openRequest, active = true, onNa
       {creating || selected ? <>
         <form className="agent-editor workspace-editor" onSubmit={event => { event.preventDefault(); if (creating && step < 2) { if (draft.name.trim()) setStep(current => current + 1); } else void save(); }}>
           <div className="section-heading"><h3>{creating ? "New agent" : selected!.name}</h3><button type="button" disabled={busy} onClick={() => setShowInputs(true)}>What the agent sees</button></div>
+          {creating && step === 0 ? <div className="setup-options"><label>Starting template<select value={templateId} disabled={busy} onChange={event => setTemplateId(event.target.value)}><option value="">Start from an empty draft</option>{templates.map(template => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label><button type="button" disabled={busy || !templateId} onClick={() => { const template = templates.find(item => item.id === templateId); if (!template) return; setNewDraft(current => ({ name: template.name, role: template.role, configuration: templateConfiguration(current.configuration, template.configuration), base_version: "" })); setTemplateNote(`${template.note} Recommended skills: ${template.recommended_skills.join(", ")}. ${template.configuration.skill_entry_ids?.length ?? 0} already installed personal skills selected; add others through Knowledge when useful.`); }}>Use template</button>{templateNote ? <p className="hint" role="status">{templateNote} Chat access remains your current choice.</p> : <p className="hint">Templates populate this draft for review. Save when ready; model settings and live grants stay under their existing owners.</p>}</div> : null}
           {selected?.missing_dependencies?.length && !creating ? <Notice tone="warn">This setup needs attention.<ul>{selected.missing_dependencies.map((issue, index) => <li key={`${issue.kind}-${issue.id}-${index}`}>{issue.kind.includes("model") || issue.kind.includes("deployment") || issue.kind.includes("bundle") ? "Assigned model" : issue.kind === "connection" ? "Connection" : issue.kind === "tool" ? "Tool" : "Knowledge selection"}: {issue.reason}</li>)}</ul><div className="actions"><button type="button" onClick={() => setTab(selected.missing_dependencies?.some(issue => /memory|skill|instruction/.test(issue.kind)) ? "knowledge" : "model")}>Review selections</button></div></Notice> : null}
           {selected?.helper_missing_dependencies?.length && !creating ? <Notice tone="warn">Needs attention when used as a helper.<ul>{selected.helper_missing_dependencies.map((issue, index) => <li key={`${issue.kind}-${issue.id}-${index}`}>{issue.reason}</li>)}</ul></Notice> : null}
           {creating ? <nav className="model-tabs agent-steps" aria-label="Agent creation steps">{["Role", "Setup", "Review"].map((label, index) => <span key={label} aria-current={step === index ? "step" : undefined}>{index + 1}. {label}</span>)}</nav>

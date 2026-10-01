@@ -233,6 +233,25 @@ def _assemble_compiled_tools(service, parts, run, *, inspection_only, external_t
     if interrupt_on:
         agent_kwargs["interrupt_on"] = interrupt_on
     tools = [*tools_for_names(run.presented_tools), *(external_tools or [])]
+    cancel_requested = lambda: (parts.execution_control.root.status in {AgentRunStatus.cancel_requested, AgentRunStatus.cancelled}
+        or bool((event := service._cancels.get(parts.execution_control.root.id)) and event.is_set()))
+    if "read_tool_result" in run.presented_tools:
+        from workbench_backend.agents.tool_results import result_reader_tool
+        tools.append(result_reader_tool(service.manager.paths, run))
+    if "apply_edits" in run.presented_tools:
+        from workbench_backend.agents.file_operations import apply_edits_tool
+        tools.append(apply_edits_tool(run, cancel_requested=cancel_requested))
+    if "execute_skill_script" in run.presented_tools:
+        from workbench_backend.agents.skill_scripts import skill_script_tool
+        tools.append(skill_script_tool(service, run, backend, knowledge_plan))
+    if any(name in run.presented_tools for name in ("list_connection_resources", "read_connection_resource")):
+        from workbench_backend.connections.resources import connection_resource_tools
+        tools.extend(tool for tool in connection_resource_tools(service.connections, run)
+            if tool.name in run.presented_tools)
+    commands = getattr(service, "managed_commands", None)
+    if commands is not None:
+        tools.extend(tool for tool in commands.tools_for_run(run, cancel_requested=cancel_requested)
+            if tool.name in run.presented_tools)
     if not inspection_only:
         if service.preview is not None:
             tools.extend(tool for tool in service.preview.tools_for_run(run)
@@ -268,7 +287,7 @@ def _bind_response_format(service, parts, run, *, inspection_only):
         tools_off=not run.presented_tools,
     )
     from langchain.agents.structured_output import OutputToolBinding, ProviderStrategy, ToolStrategy
-    from langchain_core.utils.function_calling import convert_to_openai_tool
+    from workbench_backend.agents.tool_schema import model_tool_schema
     provider_format = response_format.to_model_kwargs().get("response_format") if isinstance(response_format, ProviderStrategy) else None
     if provider_format is not None:
         # ProviderStrategy's schema must use the same public binding as
@@ -276,7 +295,7 @@ def _bind_response_format(service, parts, run, *, inspection_only):
         provider_format = model.bind_tools([], response_format=provider_format, strict=True).kwargs["response_format"]
     structured_tools = ([OutputToolBinding.from_schema_spec(spec).tool for spec in response_format.schema_specs]
         if isinstance(response_format, ToolStrategy) else [])
-    count_tools_projection = (lambda selected: [convert_to_openai_tool(tool, strict=True) for tool in selected]) if provider_format else None
+    count_tools_projection = (lambda selected: [model_tool_schema(tool, strict=True) for tool in selected]) if provider_format else None
 
     parts.response_format = response_format
     parts.provider_format = provider_format
@@ -314,6 +333,7 @@ def _compile_deep_agent(service, parts, run, http_sink, fixture_bank, *, inspect
         asset_service=service.assets, capture_backend=capture_backend,
         tool_image_preparer=None if inspection_only else prepare_tool_images,
         generation_recorder=None if inspection_only else lambda: service._merge_latest_generation_sample(run),
+        grants=PreferenceStore(service.store),
     )
     native_approval = HumanInTheLoopMiddleware(interrupt_on or {}) if has_input_policy(run) else None
     def ensure_deferred_approval(name):

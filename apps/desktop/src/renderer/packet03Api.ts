@@ -43,6 +43,10 @@ export interface PermissionGrant {
   arguments: Record<string, unknown>;
   created_at: string;
   source_run_id: string;
+  kind?: "exact_action" | "project_files";
+  project_id?: string | null;
+  operations?: Array<"write_file" | "edit_file">;
+  excluded_paths?: string[];
 }
 
 export interface MatchedPermissionGrant extends PermissionGrant {
@@ -130,6 +134,8 @@ export const packet03Api = {
   presentation: () => api.presentationSettings(),
   savePresentation: (payload: Partial<PresentationSettings>) => api.updatePresentationSettings(payload),
   grants: () => packet03Request<PermissionGrant[]>("/v1/settings/grants"),
+  allowProjectFiles: (payload: { project_id: string; operations: Array<"write_file" | "edit_file">; excluded_paths: string[] }) =>
+    packet03Request<PermissionGrant>("/v1/settings/grants/project-files", { method: "POST", body: JSON.stringify(payload) }),
   revokeGrant: (grantId: string) => packet03Request<{ revoked: true }>(`/v1/settings/grants/${encodeURIComponent(grantId)}`, { method: "DELETE" }),
   createBackup: (destination: string, include_browser_profiles = false) =>
     packet03Request<BackupCreateResult>("/v1/backups", { method: "POST", body: JSON.stringify({ destination, include_browser_profiles }) }),

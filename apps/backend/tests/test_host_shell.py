@@ -18,6 +18,7 @@ from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.harness_backend import host_shell_requested
 from workbench_backend.agents.host_shell import (
     SKILLS_WRITE_DENY_PATHS,
+    OWNED_RESULT_WRITE_DENY_PATHS,
     filesystem_permissions_for_run,
     interrupt_on_for_run,
     pending_interrupt_from_raw,
@@ -171,22 +172,22 @@ def _run(*, project_path: str | None, presented: list[str] | None = None) -> Age
 class HostShellPolicyTests(unittest.TestCase):
     def test_permissions_are_route_scoped_deny_only(self) -> None:
         ordinary = _run(project_path="/tmp/project")
-        self.assertIsNone(filesystem_permissions_for_run(ordinary))
+        self.assertEqual(list(filesystem_permissions_for_run(ordinary)[0].paths), list(OWNED_RESULT_WRITE_DENY_PATHS))
         selected_skill = _run(project_path="/tmp/project")
         selected_skill.skill_version_refs = ["skill-version"]
         live = filesystem_permissions_for_run(selected_skill)
         self.assertIsNotNone(live)
         assert live is not None
-        self.assertEqual(live[0].mode, "deny")
-        self.assertEqual(list(live[0].paths), list(SKILLS_WRITE_DENY_PATHS))
+        self.assertTrue(all(rule.mode == "deny" for rule in live))
+        self.assertEqual(list(live[-1].paths), list(SKILLS_WRITE_DENY_PATHS))
         recorded_run = _run(project_path="/tmp/project")
         recorded_run.tool_mode = ToolMode.recorded_tool
         self.assertIsNone(filesystem_permissions_for_run(recorded_run))
         recorded_run.skill_version_refs = ["skill-version"]
-        self.assertEqual(list(filesystem_permissions_for_run(recorded_run)[0].paths), list(SKILLS_WRITE_DENY_PATHS))
+        self.assertEqual(list(filesystem_permissions_for_run(recorded_run)[-1].paths), list(SKILLS_WRITE_DENY_PATHS))
         project_free = _run(project_path=None)
         project_free.skill_version_refs = ["skill-version"]
-        self.assertEqual(list(filesystem_permissions_for_run(project_free)[0].paths), list(SKILLS_WRITE_DENY_PATHS))
+        self.assertEqual(list(filesystem_permissions_for_run(project_free)[-1].paths), list(SKILLS_WRITE_DENY_PATHS))
         echo_only = _run(project_path="/tmp/project", presented=["echo"])
         self.assertFalse(host_shell_requested(echo_only))
         self.assertIsNone(interrupt_on_for_run(echo_only))

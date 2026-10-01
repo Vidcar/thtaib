@@ -93,6 +93,19 @@ class DocumentContextTests(unittest.TestCase):
             session_id="other-chat", project_path=None), self.backend)
         self.assertIsInstance(denied.invoke({"query": "orchid"}), str)
 
+    def test_inline_excerpt_is_bounded_and_retained_evidence_keeps_full_hit(self):
+        text = "orchid " + "漢字😀" * 900
+        asset = self.upload(text)
+        result = self.tool([asset.id]).invoke({"query": "orchid"})
+        hit, = result["results"]
+        self.assertEqual(hit["excerpt"], text[:600])
+        self.assertTrue(hit["inline_excerpt_truncated"])
+        self.assertTrue(hit["excerpt_truncated"])
+        self.assertIn(text[:1800], self.backend.files[hit["path"]].decode())
+        self.assertIn(hit["source_url"], self.backend.files[hit["path"]].decode())
+        self.assertEqual(hit["extracted_line"], 1)
+        self.assertEqual(hit["start_char"], 0)
+
     def test_full_selection_uses_one_catalogue_block_without_reinjecting_text(self):
         ids = [self.upload(f"PRIVATE-DOCUMENT-TEXT-{index}", f"document-{index}.md").id for index in range(32)]
         blocks = self.assets.document_catalogue(RetainedAssetReuseRequest(asset_ids=ids, session_id="chat_docs"))

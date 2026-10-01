@@ -15,6 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 import time
+from contextlib import nullcontext, asynccontextmanager
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
@@ -55,10 +56,25 @@ from workbench_backend.inference.image_validation import (
 )
 from workbench_backend.knowledge.diagnostics import apply_capture_policy
 from workbench_backend.knowledge.schemas import ContextCaptureSettings
-from workbench_backend.agents.execution_policy import ExecutionControl, PLAN_TOOLS, CURRENT_TOOL_CALL
+from workbench_backend.agents.execution_policy import ExecutionControl, plan_tool_names, CURRENT_TOOL_CALL
 from workbench_backend.state.preferences import tool_authorization_metadata
 
 log = logging.getLogger(__name__)
+
+
+async def _settle_owned_task(task):
+    """Repeated caller cancellation cannot abandon executor-owned work."""
+    interrupted = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as error:
+            if task.cancelled():
+                raise
+            interrupted = error
+        except BaseException:
+            break
+    return task.result(), interrupted
 
 
 class WorkbenchHarnessMiddleware(AgentMiddleware):
@@ -80,6 +96,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         capture_backend: Any = None,
         tool_image_preparer: Callable[[], bool] | None = None,
         generation_recorder: Callable[[], None] | None = None,
+        grants: Any = None,
     ) -> None:
         super().__init__()
         self.run = run
@@ -91,6 +108,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         self.capture_backend = capture_backend
         self.tool_image_preparer = tool_image_preparer
         self.generation_recorder = generation_recorder
+        self.grants = grants
         self.outline_cache = ProjectOutlineCache()
         self._outline_initialized = "snapshot_text" in (run.project_outline or {})
         self._outline_text = (run.project_outline or {}).get("snapshot_text", "")
@@ -242,7 +260,13 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 return self._browser_action_reconsidered(request)
             self._begin_tool(request)
             try:
-                result = self._wrap_tool_call(request, handler)
+                with self._native_mutation_lock(request) or nullcontext():
+                    self._require_dispatch_allowed()
+                    self._before_tool_effect(request)
+                    try:
+                        result = self._wrap_tool_call(request, handler)
+                    finally:
+                        self._capture_delete_after(request)
             except BaseException as exc:
                 result = self._handle_tool_failure(request, exc)
                 if result is None:
@@ -260,13 +284,73 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
     def _record_tool_result(self, request, result):
         name, _, call_id = _tool_call_parts(request)
         previous = self.run.tool_outcomes.get(call_id)
-        if previous is not None and previous.outcome in {"succeeded", "failed"} and isinstance(result, ToolMessage) and previous.result == result.content:
+        if name != "delete" and previous is not None and previous.outcome in {"succeeded", "failed"} and isinstance(result, ToolMessage) and previous.result == result.content:
             return
         self.execution_control.record_tool_outcome(self.run,
             result_outcome(call_id, name, result, previous.evidence if previous else {},
-                process_stopped=True if name == "execute" and sys.platform == "win32" and self.run.tool_mode != ToolMode.recorded_tool else None))
-        if self.run.project_path and name in {"write_file", "edit_file", "execute", "delete_file", "move_file"}:
+                process_stopped=True if name in {"execute", "execute_skill_script"} and sys.platform == "win32" and self.run.tool_mode != ToolMode.recorded_tool else None))
+        if self.run.project_path and name in {"write_file", "edit_file", "apply_edits", "execute", "execute_skill_script", "delete", "start_command", "command_status", "stop_command"}:
             self.outline_cache.invalidate(self.run.project_path)
+
+    def _before_tool_effect(self, request):
+        if self.fixture_bank is not None:
+            return
+        from langchain_core.tools import ToolException
+        from workbench_backend.agents.file_operations import validate_delete_target, validate_mutation_batch
+        from workbench_backend.agents.host_shell import recheck_saved_authorization
+        name, args, call_id = _tool_call_parts(request)
+        recheck_saved_authorization(self.run, name, args, call_id, self.grants)
+        try:
+            if name in {"write_file", "edit_file", "delete", "apply_edits"}:
+                validate_mutation_batch(self.run, request)
+            if name == "delete":
+                evidence = validate_delete_target(self.run, args)
+                previous = self.run.tool_outcomes[call_id]
+                self.execution_control.record_tool_outcome(self.run,
+                    previous.model_copy(update={"evidence": evidence}))
+        except HarnessError as exc:
+            raise ToolException(str(exc)) from exc
+
+    def _native_mutation_lock(self, request):
+        name, _, _ = _tool_call_parts(request)
+        if self.fixture_bank is None and self.run.project_path and name in {"write_file", "edit_file", "delete"}:
+            from workbench_backend.agents.file_operations import project_mutation_lock
+            return project_mutation_lock(Path(self.run.project_path))
+        return None
+
+    def _capture_delete_after(self, request):
+        name, args, call_id = _tool_call_parts(request)
+        previous = self.run.tool_outcomes.get(call_id)
+        if name != "delete" or previous is None or not previous.evidence.get("expected_absent"):
+            return
+        from workbench_backend.agents.file_operations import validate_delete_target
+        try:
+            after = validate_delete_target(self.run, args)
+            evidence = {**previous.evidence, "after_inspected": True,
+                **{f"after_{key[7:]}": value for key, value in after.items() if key.startswith("before_")}}
+        except (HarnessError, OSError) as error:
+            evidence = {**previous.evidence, "after_inspected": False, "after_error": str(error)[:1000]}
+        updated = previous.model_copy(update={"evidence": evidence})
+        if previous.result is not None and previous.outcome in {"succeeded", "failed"}:
+            updated = result_outcome(call_id, name, ToolMessage(name=name, tool_call_id=call_id,
+                content=previous.result, status="error" if previous.outcome == "failed" else "success"), evidence)
+        self.execution_control.record_tool_outcome(self.run, updated)
+
+    @asynccontextmanager
+    async def _amutation_lease(self, request):
+        lock = self._native_mutation_lock(request)
+        if lock is None:
+            yield
+            return
+        acquire = asyncio.create_task(asyncio.to_thread(lock.acquire))
+        _, interrupted = await _settle_owned_task(acquire)
+        if interrupted is not None:
+            lock.release()
+            raise interrupted
+        try:
+            yield
+        finally:
+            lock.release()
 
     def _handle_tool_failure(self, request, exc):
         from langgraph.errors import GraphInterrupt
@@ -293,6 +377,12 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             # captured by the permission gate may name a saved exception.
             additional = {key: value for key, value in result.additional_kwargs.items()
                 if key not in {"authorization_source", "authorization_grant"}}
+            outcome = self.run.tool_outcomes.get(result.tool_call_id)
+            if result.name == "delete" and outcome is not None and outcome.outcome == "uncertain":
+                warning = "Deletion effects may be partial or unconfirmed. Inspect the remaining target before requesting any further deletion; do not blindly repeat this action."
+                content = result.content + "\n" + warning if isinstance(result.content, str) else [*result.content, {"type": "text", "text": warning}]
+                result = result.model_copy(update={"content": content, "status": "error"})
+                additional["effect_state"] = "uncertain"
             return result.model_copy(update={"additional_kwargs": {**additional,
                 **tool_authorization_metadata(self.run, result.tool_call_id)}})
         return result
@@ -323,7 +413,18 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 return self._browser_action_reconsidered(request)
             await asyncio.to_thread(self._begin_tool, request)
             try:
-                result = await self._awrap_tool_call(request, handler)
+                async with self._amutation_lease(request):
+                    self._require_dispatch_allowed()
+                    await asyncio.to_thread(self._before_tool_effect, request)
+                    try:
+                        result = await self._awrap_tool_call(request, handler)
+                    finally:
+                        # Shield the post-effect inspection too: the mutation
+                        # lease stays owned until its final evidence settles.
+                        inspection = asyncio.create_task(asyncio.to_thread(self._capture_delete_after, request))
+                        _, interrupted = await _settle_owned_task(inspection)
+                        if interrupted is not None:
+                            raise interrupted
             except BaseException as exc:
                 previous = self.run.tool_outcomes.get(_tool_call_parts(request)[2])
                 # Shielded Windows work may have settled while cancellation was
@@ -520,13 +621,10 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 # an executor. Cancelling the await cannot stop that work.
                 # Retain ownership until it settles before confirming a stop.
                 execution = asyncio.create_task(invoke())
-                try:
-                    return await asyncio.shield(execution)
-                except asyncio.CancelledError:
-                    try:
-                        await execution
-                    finally:
-                        raise
+                result, interrupted = await _settle_owned_task(execution)
+                if interrupted is not None:
+                    raise interrupted
+                return result
             return await invoke()
         return self._replay_tool_call(request)
 
@@ -568,7 +666,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         """
 
         name, args, call_id = _tool_call_parts(request)
-        if self.run.work_mode == "plan" and name not in PLAN_TOOLS:
+        if self.run.work_mode == "plan" and name not in plan_tool_names(self.run.connection_snapshots):
             return ToolMessage(content="Plan mode is read-only. This action was not executed. Switch to Work before requesting changes.", name=name, tool_call_id=call_id, status="error")
         if not self.run.presented_tools:
             return ToolMessage(content="Tools are explicitly off for this run; no action was executed.", name=name, tool_call_id=call_id, status="error")
@@ -652,7 +750,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
     def _presented(self, tools: list[Any] | None) -> list[Any]:
         allowed = set(self.run.presented_tools)
         if self.run.work_mode == "plan":
-            allowed.intersection_update(PLAN_TOOLS)
+            allowed.intersection_update(plan_tool_names(self.run.connection_snapshots))
         if self.run.framework_read_paths:
             allowed.add("read_file")
         selected: list[Any] = []
@@ -724,10 +822,10 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         return gaps, response_observed
 
     def _capture_tool_schemas(self, request: ModelRequest) -> tuple[list[Any], dict[str, str]]:
-        from langchain_core.utils.function_calling import convert_to_openai_tool
+        from workbench_backend.agents.tool_schema import model_tool_schema
         presented_names = {name for name in _tool_names(request.tools)
             if name in self.run.presented_tools or (name == "read_file" and self.run.framework_read_paths)}
-        tool_schemas = [convert_to_openai_tool(tool) for tool in request.tools if tool_name(tool) in presented_names]
+        tool_schemas = [model_tool_schema(tool) for tool in request.tools if tool_name(tool) in presented_names]
         schema_text = {schema["function"]["name"]: json.dumps(schema, ensure_ascii=False, sort_keys=True)
             for schema in tool_schemas}
         return tool_schemas, schema_text

@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from workbench_backend.agents.context import ContextObservation
 from workbench_backend.agents.effective_setup import EffectiveSetup, LoadedKnowledgeFact
@@ -183,8 +183,14 @@ class PendingInterruptAction(BaseModel):
 class UserQuestion(BaseModel):
     model_config = ConfigDict(extra="forbid")
     prompt: str = Field(min_length=1, max_length=4000)
-    answer_type: Literal["text", "choice", "file", "folder"] = "text"
-    choices: list[str] = Field(default_factory=list, max_length=30)
+    answer_type: Literal["text", "choice", "file", "folder"] = Field(default="text", description="Requested task-answer type; answering never grants tool access.")
+    choices: list[str] = Field(default_factory=list, max_length=30, description="Required nonempty options when answer_type is choice.")
+
+    @model_validator(mode="after")
+    def choice_requires_options(self):
+        if self.answer_type == "choice" and not self.choices:
+            raise ValueError("A choice question requires choices.")
+        return self
 
 
 class PendingInterrupt(BaseModel):

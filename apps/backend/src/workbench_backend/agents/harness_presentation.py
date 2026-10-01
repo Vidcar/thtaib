@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from workbench_backend.agents.execution_policy import PLAN_TOOLS
+from workbench_backend.agents.execution_policy import plan_tool_names
 from workbench_backend.agents.retrieval import (
     SEARCH_KNOWLEDGE_TOOL_NAME,
     resolve_embedding_deployment,
@@ -154,7 +154,7 @@ def apply_automatic_read_paths(request, knowledge_plan, presented, retrieval_pre
     return presented, framework_read_paths
 
 
-def apply_disclosure_and_plan_filter(request, input_policy, helpers, knowledge_plan, presented):
+def apply_disclosure_and_plan_filter(request, input_policy, helpers, knowledge_plan, presented, connection_snapshots=()):
     if helpers and request.presented_tools != []:
         presented = [*presented, "task"]
     if input_policy is not None:
@@ -169,7 +169,7 @@ def apply_disclosure_and_plan_filter(request, input_policy, helpers, knowledge_p
                 presented.append("read_reference")
         presented = [name for name in presented if name not in excluded]
     if request.work_mode == "plan":
-        presented = [name for name in presented if name in PLAN_TOOLS]
+        presented = [name for name in presented if name in plan_tool_names(connection_snapshots)]
     return presented
 
 
