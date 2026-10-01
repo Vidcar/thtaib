@@ -22,7 +22,7 @@ from workbench_backend.local_trust import (
 )
 from workbench_backend.paths import SHARED_SECRET_FILENAME, WorkbenchPaths
 
-from support import close_workbench_sqlite, workbench_client
+from tests.support import close_workbench_sqlite, workbench_client
 
 
 PRIVILEGED_GETS = (
