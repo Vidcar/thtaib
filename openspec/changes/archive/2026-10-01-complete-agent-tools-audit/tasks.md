@@ -38,6 +38,6 @@
 - [x] 5.1 Run focused mechanism/negative regressions and applicable shared acceptance (backend default/integration, desktop build, generated contracts, specs and whitespace); resolve every mandatory failure.
 - [x] 5.2 Obtain fresh-context independent review of permission/persistence/lifecycle/projection changes and validation; resolve supported findings and rerun affected checks.
 - [x] 5.3 Run isolated native Windows/browser/desktop checks and report exact application/build/worker identity; verify preserved data and owned cleanup.
-- [ ] 5.4 Run fixed-local-model eager/hybrid/deferred cold/warm matrix and relevant skill activation/nonactivation exercises; report completion/error/discovery/input/cache/latency measurements truthfully.
-- [ ] 5.5 Complete item-level updated resolutions report including 55 tool rows, upgrades, settings, actual validation and remaining limits; update concise handover.
-- [ ] 5.6 Sync completed specs/archive change, commit/push/PR/merge under existing protections and refresh established local deployment; verify authenticated launch chain and artifact/process identity.
+- [x] 5.4 Run fixed-local-model eager/hybrid/deferred cold/warm matrix and relevant skill activation/nonactivation exercises; report completion/error/discovery/input/cache/latency measurements truthfully.
+- [x] 5.5 Complete item-level updated resolutions report including 55 tool rows, upgrades, settings, actual validation and remaining limits; update concise handover.
+- [x] 5.6 Sync completed specs/archive change, commit/push/PR/merge under existing protections and refresh established local deployment; verify authenticated launch chain and artifact/process identity.
