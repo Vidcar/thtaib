@@ -56,11 +56,13 @@ try {
   let records = [
     { ...stamp, id: "files", name: "Files", kind: "mcp", transport: "http", url: "https://files.test/mcp", protocol_capabilities: ["resources"], tools: [], last_tested_at: testedAt, last_error: null },
     { ...stamp, id: "tools", name: "Tools", kind: "mcp", transport: "http", url: "https://tools.test/mcp", protocol_capabilities: ["tools"], tools: [tool("echo", "Echo"), tool("search", "Search")], last_tested_at: testedAt, last_error: null },
+    { ...stamp, id: "empty", name: "Empty", kind: "mcp", transport: "http", url: "https://empty.test/mcp", protocol_capabilities: ["tools", "resources"], tools: [], last_tested_at: testedAt, last_error: null },
     { ...stamp, id: "broken", name: "Broken", kind: "mcp", transport: "http", url: "https://broken.test/mcp", protocol_capabilities: [], tools: [], last_tested_at: testedAt, last_error: "Could not connect" },
   ];
   const tested = id => {
     if (id === "files") return { tools: [], protocol_capabilities: ["resources"], last_error: null, last_tested_at: testedAt };
     if (id === "tools") return { tools: [tool("echo", "Echo"), tool("search", "Search")], protocol_capabilities: ["tools"], last_error: null, last_tested_at: testedAt };
+    if (id === "empty") return { tools: [], protocol_capabilities: ["tools", "resources"], last_error: null, last_tested_at: testedAt };
     return { tools: [], last_error: "Could not connect", last_tested_at: testedAt };
   };
   globalThis.fetch = async (url, init = {}) => {
@@ -83,16 +85,20 @@ try {
   const status = name => text(row(name).findAllByType("button").find(node => node.props.className === "connection-title"));
   const pressTest = async name => { await act(async () => { row(name).findAllByType("button").find(node => text(node).trim() === "Test").props.onClick(); await tick(); }); };
   assert.match(status("Files"), /Ready · no tools/);
-  assert.doesNotMatch(status("Files"), /0 tools ready/);
+  assert.doesNotMatch(status("Files"), /\b0 tools ready/);
   assert.match(status("Tools"), /2 tools ready/);
+  assert.match(status("Empty"), /\b0 tools ready/);
+  assert.doesNotMatch(status("Empty"), /Ready · no tools/);
   assert.match(status("Broken"), /Needs attention/);
   assert.doesNotMatch(status("Broken"), /tools ready/);
   await pressTest("Files");
   assert.match(status("Files"), /Ready · no tools/);
-  assert.doesNotMatch(text(connections.root), /0 tools ready/);
+  assert.doesNotMatch(status("Files"), /\b0 tools ready/);
+  await pressTest("Empty");
+  assert.match(status("Empty"), /\b0 tools ready/);
+  assert.doesNotMatch(status("Empty"), /Ready · no tools/);
   await pressTest("Tools");
   assert.match(status("Tools"), /2 tools ready/);
-  assert.doesNotMatch(text(connections.root), /0 tools ready/);
   console.log("Sidebar and connection wording checks passed.");
 } finally {
   if (sidebar) await act(async () => sidebar.unmount());
