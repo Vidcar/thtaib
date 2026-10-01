@@ -303,58 +303,6 @@ class ProjectAdmissionTests(unittest.TestCase):
         self.assertEqual(self.app.state.chat.dispatch_idle_queued(), 0)
         self.assertEqual(self.started, ["owner"])
 
-    def test_lab_capture_release_advances_waiting_chat_on_success_and_failure(self):
-        from workbench_backend.lab.snapshot import capture_project_snapshot
-        self.app.state.chat_coordinator = ChatCoordinator(self.app)
-        for fails in (False, True):
-            with self.subTest(capture_fails=fails):
-                workspace = self.client.post("/v1/lab/workspaces", json={
-                    "display_name": "capture fixture", "files": {"notes.md": "before"}}).json()
-                response = self.client.post("/v1/chat/conversations", json={
-                    "deployment_id": self.deployment, "workspace_id": workspace["id"], "presented_tools": []})
-                self.assertEqual(response.status_code, 200, response.text)
-                waiter = response.json()
-                entered, release = threading.Event(), threading.Event()
-                result = []
-                def paused_snapshot(*args, **kwargs):
-                    entered.set()
-                    if not release.wait(8):
-                        raise TimeoutError("Snapshot was not released")
-                    if fails:
-                        raise OSError("capture fixture failure")
-                    return capture_project_snapshot(*args, **kwargs)
-                def capture():
-                    try:
-                        result.append(self.client.post("/v1/lab/cases/capture", json={
-                            "workspace_id": workspace["id"], "deployment_id": self.deployment, "task": "Read notes"}))
-                    except OSError as exc:
-                        result.append(exc)
-                with patch("workbench_backend.lab.service.capture_project_snapshot", side_effect=paused_snapshot):
-                    worker = threading.Thread(target=capture)
-                    worker.start()
-                    try:
-                        self.assertTrue(entered.wait(6))
-                        task = "after capture " + str(fails)
-                        queued = self.start(waiter, task)
-                        self.assertEqual(queued["queue"][0]["wait_reason"], "project_busy")
-                        self.until(lambda: self.app.state.chat_coordinator.events.unfinished_tasks == 0)
-                        self.assertNotIn(task, self.started)
-                        release.set()
-                        worker.join(10)
-                        self.assertFalse(worker.is_alive())
-                        if fails:
-                            self.assertIsInstance(result[0], OSError)
-                        else:
-                            self.assertEqual(result[0].status_code, 200, result[0].text)
-                        self.until(lambda: len(self.app.state.chat.store.get(waiter["id"]).run_ids) == 1)
-                        run_id = self.app.state.chat.store.get(waiter["id"]).run_ids[0]
-                        self.assertEqual(wait_for_run(self.client, run_id)["status"], "completed")
-                        self.until(lambda: not self.app.state.chat.store.get(waiter["id"]).queue)
-                        self.assertEqual(self.started.count(task), 1)
-                    finally:
-                        release.set()
-                        worker.join(10)
-
     def test_failed_admission_releases_waiting_chat_without_terminal_run(self):
         self.app.state.chat_coordinator = ChatCoordinator(self.app)
         waiter = self.chat()
@@ -413,33 +361,6 @@ class ProjectAdmissionTests(unittest.TestCase):
         wait_for_run(self.client, current["current_run_id"])
         self.assertEqual(self.app.state.chat.dispatch_idle_queued(), 0)
         self.assertNotIn("cancel-this", self.started)
-
-    def test_lab_capture_holds_reservation_through_snapshot(self):
-        from workbench_backend.lab.snapshot import capture_project_snapshot
-        workspace = self.client.post("/v1/lab/workspaces", json={"display_name": "capture fixture", "files": {"notes.md": "before"}}).json()
-        entered, release = threading.Event(), threading.Event()
-        result = []
-        def paused_snapshot(*args, **kwargs):
-            entered.set()
-            if not release.wait(8):
-                raise TimeoutError("Snapshot was not released")
-            return capture_project_snapshot(*args, **kwargs)
-        def capture():
-            result.append(self.client.post("/v1/lab/cases/capture", json={"workspace_id": workspace["id"], "deployment_id": self.deployment, "task": "Read notes"}))
-        with patch("workbench_backend.lab.service.capture_project_snapshot", side_effect=paused_snapshot):
-            worker = threading.Thread(target=capture)
-            worker.start()
-            try:
-                self.assertTrue(entered.wait(6))
-                blocked = self.client.post("/v1/agent-runs", json={"deployment_id": self.deployment,
-                    "workspace_id": workspace["id"], "task": "Must wait", "presented_tools": []})
-                self.assertEqual(blocked.status_code, 409, blocked.text)
-                self.assertEqual(blocked.json()["code"], "project_busy")
-            finally:
-                release.set()
-                worker.join(10)
-        self.assertFalse(worker.is_alive())
-        self.assertEqual(result[0].status_code, 200, result[0].text)
 
     def test_uncertainty_survives_restart_until_explicit_acknowledgement(self):
         owner, waiter = self.chat(), self.chat()

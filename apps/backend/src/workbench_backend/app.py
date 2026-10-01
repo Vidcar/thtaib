@@ -48,7 +48,6 @@ from workbench_backend.inference.routes import router
 from workbench_backend.inference.service import manager_from_env
 from workbench_backend.knowledge.routes import router as knowledge_router
 from workbench_backend.knowledge.service import KnowledgeService
-from workbench_backend.lab.routes import router as lab_router
 from workbench_backend.lab.service import LabService
 from workbench_backend.lab.workbench import LabWorkbenchService
 from workbench_backend.lab.workbench_routes import router as lab_workbench_router
@@ -241,12 +240,7 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         desktop_automation=application.state.desktop_automation,
     )
     application.state.browser.state_invalidator = application.state.harness.invalidate_browser_state
-    application.state.lab = LabService(
-        lambda: application.state.manager,
-        lambda: application.state.harness,
-        knowledge_provider=lambda: application.state.knowledge,
-        effects_provider=lambda: application.state.effects,
-    )
+    application.state.lab = LabService(lambda: application.state.manager)
     application.state.lab_workbench = LabWorkbenchService(
         lambda: application.state.manager, lambda: application.state.harness, application.state.app_store,
     )
@@ -288,7 +282,6 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
     application.include_router(desktop_automation_router)
     application.include_router(agent_router)
     application.include_router(setup_router)
-    application.include_router(lab_router)
     application.include_router(lab_workbench_router)
     application.include_router(knowledge_router)
     application.include_router(chat_router)

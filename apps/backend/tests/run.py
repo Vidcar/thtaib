@@ -36,7 +36,6 @@ INTEGRATION_PREFIXES = (
     "tests.test_harness.HarnessApiTests.",
     "tests.test_lab.LabApiTests.",
     "tests.test_recorded_tools.RecordedToolHarnessTests.",
-    "tests.test_recorded_tools.RecordedToolLabTests.",
     "tests.test_retrieval.RetrievalHarnessTests.",
     "tests.test_knowledge.KnowledgeLabHarnessTests.",
 )

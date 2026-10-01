@@ -17,6 +17,7 @@ from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.app import create_app
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.knowledge.schemas import KnowledgeConfig
+from workbench_backend.lab.schemas import WorkspaceCreateRequest
 from workbench_backend.paths import WorkbenchPaths
 
 from tests.scripted_model import ScriptedChatModel
@@ -324,8 +325,6 @@ class KnowledgeLabHarnessTests(unittest.TestCase):
             knowledge_provider=lambda: self.app.state.knowledge,
         )
         self.app.state.lab._manager_provider = lambda: self.manager
-        self.app.state.lab._harness_provider = lambda: self.app.state.harness
-        self.app.state.lab._knowledge_provider = lambda: self.app.state.knowledge
         self.client = offline_workbench_client(self.app)
         self.deployment_id = self.client.post(
             "/v1/deployments/connected",
@@ -336,7 +335,7 @@ class KnowledgeLabHarnessTests(unittest.TestCase):
         close_workbench_sqlite(self.app, getattr(self, "client", None))
         self.tmp.cleanup()
 
-    def test_knowledge_version_ids_are_referenceable_from_lab_and_harness(self) -> None:
+    def test_knowledge_version_ids_are_referenceable_from_harness(self) -> None:
         memory = self.client.post(
             "/v1/knowledge/entries",
             json={
@@ -357,17 +356,16 @@ class KnowledgeLabHarnessTests(unittest.TestCase):
                 "provenance": HUMAN,
             },
         ).json()
-        workspace = self.client.post(
-            "/v1/lab/workspaces",
-            json={"display_name": "with-knowledge", "files": {"notes.md": "ok"}},
-        ).json()
+        workspace = self.app.state.lab.create_workspace(
+            WorkspaceCreateRequest(display_name="with-knowledge", files={"notes.md": "ok"})
+        )
         started = self.client.post(
             "/v1/agent-runs",
             json={
                 "deployment_id": self.deployment_id,
                 "task": "Echo the text harness-ok using the echo tool.",
                 "presented_tools": ["echo"],
-                "workspace_id": workspace["id"],
+                "workspace_id": workspace.id,
                 "knowledge_version_refs": [memory["current_version_id"], skill["current_version_id"]],
             },
         )
@@ -382,36 +380,6 @@ class KnowledgeLabHarnessTests(unittest.TestCase):
         gaps = " ".join(capture["capture_gaps"])
         self.assertIn("no retrieval", gaps)
         self.assertNotIn("no durable memory", gaps)
-
-        case = self.client.post(
-            "/v1/lab/cases/capture",
-            json={"workspace_id": workspace["id"], "run_id": run["id"]},
-        )
-        self.assertEqual(case.status_code, 200, case.text)
-        recorded = case.json()
-        self.assertEqual(recorded["knowledge"], "application_owned")
-        self.assertEqual(recorded["memory_version_refs"], [memory["current_version_id"]])
-        self.assertEqual(recorded["skill_version_refs"], [skill["current_version_id"]])
-        restored = self.client.post(f"/v1/lab/cases/{recorded['id']}/restore").json()
-        rerun = self.client.post(
-            f"/v1/lab/cases/{recorded['id']}/rerun",
-            json={"tool_mode": "live-tool", "workspace_id": restored["workspace"]["id"]},
-        )
-        self.assertEqual(rerun.status_code, 200, rerun.text)
-        child = wait_for_run(self.client, rerun.json()["agent_run_id"])
-        self.assertEqual(child["memory_version_refs"], [memory["current_version_id"]])
-        self.assertEqual(child["knowledge"], "application_owned")
-        self.assertEqual(rerun.json()["applied_config"]["memory_version_refs"], [memory["current_version_id"]])
-        missing = self.client.post(
-            "/v1/lab/cases/capture",
-            json={
-                "workspace_id": workspace["id"],
-                "run_id": run["id"],
-                "knowledge_version_refs": ["knv_missing"],
-            },
-        )
-        self.assertEqual(missing.status_code, 404)
-        self.assertEqual(missing.json()["code"], "knowledge_version_missing")
 
 
 if __name__ == "__main__":

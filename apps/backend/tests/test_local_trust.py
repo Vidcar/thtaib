@@ -22,14 +22,14 @@ from workbench_backend.local_trust import (
 )
 from workbench_backend.paths import SHARED_SECRET_FILENAME, WorkbenchPaths
 
-from support import close_workbench_sqlite, workbench_client
+from tests.support import close_workbench_sqlite, workbench_client
 
 
 PRIVILEGED_GETS = (
     "/v1/paths",
     "/v1/chat/conversations",
-    "/v1/lab/workspaces",
-    "/v1/lab/workspaces/ws_missing/files",
+    "/v1/lab/workbench/runs",
+    "/v1/lab/workbench/challenges",
     "/v1/knowledge/entries",
     "/v1/agent-runs",
     "/v1/agent-interaction/threads/missing/state",
@@ -114,22 +114,6 @@ class LocalTrustHttpTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
         self.assertEqual(body["state"], str(WorkbenchPaths(self.root).state))
-
-    def test_lab_project_file_ops_require_token(self) -> None:
-        created = self.authorized.post(
-            "/v1/lab/workspaces",
-            json={"display_name": "trust-files", "files": {"notes.md": "hello"}},
-        )
-        self.assertEqual(created.status_code, 200, created.text)
-        workspace_id = created.json()["id"]
-        files_path = f"/v1/lab/workspaces/{workspace_id}/files"
-        denied = self.anonymous.get(files_path)
-        self.assertEqual(denied.status_code, 401)
-        wrong = self.wrong.put(files_path, json={"files": {"notes.md": "nope"}})
-        self.assertEqual(wrong.status_code, 403)
-        allowed = self.authorized.get(files_path)
-        self.assertEqual(allowed.status_code, 200, allowed.text)
-        self.assertEqual(allowed.json()["files"]["notes.md"], "hello")
 
     def test_chat_create_requires_token(self) -> None:
         denied = self.anonymous.post(

@@ -9,19 +9,13 @@ import type {
   Deployment,
   DeletePreview,
   DeploymentProfileChanges,
-  EngineMeasurement,
   ImportJob,
   InspectReport,
-  LabCase,
-  LabRestore,
-  LabResult,
   KnowledgeConfig,
   KnowledgeEntry,
   KnowledgeKind,
   KnowledgeScope,
   KnowledgeVersion,
-  LabToolMode,
-  LabWorkspace,
   ModelBundle,
   ModelCard,
   ModelStorageSummary,
@@ -361,36 +355,6 @@ export const api = {
     request<ChatConversation>(`/v1/chat/conversations/${id}/transcript`, {
       method: "PUT",
       body: JSON.stringify({ messages }),
-    }),
-  createWorkspace: (display_name: string, files: Record<string, string>) =>
-    request<LabWorkspace>("/v1/lab/workspaces", {
-      method: "POST",
-      body: JSON.stringify({ display_name, files }),
-    }),
-  workspaces: () => request<LabWorkspace[]>("/v1/lab/workspaces"),
-  workspaceFiles: (id: string) => request<{ files: Record<string, string> }>(`/v1/lab/workspaces/${id}/files`),
-  writeWorkspaceFiles: (id: string, files: Record<string, string>) =>
-    request<{ workspace: LabWorkspace; files: Record<string, string> }>(`/v1/lab/workspaces/${id}/files`, {
-      method: "PUT",
-      body: JSON.stringify({ files }),
-    }),
-  captureCase: (workspace_id: string, run_id?: string) =>
-    request<LabCase>("/v1/lab/cases/capture", {
-      method: "POST",
-      body: JSON.stringify({ workspace_id, run_id }),
-    }),
-  labCases: () => request<LabCase[]>("/v1/lab/cases"),
-  restoreCase: (id: string) => request<LabRestore>(`/v1/lab/cases/${id}/restore`, { method: "POST" }),
-  rerunCase: (id: string, tool_mode: LabToolMode, workspace_id: string) =>
-    request<LabResult>(`/v1/lab/cases/${id}/rerun`, {
-      method: "POST",
-      body: JSON.stringify({ tool_mode, workspace_id }),
-    }),
-  labResult: (id: string) => request<LabResult>(`/v1/lab/results/${id}`),
-  measureEngine: (deployment_id?: string) =>
-    request<EngineMeasurement>("/v1/lab/engine-measurements", {
-      method: "POST",
-      body: JSON.stringify({ deployment_id }),
     }),
   knowledgeConfig: () => request<KnowledgeConfig>("/v1/knowledge/config"),
   updateKnowledgeConfig: (payload: {
