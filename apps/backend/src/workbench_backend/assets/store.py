@@ -101,7 +101,7 @@ class RetainedAssetStore:
         if not include_deleted:
             clauses.append("deleted_at IS NULL")
         # The Library needs metadata, not every extracted document in memory.
-        # Keep the full immutable record available to reads and backup callers.
+        # Keep the full immutable record available to reads.
         projection = "payload" if include_extraction_sections else "json_remove(payload, '$.extraction.sections') AS payload"
         sql = f"SELECT {projection} FROM retained_assets"
         if clauses:

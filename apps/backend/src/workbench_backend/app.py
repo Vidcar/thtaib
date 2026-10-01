@@ -38,8 +38,7 @@ from workbench_backend.preview.service import PreviewService
 from workbench_backend.preview.routes import router as preview_router
 from workbench_backend.desktop_automation.service import DesktopAutomationService
 from workbench_backend.desktop_automation.routes import router as desktop_automation_router
-from workbench_backend.state.backup import BackupService, MaintenanceGate, BackupError
-from workbench_backend.state.backup_routes import router as backup_router
+from workbench_backend.state.maintenance import MaintenanceError, MaintenanceGate
 from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
 from workbench_backend.errors import HarnessError, WorkbenchError, workbench_error_handler
 from workbench_backend.inference.compatibility import CompatibilityService
@@ -186,12 +185,12 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
 
     @application.middleware("http")
     async def maintenance_boundary(request, call_next):
-        if not request.url.path.startswith("/v1/") or request.url.path.startswith("/v1/backups") or request.url.path == "/v1/desktop/stop-owned-work":
+        if not request.url.path.startswith("/v1/") or request.url.path == "/v1/desktop/stop-owned-work":
             return await call_next(request)
         try:
             with application.state.maintenance_gate.mutation():
                 return await call_next(request)
-        except BackupError as exc:
+        except MaintenanceError as exc:
             return JSONResponse(status_code=409, content={"code": exc.code, "message": str(exc)})
     application.state.compatibility = CompatibilityService(application.state.manager.paths)
     def _lookup_run(run_id: str):
@@ -253,27 +252,6 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         assets_provider=lambda: application.state.assets,
     )
     application.state.manager.validate_chat_reconfiguration = application.state.chat.validate_reconfiguration
-    def _active_work():
-        active = [run.id for run in application.state.harness.list_run_lifecycle(
-            statuses={"queued", "running", "cancel_requested"}, details=False)]
-        active.extend(job.id for job in application.state.manager.imports.list_jobs() if job.status.value in {"pending", "running", "stopping"})
-        active.extend(run.id for run in application.state.lab_workbench.list_runs() if run.status in {"queued", "running", "stopping"})
-        return active
-    def _reconcile_for_backup():
-        # Maintenance has drained coordinator mutations and blocks dispatch.
-        # Persist terminal history/assets here without advancing any queue.
-        for conversation in application.state.chat.store.list_conversations(include_archived=True):
-            if conversation.current_run_id:
-                run = application.state.harness.get_run_operational(conversation.current_run_id)
-                if not is_run_lifecycle_live(run.status):
-                    application.state.asset_lifecycle.collect_verified_outputs_for_run(conversation.id, run.id)
-        application.state.chat.reconcile_saved_queue_on_startup()
-        # Profiles are sensitive local state. Close every owned Chrome context
-        # before copying it; live pages and unfinished actions are never backed up.
-        submit_checkpoint_task(application.state.manager.paths.checkpoints_db,
-            application.state.browser.shutdown()).result(timeout=30)
-    application.state.backups = BackupService(application.state.manager.paths, application.state.app_store,
-        maintenance_gate=application.state.maintenance_gate, active_work=_active_work, reconcile=_reconcile_for_backup)
     application.include_router(router)
     application.include_router(compatibility_router)
     application.include_router(effect_router)
@@ -290,7 +268,6 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
     application.include_router(browser_router)
     application.include_router(preview_router)
     application.include_router(asset_lifecycle_router)
-    application.include_router(backup_router)
     application.include_router(interaction_router)
     application.add_exception_handler(WorkbenchError, workbench_error_handler)
 

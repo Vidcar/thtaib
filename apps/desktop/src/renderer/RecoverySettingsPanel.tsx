@@ -2,15 +2,11 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import {
   packet03Api,
-  type BackupCreateResult,
-  type BackupRestoreResult,
   type PermissionGrant,
 } from "./packet03Api";
 import type { PresentationSettings, PresentationTheme } from "./types";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { CompactSwitch, SegmentedChoice, SettingRow, SettingSection } from "./CompactControls";
-import { HoverHelp } from "./HoverHelp";
-import { pickWorkbenchPath } from "./PathField";
 import { Icon } from "./Icon";
 import { ProjectFileGrantControls } from "./ProjectFileGrantControls";
 import "./packet03Panels.css";
@@ -21,8 +17,10 @@ interface RecoverySettingsPanelProps {
   defaultsPanel?: ReactNode;
   connectionsPanel?: ReactNode;
   onPreferencesChanged?: (preferences: PresentationSettings) => void;
-  onRestoreCompleted?: (result: BackupRestoreResult) => void;
 }
+
+const SETTINGS_CATEGORIES = ["Appearance", "Notifications", "Defaults", "Connections", "Permissions"] as const;
+type SettingsCategory = (typeof SETTINGS_CATEGORIES)[number];
 
 const fallbackPresentation: PresentationSettings = {
   theme: "system",
@@ -30,14 +28,6 @@ const fallbackPresentation: PresentationSettings = {
   attention_notifications: true,
   success_notifications: false,
 };
-
-function backupArchivePath(destinationFolder: string, now = new Date()): string {
-  const folder = destinationFolder.trim();
-  const separator = folder.includes("\\") ? "\\" : "/";
-  const normalizedFolder = folder.replace(/[\\/]+$/, "");
-  const stamp = now.toISOString().replaceAll(":", "-").replace(/\.\d{3}Z$/, "Z");
-  return `${normalizedFolder}${separator}local-ai-workbench-${stamp}.workbench-backup.zip`;
-}
 
 function grantLabel(grant: PermissionGrant): string {
   const scope = grant.scope === "always" ? "Always allow" : "This session";
@@ -50,11 +40,11 @@ function argumentSummary(value: Record<string, unknown>): string {
   return entries.slice(0, 4).map(([key, item]) => `${key}: ${String(item)}`).join(", ");
 }
 
-export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted, children, defaultsPanel, connectionsPanel }: RecoverySettingsPanelProps) {
-  const [category, setCategory] = useState(() => {
+export function RecoverySettingsPanel({ onPreferencesChanged, children, defaultsPanel, connectionsPanel }: RecoverySettingsPanelProps) {
+  const [category, setCategory] = useState<SettingsCategory>(() => {
     try {
       const saved = sessionStorage.getItem("workbench.settings.category");
-      if (saved && ["Appearance", "Notifications", "Defaults", "Connections", "Permissions", "Backup"].includes(saved)) return saved;
+      if (saved && (SETTINGS_CATEGORIES as readonly string[]).includes(saved)) return saved as SettingsCategory;
     } catch { /* Use the first category when storage is unavailable. */ }
     return "Appearance";
   });
@@ -63,13 +53,6 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const [preferencesBusy, setPreferencesBusy] = useState(false);
   const [grants, setGrants] = useState<PermissionGrant[]>([]);
-  const [activeRunIds, setActiveRunIds] = useState<string[]>([]);
-  const [backupDestination, setBackupDestination] = useState("");
-  const [includeBrowserProfiles, setIncludeBrowserProfiles] = useState(false);
-  const [restoreArchive, setRestoreArchive] = useState("");
-  const [restoreDestination, setRestoreDestination] = useState("");
-  const [lastBackup, setLastBackup] = useState<BackupCreateResult | null>(null);
-  const [lastRestore, setLastRestore] = useState<BackupRestoreResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const preferencesRef = useRef(preferences);
@@ -95,10 +78,9 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
     setBusy(true);
     setMessage("");
     try {
-      const [nextPreferencesResult, nextGrants, work] = await Promise.allSettled([
+      const [nextPreferencesResult, nextGrants] = await Promise.allSettled([
         packet03Api.presentation(),
         packet03Api.grants(),
-        packet03Api.activeWork(),
       ]);
       if (nextPreferencesResult.status === "fulfilled") {
         if (generation === preferencesGeneration.current && !saveInFlight.current) {
@@ -111,11 +93,7 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
       if (nextGrants.status !== "fulfilled") {
         throw nextGrants.reason;
       }
-      if (work.status !== "fulfilled") {
-        throw work.reason;
-      }
       setGrants(nextGrants.value);
-      setActiveRunIds(work.value.active_run_ids);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -172,61 +150,6 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
     }
   }
 
-  async function chooseFolder(setter: (path: string) => void): Promise<void> {
-    const selected = await pickWorkbenchPath("folder");
-    if (selected) setter(selected);
-  }
-
-  async function chooseFile(setter: (path: string) => void): Promise<void> {
-    const selected = await pickWorkbenchPath("file");
-    if (selected) setter(selected);
-  }
-
-  async function createBackup(): Promise<void> {
-    if (!backupDestination.trim()) return;
-    setBusy(true);
-    setMessage("");
-    try {
-      const result = await packet03Api.createBackup(backupArchivePath(backupDestination), includeBrowserProfiles);
-      setLastBackup(result);
-      setMessage("Backup created.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function restoreBackup(): Promise<void> {
-    if (!restoreArchive.trim() || !restoreDestination.trim()) return;
-    setBusy(true);
-    setMessage("");
-    try {
-      const result = await packet03Api.restoreBackup(restoreArchive.trim(), restoreDestination.trim());
-      setLastRestore(result);
-      onRestoreCompleted?.(result);
-      setMessage("Backup restored to a clean destination. It has not been activated.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function activateRestore(destination: string): Promise<void> {
-    if (!destination.trim() || !window.workbench?.activateRestore) return;
-    setBusy(true);
-    setMessage("");
-    try {
-      await window.workbench.activateRestore(destination.trim());
-      setMessage("Restore activation started. The app will restart and reload the restored workspace.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const preferenceControlsDisabled = !preferencesLoaded || preferencesBusy || refreshInFlight.current;
 
   return (
@@ -238,7 +161,7 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
         </button>
       </header>
 
-      <nav className="settings-categories" aria-label="Settings categories">{["Appearance", "Notifications", "Defaults", "Connections", "Permissions", "Backup"].map(item => <button type="button" key={item} aria-current={category === item ? "page" : undefined} onClick={() => setCategory(item)}>{item}</button>)}</nav>
+      <nav className="settings-categories" aria-label="Settings categories">{SETTINGS_CATEGORIES.map(item => <button type="button" key={item} aria-current={category === item ? "page" : undefined} onClick={() => setCategory(item)}>{item}</button>)}</nav>
 
       {message ? <p role="status" className="notice">{message}</p> : null}
 
@@ -272,77 +195,6 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
               </button>
             </SettingRow>
           ))}
-        </SettingSection>
-      </div>
-
-      <div className="settings-category-content" hidden={category !== "Backup"}>
-        <SettingSection title="Create a backup" description="App records, compatible checkpoints and retained files. Models, runtimes and project files stay where they are. Browser sign-ins are excluded unless selected below.">
-          <SettingRow stacked label="Destination folder" htmlFor="backup-destination" hint={lastBackup ? `Created ${lastBackup.archive_path}. ${lastBackup.manifest.browser_profiles_included ? "Browser sign-ins included (sensitive); connection credentials excluded." : "Browser sign-ins and connection credentials excluded."} Effects will not be replayed on restore.` : undefined}>
-            <div className="path-field">
-              <input id="backup-destination" value={backupDestination} onChange={(event) => setBackupDestination(event.target.value)} placeholder="Choose a folder for the backup archive" />
-              <button type="button" onClick={() => void chooseFolder(setBackupDestination)} disabled={!window.workbench?.selectPath}>
-                <Icon name="folder" size={14} /> Choose folder
-              </button>
-            </div>
-          </SettingRow>
-          <SettingRow label="Include browser sign-ins (sensitive)" hint="Including sign-ins closes browser pages first. Restored browsers open fresh tabs; connection credentials stay excluded.">
-            <CompactSwitch bare label="Include browser sign-ins (sensitive)" checked={includeBrowserProfiles} disabled={busy} onChange={setIncludeBrowserProfiles} />
-          </SettingRow>
-          <div className="setting-actions">
-            <button type="button" className="primary-button" disabled={busy || !backupDestination.trim()} onClick={() => void createBackup()}>
-              <Icon name="download" size={14} /> Create backup
-            </button>
-          </div>
-        </SettingSection>
-
-        <SettingSection title="Restore a backup" description="Restores into an empty folder. Activation restarts the app; previous actions are never replayed." actions={<HoverHelp title="Restore dependencies">Missing models, runtimes and external files are reported before activation.</HoverHelp>}>
-          {activeRunIds.length ? (
-            <p className="notice notice-warn">{activeRunIds.length} active run{activeRunIds.length === 1 ? "" : "s"} detected. Restore is safest after work is stopped or complete.</p>
-          ) : null}
-          <SettingRow stacked label="Backup archive" htmlFor="restore-archive">
-            <div className="path-field">
-              <input id="restore-archive" value={restoreArchive} onChange={(event) => setRestoreArchive(event.target.value)} placeholder="Choose a backup archive" />
-              <button type="button" onClick={() => void chooseFile(setRestoreArchive)} disabled={!window.workbench?.selectPath}>
-                <Icon name="files" size={14} /> Choose archive
-              </button>
-            </div>
-          </SettingRow>
-          <SettingRow stacked label="Clean destination folder" htmlFor="restore-destination">
-            <div className="path-field">
-              <input id="restore-destination" value={restoreDestination} onChange={(event) => setRestoreDestination(event.target.value)} placeholder="Choose an empty folder" />
-              <button type="button" onClick={() => void chooseFolder(setRestoreDestination)} disabled={!window.workbench?.selectPath}>
-                <Icon name="folder" size={14} /> Choose destination
-              </button>
-            </div>
-          </SettingRow>
-          <div className="setting-actions">
-            <button type="button" className="primary-button" disabled={busy || !restoreArchive.trim() || !restoreDestination.trim()} onClick={() => void restoreBackup()}>
-              <Icon name="restore" size={14} /> Restore backup
-            </button>
-          </div>
-          {lastRestore ? (
-            <div className="notice">
-              <p>Restored to {lastRestore.destination_root}. Not yet active; no actions replayed.</p>
-              {lastRestore.missing_dependencies.length ? (
-                <ul>
-                  {lastRestore.missing_dependencies.map((item, index) => (
-                    <li key={`${item.kind}-${item.path ?? item.id ?? index}`}>{item.kind}: {item.path ?? item.id ?? "missing reference"}</li>
-                  ))}
-                </ul>
-              ) : (
-                <p>No missing external dependencies reported.</p>
-              )}
-              {window.workbench?.activateRestore ? (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void activateRestore(lastRestore.destination_root)}
-                >
-                  <Icon name="restore" size={14} /> Activate restore and restart
-                </button>
-              ) : null}
-            </div>
-          ) : null}
         </SettingSection>
       </div>
     </section>

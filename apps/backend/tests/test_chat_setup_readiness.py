@@ -10,7 +10,7 @@ from langchain_core.messages import AIMessage
 from workbench_backend.app import create_app
 from workbench_backend.chat.schemas import ChatQueueItem
 from workbench_backend.inference.ids import utc_now
-from workbench_backend.state.backup import BackupError
+from workbench_backend.state.maintenance import MaintenanceError
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.setup_service import SetupService
 from workbench_backend.assets.schemas import RetainedUploadRequest
@@ -115,10 +115,10 @@ class ChatSetupReadinessTests(unittest.TestCase):
         self.assertIn("exploded", saved["queue"][0]["pause_error"])
 
         def blocked(_conversation):
-            raise BackupError("store is copying", code="maintenance_active")
+            raise MaintenanceError("store is copying", code="maintenance_active")
 
         with patch.object(self.app.state.chat, "_dispatch_next_queued", blocked):
-            with self.assertRaises(BackupError):
+            with self.assertRaises(MaintenanceError):
                 self.app.state.chat.dispatch_idle_queued(chat_id)
         still_paused = self.client.get(f"/v1/chat/conversations/{chat_id}").json()
         self.assertEqual(still_paused["queue"][0]["pause_error_code"], "dispatch_failed")
