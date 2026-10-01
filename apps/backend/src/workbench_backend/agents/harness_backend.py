@@ -1,11 +1,12 @@
 """Deep Agents filesystem / host-shell backend for one harness run (STATE-002).
 
 Live runs attach ``CompositeBackend`` so framework internals stay out of the
-user's project. A bound project uses ``LocalShellBackend`` as the default only
-when ``execute`` is presented (Windows host shell with approvals). Otherwise
-the default is ``FilesystemBackend`` so Deep Agents does not put a live
-``execute`` tool on the node. Recorded-tool mode attaches no live project,
-host-shell, or retrieval backend; knowledge routes may use scratch so
+user's project. ``LocalShellBackend`` is the default only when ``execute`` is
+presented. A project shell starts in that folder; a project-free shell starts
+in the resolved user profile. Otherwise the default is ``FilesystemBackend``
+so Deep Agents does not put a live ``execute`` tool on the node. Recorded-tool
+mode attaches no live project, host-shell, or retrieval backend; knowledge
+routes may use scratch so
 official ``memory=`` / ``skills=`` can ``download_files`` (LAB-003).
 """
 
@@ -241,11 +242,12 @@ def build_run_backend(
         default = StateBackend()
     elif host_shell_requested(run):
         from workbench_backend.agents.tool_results import OwnedToolResults
-        # Host shell cwd is the user-chosen project. inherit_env so PATH and
-        # the Windows host environment are the real machine, not an empty env.
-        # virtual_mode does not restrict execute() (LocalShellBackend docs).
+        # Project commands start in that folder. A presented shell with no
+        # project starts in the resolved user profile, not an invented project.
+        # inherit_env keeps the real Windows environment. virtual_mode does
+        # not restrict execute() (LocalShellBackend docs).
         default = BoundedImageLocalShellBackend(
-            root_dir=run.project_path,
+            root_dir=run.project_path or str(Path.home().resolve()),
             virtual_mode=True,
             inherit_env=True,
             image_inputs_allowed=image_inputs_allowed,
@@ -268,7 +270,5 @@ def host_shell_requested(run: AgentRun) -> bool:
     """
 
     if run.tool_mode is ToolMode.recorded_tool:
-        return False
-    if not run.project_path:
         return False
     return "execute" in run.presented_tools

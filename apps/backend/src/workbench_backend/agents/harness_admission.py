@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 from deepagents.middleware.summarization import SUMMARIZATION_EVENT_KEY, SummarizationMiddleware
@@ -668,10 +669,15 @@ def _persist_admitted_run(service, admitted):
         effective_setup=setup,
         starting_snapshot_id=starting_snapshot_id,
         host_shell=HostShellFacts(
-            available=project_path is not None
-            and "execute" in presented
-            and request.tool_mode is not ToolMode.recorded_tool,
-            cwd=project_path,
+            available=(
+                "execute" in presented
+                and request.tool_mode is not ToolMode.recorded_tool
+            ),
+            cwd=project_path if project_path else (
+                str(Path.home().resolve())
+                if "execute" in presented and request.tool_mode is not ToolMode.recorded_tool
+                else None
+            ),
             inherit_env=True,
         ),
         output_schema=request.output_schema,

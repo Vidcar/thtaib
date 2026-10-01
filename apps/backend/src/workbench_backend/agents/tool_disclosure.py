@@ -444,8 +444,9 @@ class ToolDisclosureMiddleware(AgentMiddleware):
         return True
 
     async def _local_ready(self, name: str, runtime: ToolRuntime) -> bool:
-        from workbench_backend.agents.tools import FILESYSTEM_TOOL_NAMES, SHELL_TOOL_NAMES
-        if self.run.project_path or name not in {*FILESYSTEM_TOOL_NAMES, *SHELL_TOOL_NAMES, "start_preview", "stop_preview", "preview_status"}:
+        from workbench_backend.agents.tools import FILESYSTEM_TOOL_NAMES, PROJECT_FREE_HOST_COMMANDS, SHELL_TOOL_NAMES
+        project_tools = {*FILESYSTEM_TOOL_NAMES, *SHELL_TOOL_NAMES, "start_preview", "stop_preview", "preview_status"} - PROJECT_FREE_HOST_COMMANDS
+        if self.run.project_path or name not in project_tools:
             return True
         if name in {"ls", "read_file"} and (self.run.framework_read_paths or self.run.memory_version_refs or self.run.skill_version_refs or self.run.capture_routes_enabled):
             return True

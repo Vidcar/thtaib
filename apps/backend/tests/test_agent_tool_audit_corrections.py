@@ -305,7 +305,7 @@ class ResearcherTemplateTests(AuditHarnessTests):
                 self.assertNotIn("execute", presented)
                 self.assertNotIn("delete", presented)
 
-    def test_pinned_reads_and_eager_mutation_or_shell_still_require_a_project(self) -> None:
+    def test_pinned_reads_and_eager_mutation_require_a_project(self) -> None:
         pinned = self._save_template(input_policy=self._policy("always", pinned_tools=["read_attachment", "read_tool_result", "glob"]))
         self.assertIn("glob", pinned["configuration"]["presented_tools"])
         chat = self._chat(agent_setup_id=pinned["id"], work_mode="plan")
@@ -321,8 +321,12 @@ class ResearcherTemplateTests(AuditHarnessTests):
         shell = self._save("Eager shell", {"presented_tools": ["execute"], "input_policy": {"tool_loading": "always"}})
         shell_chat = self._chat(agent_setup_id=shell["id"])
         command = self.client.post(f"/v1/chat/conversations/{shell_chat['id']}/start", json={"task": "Run."})
-        self.assertEqual(command.status_code, 400, command.text)
-        self.assertEqual(command.json()["code"], "shell_requires_project")
+        self.assertEqual(command.status_code, 200, command.text)
+        finished = wait_for_chat(self.client, shell_chat["id"])
+        run = finished["current_run"]
+        self.assertEqual(run["status"], "completed", run.get("error"))
+        self.assertTrue(run["host_shell"]["available"])
+        self.assertEqual(run["host_shell"]["cwd"], str(Path.home().resolve()))
 
     def test_framework_reader_does_not_satisfy_a_required_project_read(self) -> None:
         run = SimpleNamespace(

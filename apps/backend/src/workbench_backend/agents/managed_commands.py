@@ -79,8 +79,12 @@ class ManagedCommandService:
 
     def start(self, run, command: list[str], timeout_seconds: int = 300,
               *, cancel_requested: Callable[[], bool] | None = None) -> dict:
-        if not run.project_path or not Path(run.project_path).is_dir():
-            raise ToolException("An available bound project is required for managed commands.")
+        if run.project_path:
+            if not Path(run.project_path).is_dir():
+                raise ToolException("An available bound project is required for managed commands.")
+            cwd = run.project_path
+        else:
+            cwd = str(Path.home().resolve())
         if not 1 <= timeout_seconds <= 86400 or not 1 <= len(command) <= 40 or any(not isinstance(arg, str) or not arg or len(arg) > 4096 or "\x00" in arg for arg in command):
             raise ToolException("Provide executable argv (1–40 bounded arguments) and a 1–86400 second timeout.")
         executable = command[0] if Path(command[0]).is_absolute() else shutil.which(command[0])
@@ -106,7 +110,7 @@ class ManagedCommandService:
             job = None
             try:
                 flags = (subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW | 0x00000004) if sys.platform == "win32" else 0
-                process = subprocess.Popen([str(executable), *command[1:]], cwd=run.project_path,
+                process = subprocess.Popen([str(executable), *command[1:]], cwd=cwd,
                     env=dict(os.environ), stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                     shell=False, creationflags=flags, start_new_session=sys.platform != "win32")
                 if sys.platform == "win32":
@@ -232,12 +236,12 @@ class ManagedCommandService:
                 code="command_stop_unconfirmed", status_code=409)
 
     def tools_for_run(self, run, *, cancel_requested=None) -> list[BaseTool]:
-        if not run.project_path or run.work_mode != "work" or getattr(run, "tool_mode", None) == "recorded-tool":
+        if run.work_mode != "work" or getattr(run, "tool_mode", None) == "recorded-tool":
             return []
         @tool("start_command")
         async def start_command(command: Annotated[list[Annotated[str, Field(min_length=1, max_length=4096, pattern=r"^[^\x00]+$")]], Field(min_length=1, max_length=40)],
                                 timeout_seconds: Annotated[int, Field(ge=1, le=86400, description="Owned job timeout in seconds, independent of a whole-task budget.")] = 300) -> str:
-            """Launch executable argv in the bound project without shell syntax or isolation. Return an owned command identity; status and stop use that exact identity. Active jobs are stopped when the run ends."""
+            """Launch executable argv in this run's starting folder without shell syntax or isolation. Return an owned command identity; status and stop use that exact identity. Active jobs are stopped when the run ends."""
             launch = asyncio.create_task(asyncio.to_thread(self.start, run, command, timeout_seconds, cancel_requested=cancel_requested))
             try:
                 return json.dumps(await asyncio.shield(launch), ensure_ascii=False)
