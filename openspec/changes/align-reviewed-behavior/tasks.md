@@ -4,7 +4,7 @@
 
 - [x] 1.1 Remove Lab case capture, restore, and recorded-tool replay routes and the unused case screen, and verify a backend test shows those routes are gone while Performance, Memory, and Challenges still load.
 - [ ] 1.2 Remove the project-tree copy taken before and after a run, and verify a backend test starts a second chat in the same folder without waiting for a copy and without the app creating a git branch or worktree to separate the second chat.
-- [ ] 1.3 Remove application backup and restore, including the Settings Backup section and any option to include browser sign-ins, and verify the Settings test shows Appearance, Notifications, Defaults, Connections, and Permissions, and no Backup section.
+- [x] 1.3 Remove application backup and restore, including the Settings Backup section and any option to include browser sign-ins, and verify the Settings test shows Appearance, Notifications, Defaults, Connections, and Permissions, and no Backup section.
 - [ ] 1.4 Remove stored copies of the model request, the redaction setting, and the paste-a-capture box, and verify a backend test sends a chat turn without writing a request body while the partial output and error of a failed stream remain.
 - [x] 1.5 Leave Deep Agents compaction scratch and large tool results under the product data root, and verify a test shows that scratch is not in the project folder and is not served as a request inspector.
 
