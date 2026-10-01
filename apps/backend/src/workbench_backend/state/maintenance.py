@@ -57,10 +57,6 @@ class MaintenanceGate:
                 self._active_mutations -= 1
                 self._condition.notify_all()
 
-    def reject_if_active(self) -> None:
-        with self.mutation():
-            return
-
     @property
     def active_reason(self) -> str | None:
         with self._lock:
