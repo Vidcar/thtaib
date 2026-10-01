@@ -9,8 +9,6 @@ CREATE TABLE IF NOT EXISTS attention_receipts (
     identity TEXT PRIMARY KEY, notified_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS attention_dismissals (
     key TEXT PRIMARY KEY, dismissed_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS restored_roots (
-    root TEXT PRIMARY KEY, backup_id TEXT NOT NULL, restored_at TEXT NOT NULL);
 """
 
 ASSET_SCHEMA = """

@@ -48,7 +48,7 @@ from workbench_backend.chat.store import ChatStore
 from workbench_backend.chat.shortcuts import resolve_shortcuts
 from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
 from workbench_backend.errors import ChatError, HarnessError, ManagerError
-from workbench_backend.state.backup import BackupError
+from workbench_backend.state.maintenance import MaintenanceError
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.knowledge.schemas import KnowledgeRefs
@@ -845,7 +845,7 @@ class ChatService:
                     updated = self._dispatch_next_queued(conversation)
                     if set(updated.run_ids) != before_run_ids:
                         dispatched += 1
-            except BackupError:
+            except MaintenanceError:
                 raise
             except Exception as exc:
                 log.exception("Queued chat %s could not start", item.id)
