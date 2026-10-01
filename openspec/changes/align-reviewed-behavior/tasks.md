@@ -10,11 +10,11 @@
 
 ## 2. Keep the existing engines
 
-- [ ] 2.1 Keep one Deep Agents agent and one summarization middleware with its own trigger and keep fractions, fed the live context size, and verify a test does not add a second summarizer or an earlier size rejection.
-- [ ] 2.2 Map the Deep Agents context-overflow error to the existing capacity failure, with the chat left in place and no branch offered, and verify that test.
-- [ ] 2.3 Keep project file tools as the Deep Agents filesystem tools, keep the exact multi-hunk tool beside edit, and keep delete as the upstream delete tool, and verify a harness test registers no second tool of the same name.
-- [ ] 2.4 Keep the shell as LocalShellBackend, with the existing job tools beside it, and verify a project-free This-computer command starts in the resolved user profile and a skill script without a project fails.
-- [ ] 2.5 Keep the thin middleware and shell subclasses under their library names, and verify the harness test still sees FilesystemMiddleware, MemoryMiddleware, SkillsMiddleware, and LocalShellBackend rather than a second copy.
+- [x] 2.1 Keep one Deep Agents agent and one summarization middleware with its own trigger and keep fractions, fed the live context size, and verify a test does not add a second summarizer or an earlier size rejection.
+- [x] 2.2 Map the Deep Agents context-overflow error to the existing capacity failure, with the chat left in place and no branch offered, and verify that test.
+- [x] 2.3 Keep project file tools as the Deep Agents filesystem tools, keep the exact multi-hunk tool beside edit, and keep delete as the upstream delete tool, and verify a harness test registers no second tool of the same name.
+- [x] 2.4 Keep the shell as LocalShellBackend, with the existing job tools beside it, and verify a project-free This-computer command starts in the resolved user profile and a skill script without a project fails.
+- [x] 2.5 Keep the thin middleware and shell subclasses under their library names, and verify the harness test still sees FilesystemMiddleware, MemoryMiddleware, SkillsMiddleware, and LocalShellBackend rather than a second copy.
 - [ ] 2.6 Send Thinking and sampling through the existing llama.cpp request fields, and verify a chat Thinking change does not reload the model or change the saved setup.
 
 ## 3. Permissions, windows, and file order
