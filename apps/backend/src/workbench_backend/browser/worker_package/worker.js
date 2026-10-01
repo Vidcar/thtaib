@@ -178,14 +178,16 @@ async function ensureContext() {
       downloadsPath: path.join(outputDir, 'chrome-downloads'),
     });
     context = launched;
-    context.on('page', observePage);
+    context.on('page', page => { try { observePage(page); } catch { /* A page observer must not stop other listeners seeing the page. */ } });
     context.on('close', () => { context = undefined; activePage = undefined; if (!closing) lost = true; bump(); });
     // Keep profile authentication but never restore an unfinished live page.
-    const oldPages = context.pages();
+    // newPage can return a page that was already open; closing that page would
+    // leave the shared context with no tab for the first navigation.
     const fresh = await context.newPage();
-    for (const page of oldPages) await page.close();
-    observePage(fresh);
-    setActive(fresh);
+    for (const page of context.pages()) if (page !== fresh) await page.close().catch(() => {});
+    const current = fresh.isClosed() ? await context.newPage() : fresh;
+    observePage(current);
+    setActive(current);
     return context;
   })().catch(error => { starting = undefined; throw error; });
   return starting;

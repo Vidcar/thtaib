@@ -4,7 +4,7 @@
 .catalogue-search input {min-width: 0; width: 100%; background-image: none; padding-left: var(--pad-compact);}
 .catalogue-search svg {flex: none;}
 .catalogue-actions {display: flex; flex-wrap: wrap; gap: var(--space-tight);}
-.catalogue-list {display: grid; align-content: start; gap: var(--space-tight); max-height: 68vh; overflow: auto; scrollbar-gutter: stable;}
+.catalogue-list {display: grid; align-content: start; gap: var(--space-tight); max-height: 68vh; overflow: auto; scrollbar-gutter: stable; grid-auto-rows: max-content;}
 .catalogue-row {display: flex; width: 100%; min-width: 0; gap: var(--space-compact); align-items: flex-start; text-align: left; padding: var(--pad-compact); border: var(--line-hairline) solid transparent; background: transparent; border-radius: var(--radius-control);}
 .catalogue-row:hover {background: var(--bg-input);}
 .catalogue-row[aria-current="true"] {background: var(--bg-input); border-color: var(--accent);}

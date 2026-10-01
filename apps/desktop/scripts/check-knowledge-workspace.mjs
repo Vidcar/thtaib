@@ -23,6 +23,7 @@ try {
   await checkHelperRepair((await vite.ssrLoadModule("/src/renderer/SetupConfigurationEditor.tsx")).SetupConfigurationEditor);
   await checkKnowledgeIndependentLoads(KnowledgePanel);
   await checkAgentCatalogueNavigation((await vite.ssrLoadModule("/src/renderer/AgentSetupsPanel.tsx")).AgentSetupsPanel);
+  await checkAgentSaveStaysExplicit((await vite.ssrLoadModule("/src/renderer/AgentSetupsPanel.tsx")).AgentSetupsPanel);
   await checkConnectionCredentialsAndTest((await vite.ssrLoadModule("/src/renderer/ConnectionsPanel.tsx")).ConnectionsPanel);
   await checkRunProposalConflict((await vite.ssrLoadModule("/src/renderer/RunMemoryProposals.tsx")).RunMemoryProposals);
   await checkSavedMemoryNeedsSelection((await vite.ssrLoadModule("/src/renderer/RunMemoryProposals.tsx")).RunMemoryProposals);
@@ -182,6 +183,76 @@ async function checkKnowledgeIndependentLoads(Panel) {
     await act(async () => field(renderer, "Content", "textarea").props.onChange({ target: { value: "New personal entry" } }));
     assert.equal(button(renderer, "Save").props.disabled, false, "personal creation does not require destination or proposal availability");
   } finally { settings.resolve(json(config)); if (renderer) await act(async () => renderer.unmount()); }
+}
+
+async function checkAgentSaveStaysExplicit(Panel) {
+  const calls = [];
+  let records = [{ id: "one", name: "Agent one", role: "Research", current_version_id: "one-v1", active: true, configuration: { instructions: "Original" }, missing_dependencies: [], helper_missing_dependencies: [] }];
+  globalThis.fetch = async (url, init = {}) => {
+    const path = new URL(String(url)).pathname;
+    const body = init.body ? JSON.parse(init.body) : undefined;
+    if (init.method && init.method !== "GET") calls.push({ path, method: init.method, body });
+    if (path === "/v1/agent-setups" && init.method === "POST") {
+      const created = { id: "created", name: body.name, role: body.role, current_version_id: "created-v1", active: true, configuration: body.configuration, missing_dependencies: [], helper_missing_dependencies: [] };
+      records = [...records, created];
+      return json(created);
+    }
+    if (init.method === "PATCH" && /^\/v1\/agent-setups\/[^/]+$/.test(path)) {
+      const id = path.split("/").at(-1);
+      const updated = { ...records.find(record => record.id === id), name: body.name, role: body.role, configuration: body.configuration, current_version_id: `${id}-v2` };
+      records = records.map(record => record.id === id ? updated : record);
+      return json(updated);
+    }
+    if (path === "/v1/agent-setups") return json(records);
+    if (path === "/v1/agent-setup-templates") return json([]);
+    if (path === "/v1/agent-tools") return json({ tools: [], groups: [] });
+    if (path === "/v1/setup-resolution") return json({ configuration: {}, effective: {}, instruction_layers: [], missing_dependencies: [] });
+    if (path.endsWith("/versions") || ["/v1/deployments", "/v1/bundles", "/v1/profiles", "/v1/connections", "/v1/knowledge/entries"].includes(path)) return json([]);
+    throw new Error(`unexpected ${init.method ?? "GET"} ${path}`);
+  };
+  let renderer;
+  try {
+    await act(async () => { renderer = create(React.createElement(Panel)); await tick(); });
+    await act(async () => button(renderer, "Helpers").props.onClick());
+    const form = () => renderer.root.findByType("form");
+    const savedCalls = () => calls.filter(call => call.path.startsWith("/v1/agent-setups") && (call.method === "PATCH" || call.method === "POST"));
+    // The test renderer does not perform the browser's implicit form submit.
+    async function pressEnter(target) {
+      let prevented = false;
+      await act(async () => {
+        form().props.onKeyDown({ key: "Enter", repeat: false, shiftKey: false, nativeEvent: { isComposing: false }, target, preventDefault() { prevented = true; } });
+        if (!prevented) form().props.onSubmit({ preventDefault() {} });
+        await tick();
+      });
+      return prevented;
+    }
+    assert.equal(await pressEnter({ tagName: "INPUT", type: "search" }), true, "Enter in helper search must not submit the agent form");
+    for (const type of ["checkbox", "radio"]) assert.equal(await pressEnter({ tagName: "INPUT", type }), true, `Enter in a ${type} must not submit the agent form`);
+    assert.equal(savedCalls().length, 0, "Enter in helper search must not save the agent");
+    await act(async () => button(renderer, "Role").props.onClick());
+    await act(async () => field(renderer, "Name", "input").props.onChange({ target: { value: "Agent one renamed" } }));
+    const name = field(renderer, "Name", "input");
+    assert.equal(await pressEnter({ tagName: "INPUT", type: name.props.type ?? "text", id: name.props.id }), false, "Enter in Name stays on the form submit path");
+    const renamed = savedCalls().filter(call => call.method === "PATCH");
+    assert.equal(renamed.length, 1, "Enter in the Name field of an existing agent saves");
+    assert.equal(renamed[0].body.name, "Agent one renamed");
+    await act(async () => button(renderer, "New agent").props.onClick());
+    await act(async () => field(renderer, "Name", "input").props.onChange({ target: { value: "QA probe" } }));
+    await act(async () => { form().props.onSubmit({ preventDefault() {} }); await tick(); });
+    assert.match(text(renderer.root.findAll(node => node.props["aria-current"] === "step")[0]), /Setup/, "the first advance opens Setup");
+    const saved = () => calls.filter(call => call.path === "/v1/agent-setups" && call.method === "POST");
+    assert.equal(saved().length, 0, "opening Setup does not save");
+    const submit = () => renderer.root.findAllByType("button").find(node => node.props.type === "submit");
+    let blocked = false;
+    await act(async () => submit().props.onClick({ detail: 2, preventDefault() { blocked = true; } }));
+    assert.equal(blocked, true, "the second click of a double-click must not activate Next or Save");
+    assert.equal(saved().length, 0);
+    await act(async () => { form().props.onSubmit({ preventDefault() {} }); await tick(); });
+    assert.match(text(submit()), /Save agent/, "the next explicit advance reaches Review");
+    assert.equal(saved().length, 0, "reaching Review does not save");
+    await act(async () => { form().props.onSubmit({ preventDefault() {} }); await tick(); });
+    assert.equal(saved().length, 1, "Save on Review creates one agent");
+  } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
 
 async function checkAgentCatalogueNavigation(Panel) {

@@ -28,7 +28,25 @@ assert.doesNotMatch(`${dockSource}\n${monacoSource}`, /cdn\.|jsdelivr|unpkg/, "t
 
 const vite = await createViteServer({ root: desktopRoot, appType: "custom", server: { middlewareMode: true, hmr: false }, logLevel: "error" });
 try {
-  const { useConversationDockView, chatDockGeometry } = await vite.ssrLoadModule("/src/renderer/ChatDock.tsx");
+  const { acceptedProjectFilePath, refusedProjectPathNotice, isRefusedProjectPathNotice, useConversationDockView, chatDockGeometry } = await vite.ssrLoadModule("/src/renderer/ChatDock.tsx");
+  assert.equal(acceptedProjectFilePath("/skills/browser-validation/SKILL.md"), "", "a skill route is not a project file");
+  assert.equal(acceptedProjectFilePath("src/app.ts"), "src/app.ts", "a relative project file stays selectable");
+  assert.equal(acceptedProjectFilePath("C:/outside.txt"), "", "a drive path is not a project file");
+  assert.equal(acceptedProjectFilePath(".."), "", "a parent segment is not a project file");
+  const knowledgeNotice = "That path is managed knowledge or history, not a project file.";
+  const outsideNotice = "That path is outside the project.";
+  for (const route of ["memories", "skills", "retrieved", "conversation_history", "large_tool_results"]) {
+    assert.equal(acceptedProjectFilePath(`${route}/note.md`), "", `${route} stays refused`);
+    assert.equal(refusedProjectPathNotice(`/${route}/note.md`), knowledgeNotice, `${route} uses the knowledge notice`);
+  }
+  assert.equal(refusedProjectPathNotice("C:/outside.txt"), outsideNotice, "a drive path is outside the project");
+  assert.equal(refusedProjectPathNotice("D:\\outside.txt"), outsideNotice, "a Windows drive path is outside the project");
+  assert.equal(refusedProjectPathNotice(".."), outsideNotice, "a parent segment is outside the project");
+  assert.equal(refusedProjectPathNotice("src/../secret.txt"), outsideNotice, "a nested parent segment is outside the project");
+  assert.equal(refusedProjectPathNotice("src/app.ts"), "", "an accepted file has no refusal notice");
+  assert.equal(isRefusedProjectPathNotice(knowledgeNotice), true);
+  assert.equal(isRefusedProjectPathNotice(outsideNotice), true);
+  assert.equal(isRefusedProjectPathNotice("Connection interrupted. Checking whether the message was accepted."), false, "another conversation notice is not a path refusal");
   assert.deepEqual(chatDockGeometry(320, 706), { width: 306, max: 306, canOpen: true }, "the half-width Chat pane retains a 400px readable conversation");
   assert.deepEqual(chatDockGeometry(620, 680), { width: 280, max: 280, canOpen: true }, "the minimum dock and readable conversation fit at 680px");
   assert.equal(chatDockGeometry(620, 679).canOpen, false, "below 680px the dock waits for a wider pane");
@@ -57,6 +75,10 @@ try {
     await act(async () => dock.unmount()); dock = null;
     await act(async () => { dock = create(React.createElement(DockView, { conversationId: "a" })); });
     assert.equal(read().width, 620); assert.equal(read().view.previewId, "upload"); assert.equal(read().view.filesScroll, 420, "restart restores only local presentation state");
+    storage.set("workbench.chat.dock.view:skill", JSON.stringify({ open: true, page: "browser", path: "/skills/browser-validation/SKILL.md", projectId: "project_52" }));
+    await act(async () => dock.update(React.createElement(DockView, { conversationId: "skill" })));
+    assert.equal(read().view.path, "", "a saved skill path is not opened as a project file");
+    assert.equal(JSON.parse(storage.get("workbench.chat.dock.view:skill")).path, "", "the refused path is removed from the saved view");
   } finally { if (dock) await act(async () => dock.unmount()); globalThis.window = oldWindow; }
   const { AgentMessageFeed } = await vite.ssrLoadModule("/src/renderer/AgentMessageFeed.tsx");
   const { ChatDockContext } = await vite.ssrLoadModule("/src/renderer/chatDockContext.tsx");

@@ -37,6 +37,31 @@ export interface ChatDockView {
   fileViews: Record<string, ChatFileView>;
 }
 const emptyDockView: ChatDockView = { open: false, page: "files", helper: "", projectId: null, path: "", filter: "", folders: [], previewId: "", previewOpen: true, filesScroll: 0, helpersScroll: 0, treeScroll: 0, treeScrollLeft: 0, treeSelection: "", fileViews: {} };
+const RESERVED_PROJECT_ROUTES = new Set(["memories", "skills", "retrieved", "conversation_history", "large_tool_results"]);
+/** A dock selection is one relative project file. Framework routes and unsafe paths are refused locally. */
+export function acceptedProjectFilePath(value: string): string {
+  const normalized = value.replaceAll("\\", "/").trim();
+  if (!normalized || normalized.startsWith("//") || /[\u0000-\u001f]/.test(normalized)) return "";
+  const parts = normalized.replace(/^\/+/, "").split("/");
+  if (!parts.length || parts.some(part => !part || part === "." || part === ".." || part.includes(":"))) return "";
+  if (RESERVED_PROJECT_ROUTES.has(parts[0].toLowerCase())) return "";
+  return parts.join("/");
+}
+const PROJECT_FILE_KNOWLEDGE_NOTICE = "That path is managed knowledge or history, not a project file.";
+const PROJECT_FILE_OUTSIDE_NOTICE = "That path is outside the project.";
+/** Copy for a path acceptedProjectFilePath refused. Knowledge wording is only the reserved framework routes. */
+export function refusedProjectPathNotice(value: string): string {
+  if (!value.trim() || acceptedProjectFilePath(value)) return "";
+  const normalized = value.replaceAll("\\", "/").trim();
+  if (normalized.startsWith("//") || /[\u0000-\u001f]/.test(normalized)) return PROJECT_FILE_OUTSIDE_NOTICE;
+  const parts = normalized.replace(/^\/+/, "").split("/");
+  if (!parts.length || parts.some(part => !part || part === "." || part === ".." || part.includes(":"))) return PROJECT_FILE_OUTSIDE_NOTICE;
+  if (RESERVED_PROJECT_ROUTES.has((parts[0] ?? "").toLowerCase())) return PROJECT_FILE_KNOWLEDGE_NOTICE;
+  return PROJECT_FILE_OUTSIDE_NOTICE;
+}
+export function isRefusedProjectPathNotice(message: string): boolean {
+  return message === PROJECT_FILE_KNOWLEDGE_NOTICE || message === PROJECT_FILE_OUTSIDE_NOTICE;
+}
 export function chatDockGeometry(preferredWidth: number, availableWidth: number) {
   const max = Math.max(0, Math.min(1100, Math.floor(availableWidth * 0.48), Math.floor(availableWidth - 400)));
   return { width: Math.min(preferredWidth, max), max, canOpen: availableWidth >= 680 };
@@ -49,7 +74,12 @@ export function useConversationDockView(conversationId: string) {
   if (!views.current.has(key)) {
     let saved: Partial<ChatDockView> = {};
     try { saved = JSON.parse(window.localStorage?.getItem(`workbench.chat.dock.view:${key}`) || "{}"); } catch { /* Use the closed default. */ }
-    views.current.set(key, { ...emptyDockView, ...saved, open: saved.open === true, page: ["files", "browser", "helpers"].includes(saved.page ?? "") ? saved.page! : "files", folders: Array.isArray(saved.folders) ? saved.folders.filter(item => typeof item === "string") : [] });
+    const path = typeof saved.path === "string" ? acceptedProjectFilePath(saved.path) : "";
+    const next = { ...emptyDockView, ...saved, path, open: saved.open === true, page: ["files", "browser", "helpers"].includes(saved.page ?? "") ? saved.page! : "files", folders: Array.isArray(saved.folders) ? saved.folders.filter(item => typeof item === "string") : [] };
+    views.current.set(key, next);
+    if (typeof saved.path === "string" && saved.path !== path) {
+      try { window.localStorage?.setItem(`workbench.chat.dock.view:${key}`, JSON.stringify(next)); } catch { /* The open view still omits the refused path. */ }
+    }
   }
   const update = useCallback((patch: Partial<ChatDockView>) => {
     const next = { ...views.current.get(key)!, ...patch };
@@ -175,10 +205,15 @@ function FilesPage(props: {
   useEffect(() => {
     setFile(null);
     setFileError("");
-    setFileLoading(Boolean(props.projectId && props.selectedPath));
-    if (!props.projectId || !props.selectedPath) return;
+    const readablePath = acceptedProjectFilePath(props.selectedPath);
+    setFileLoading(Boolean(props.projectId && readablePath));
+    if (props.projectId && props.selectedPath && !readablePath) {
+      const refusal = refusedProjectPathNotice(props.selectedPath);
+      if (refusal) setFileError(refusal);
+    }
+    if (!props.projectId || !readablePath) return;
     let cancelled = false;
-    void request<SchemaProjectFileContent>(`/v1/projects/${encodeURIComponent(props.projectId)}/file?path=${encodeURIComponent(props.selectedPath)}`).then(next => {
+    void request<SchemaProjectFileContent>(`/v1/projects/${encodeURIComponent(props.projectId)}/file?path=${encodeURIComponent(readablePath)}`).then(next => {
       if (!cancelled) setFile(next);
     }).catch(failure => { if (!cancelled) setFileError(errorMessage(failure)); }).finally(() => { if (!cancelled) setFileLoading(false); });
     return () => { cancelled = true; };
