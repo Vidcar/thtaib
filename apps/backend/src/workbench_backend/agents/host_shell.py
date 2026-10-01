@@ -60,8 +60,9 @@ VISUAL_ACTION_TOOLS = frozenset({
 
 HOST_SHELL_NOTE = (
     "Host shell has no isolation. Commands run through Deep Agents "
-    "LocalShellBackend with the bound project as cwd and inherit the backend "
-    "process environment. permissions= apply only to routed filesystem "
+    "LocalShellBackend. A project command starts in that project. A command "
+    "without a project starts in the resolved user profile. Commands inherit "
+    "the backend process environment. permissions= apply only to routed filesystem "
     "prefixes while the default backend is a sandbox. Access or an explicit "
     "saved permission controls execution; the application persists native interrupts and "
     "surfaces them through shared Chat."
@@ -133,7 +134,7 @@ def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | 
             "when": requires_approval,
             "description": (
                 "Host shell command (no isolation). Approve to run on this machine "
-                "in the bound project working directory."
+                + ("starting in the project." if run.project_path else "starting in the resolved user profile.")
             ),
         }
     } if host_shell_requested(run) else {}

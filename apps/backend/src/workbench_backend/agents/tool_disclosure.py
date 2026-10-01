@@ -194,7 +194,8 @@ def compact_tool(
             if name in properties:
                 properties[name]["description"] = "Project-relative path, or an explicitly supplied framework virtual path. / is the project root."
     if tool.name == "execute" and "command" in properties:
-        properties["command"]["description"] = "Host shell command in the bound project; cmd.exe syntax on Windows."
+        folder = "the project" if project_bound else "the resolved user profile"
+        properties["command"]["description"] = f"Host shell command starting in {folder}; cmd.exe syntax on Windows."
     description = COMPACT_DESCRIPTIONS.get(tool.name, tool.description)
     if framework_reader:
         paths = ", ".join(framework_read_paths or [])

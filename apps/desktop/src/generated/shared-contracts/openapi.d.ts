@@ -5468,7 +5468,7 @@ export interface components {
             isolation: "none";
             /**
              * Note
-             * @default Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls; the application persists native interrupts and surfaces them through shared Chat.
+             * @default Host shell has no isolation. Commands run through Deep Agents LocalShellBackend. A project command starts in that project. A command without a project starts in the resolved user profile. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls; the application persists native interrupts and surfaces them through shared Chat.
              */
             note: string;
         };
@@ -7100,7 +7100,7 @@ export interface components {
             namespace?: string[];
             /**
              * Note
-             * @default Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls; the application persists native interrupts and surfaces them through shared Chat.
+             * @default Host shell has no isolation. Commands run through Deep Agents LocalShellBackend. A project command starts in that project. A command without a project starts in the resolved user profile. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls; the application persists native interrupts and surfaces them through shared Chat.
              */
             note: string;
         };
