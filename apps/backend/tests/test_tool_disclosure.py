@@ -200,6 +200,31 @@ class ToolDisclosurePolicyTests(unittest.TestCase):
         run.presented_tools = []
         self.assertEqual(bootstrap_tool_names(run), set())
 
+    def test_projectless_knowledge_reader_does_not_describe_a_project_root(self):
+        from deepagents.middleware.filesystem import LsSchema, ReadFileSchema
+
+        routes = ["/memories/", "/skills/", "/large_tool_results/", "/conversation_history/", "/retrieved/"]
+        reader = StructuredTool(name="read_file", description="read", args_schema=ReadFileSchema)
+        listed = StructuredTool(name="ls", description="list", args_schema=LsSchema)
+        virtual = compact_tool(reader, project_bound=False, virtual_read_paths=routes)
+        listed_virtual = compact_tool(listed, project_bound=False, virtual_read_paths=routes)
+        project = compact_tool(reader, project_bound=True)
+
+        def schema_text(tool: StructuredTool) -> str:
+            body = tool.args_schema if isinstance(tool.args_schema, dict) else tool.args_schema.model_json_schema()
+            return tool.description + "\n" + json.dumps(body)
+
+        virtual_text = schema_text(virtual)
+        self.assertIn("/skills/", virtual_text)
+        self.assertIn("is not a project root", virtual_text)
+        self.assertIn("not authorized", virtual_text)
+        self.assertNotIn("Project-relative", virtual_text)
+        self.assertNotIn("/ is the project root", virtual_text)
+        self.assertIn("/skills/", schema_text(listed_virtual))
+        project_text = schema_text(project)
+        self.assertIn("Project-relative", project_text)
+        self.assertIn("/ is the project root", project_text)
+
     def test_cold_file_schema_removes_contradiction_preserves_validation(self):
         schema = input_tool_schemas(["read_file", "execute"])
         file_schema = schema["read_file"]["function"]

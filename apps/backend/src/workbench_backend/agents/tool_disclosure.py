@@ -84,7 +84,12 @@ def always_skill_dependencies(run: Any, plan: Any) -> tuple[set[str], set[str]]:
     tools, connections = set(), set()
     if not has_input_policy(run):
         return tools, connections
-    allowed = authorized_tool_names(run)
+    allowed = set(authorized_tool_names(run))
+    # The automatic framework reader shares the read_file name. It is not the
+    # project reader a skill can require.
+    presented = set(getattr(run, "presented_tools", ()) or ())
+    if getattr(run, "framework_read_paths", None) and "read_file" not in presented:
+        allowed.discard("read_file")
     selected_connections = {item.id: item for item in run.connection_snapshots}
     for reference in plan.references:
         if reference.kind != "skill" or reference.mode != "always":
@@ -142,7 +147,38 @@ def _discovery_score(query: str, name: str, description: str) -> int:
     return score
 
 
-def compact_tool(tool: Any, *, framework_read_paths: list[str] | None = None) -> Any:
+def projectless_virtual_read_paths(run: Any) -> list[str]:
+    """Virtual routes a projectless ``ls`` / ``read_file`` may open.
+
+    These are selected knowledge or capture routes, not a project folder.
+    The list matches the projectless allow checks in the tool middleware.
+    """
+
+    from workbench_backend.agents.memory_skills import knowledge_routes_selected
+
+    paths: list[str] = []
+    if knowledge_routes_selected(getattr(run, "memory_version_refs", None), getattr(run, "skill_version_refs", None)):
+        paths.extend(["/memories/", "/skills/", "/large_tool_results/", "/conversation_history/", "/retrieved/"])
+    if getattr(run, "capture_routes_enabled", False):
+        paths.append("/captures/")
+    return paths
+
+
+def _projectless_reader_limit(virtual_read_paths: list[str] | None) -> str:
+    routes = [path for path in (virtual_read_paths or []) if path]
+    limit = "This run has no project folder. Project files are not authorized. / is not a project root."
+    if routes:
+        return "Only these virtual routes are permitted: " + ", ".join(routes) + ". " + limit
+    return "No project or knowledge route is authorized. " + limit
+
+
+def compact_tool(
+    tool: Any,
+    *,
+    framework_read_paths: list[str] | None = None,
+    project_bound: bool = True,
+    virtual_read_paths: list[str] | None = None,
+) -> Any:
     """Project schema documentation only; native executor validation is untouched."""
     if not isinstance(tool, BaseTool):
         return tool
@@ -151,18 +187,29 @@ def compact_tool(tool: Any, *, framework_read_paths: list[str] | None = None) ->
     # Schema annotations and literal data are retained. Removing every title
     # key also removes a legitimate argument named title and corrupts defaults.
     properties = schema.get("properties", {})
-    if tool.name in {"ls", "read_file", "write_file", "edit_file", "glob", "grep"}:
+    framework_reader = tool.name == "read_file" and bool(framework_read_paths)
+    projectless_reader = not project_bound and tool.name in {"ls", "read_file"} and not framework_reader
+    if tool.name in {"ls", "read_file", "write_file", "edit_file", "glob", "grep"} and not projectless_reader:
         for name in ("path", "file_path"):
             if name in properties:
                 properties[name]["description"] = "Project-relative path, or an explicitly supplied framework virtual path. / is the project root."
     if tool.name == "execute" and "command" in properties:
         properties["command"]["description"] = "Host shell command in the bound project; cmd.exe syntax on Windows."
     description = COMPACT_DESCRIPTIONS.get(tool.name, tool.description)
-    if tool.name == "read_file" and framework_read_paths:
-        paths = ", ".join(framework_read_paths)
+    if framework_reader:
+        paths = ", ".join(framework_read_paths or [])
         description = "Read framework-saved results or history with zero-based line pagination. Only these paths are permitted: " + paths + ". Project and knowledge files are not authorized by this reader."
         if "file_path" in properties:
             properties["file_path"]["description"] = "A supplied framework virtual path under: " + paths + "."
+    elif projectless_reader:
+        limit = _projectless_reader_limit(virtual_read_paths)
+        if tool.name == "ls":
+            description = "List immediate entries in an authorized virtual directory. " + limit
+        else:
+            description = "Read an authorized virtual file with zero-based line pagination. " + limit
+        for name in ("path", "file_path"):
+            if name in properties:
+                properties[name]["description"] = limit
     return tool.model_copy(update={"description": description, "args_schema": schema})
 
 
@@ -260,8 +307,11 @@ class ToolDisclosureMiddleware(AgentMiddleware):
         visible = self.visible_names(request.state)
         definitions = {tool_name(item): item for item in request.tools}
         definitions.update(self._definitions)
+        project_bound = bool(getattr(self.run, "project_path", None))
         framework_read_paths = self.run.framework_read_paths if "read_file" not in self.run.presented_tools else None
-        return request.override(tools=[compact_tool(item, framework_read_paths=framework_read_paths)
+        virtual_read_paths = None if project_bound or framework_read_paths else projectless_virtual_read_paths(self.run)
+        return request.override(tools=[compact_tool(
+            item, framework_read_paths=framework_read_paths, project_bound=project_bound, virtual_read_paths=virtual_read_paths)
             for name, item in definitions.items() if name in visible])
 
     def wrap_model_call(self, request, handler):
@@ -362,6 +412,8 @@ class ToolDisclosureMiddleware(AgentMiddleware):
                 activated.append(name)
             if name == "read_file" and "read_file" not in self.run.presented_tools and self.run.framework_read_paths:
                 description = "Only these paths are permitted: " + ", ".join(self.run.framework_read_paths) + "."
+            elif name in {"ls", "read_file"} and not getattr(self.run, "project_path", None):
+                description = _projectless_reader_limit(projectless_virtual_read_paths(self.run))
             else:
                 description = COMPACT_DESCRIPTIONS.get(name, description)
             lines.append(f"{name}: {description}")

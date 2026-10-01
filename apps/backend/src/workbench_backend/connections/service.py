@@ -32,12 +32,36 @@ def connection_error_handler(original):
     return handle
 
 
-def _resource_method_missing(error) -> bool:
-    code = getattr(getattr(error, "error", None), "code", None)
-    if code == -32601:
-        return True
-    message = str(error).lower()
-    return "method not found" in message or "-32601" in message
+def negotiated_capabilities(adapter) -> set[str] | None:
+    """Tools and resources advertised by the connected server.
+
+    ``None`` means this adapter did not expose a negotiation result. An empty
+    set means the server completed negotiation without those capabilities.
+    """
+
+    client = getattr(adapter, "client", None)
+    if client is None or not hasattr(client, "server_capabilities"):
+        return None
+    capabilities = client.server_capabilities
+    if capabilities is None:
+        return None
+    found = set()
+    if getattr(capabilities, "tools", None) is not None:
+        found.add("tools")
+    if getattr(capabilities, "resources", None) is not None:
+        found.add("resources")
+    return found
+
+
+def _protocol_method_unsupported(error) -> bool:
+    """True only for the protocol's typed method-not-found error.
+
+    Matching error text is not evidence that a capability is absent.
+    """
+
+    from mcp import MCPError
+    from mcp_types import METHOD_NOT_FOUND
+    return isinstance(error, MCPError) and error.code == METHOD_NOT_FOUND
 
 
 def namespaced(connection_id, remote_name):
@@ -217,15 +241,24 @@ class ConnectionService:
         async with MCPAdapter(client) as adapter:
             yield adapter
 
-    async def _discover(self, record, adapter):
+    async def _discover(self, record, adapter, *, advertised=None):
         if record.kind == "public_web":
             from workbench_backend.connections.public_web import public_web_tools
             tools = public_web_tools()
             outputs = {}
+        elif advertised is not None and "tools" not in advertised:
+            return [], []
         else:
-            tools = await adapter.list_tools()
-            # Use the protocol's actual output schema, never infer one from Python wrappers.
-            protocol_tools = await adapter.client.list_tools()
+            try:
+                tools = await adapter.list_tools()
+                # Use the protocol's actual output schema, never infer one from Python wrappers.
+                protocol_tools = await adapter.client.list_tools()
+            except Exception as error:
+                if advertised is not None and "tools" in advertised and _protocol_method_unsupported(error):
+                    raise HarnessError(
+                        "This connection advertises tools, but tools/list is not implemented.",
+                        code="connection_capability_failed", status_code=409) from error
+                raise
             outputs = {item.name: getattr(item, "output_schema", None) for item in protocol_tools}
         if len({tool.name for tool in tools}) != len(tools):
             raise HarnessError("This connection returned duplicate tool names.", code="connection_tool_collision", status_code=409)
@@ -240,14 +273,22 @@ class ConnectionService:
             records.append(ConnectionTool(id=name, name=name, remote_name=tool.name, description=tool.description, input_schema=schema, output_schema=outputs.get(tool.name)))
         return records, tools
 
-    async def _probe_resources(self, adapter) -> bool:
+    async def _probe_resources(self, adapter, *, required: bool = False) -> bool:
         client = getattr(adapter, "client", None)
         if client is None or not callable(getattr(client, "list_resources_mcp", None)):
+            if required:
+                raise HarnessError(
+                    "This connection advertises resources, but this adapter cannot list them.",
+                    code="connection_capability_failed", status_code=409)
             return False
         try:
             await client.list_resources_mcp()
         except Exception as error:
-            if _resource_method_missing(error):
+            if _protocol_method_unsupported(error):
+                if required:
+                    raise HarnessError(
+                        "This connection advertises resources, but resources/list is not implemented.",
+                        code="connection_capability_failed", status_code=409) from error
                 return False
             raise
         return True
@@ -258,14 +299,30 @@ class ConnectionService:
         try:
             async with AsyncExitStack() as stack:
                 adapter = await stack.enter_async_context(self._adapter(record, [])) if record.kind == "mcp" else None
-                catalog, _ = await self._discover(record, adapter)
-                capabilities = ["tools"]
                 if record.kind == "public_web":
+                    catalog, _ = await self._discover(record, adapter)
+                    capabilities = ["tools"]
                     from workbench_backend.connections.public_web import search_web, read_web_page
                     await search_web("LangChain documentation", 1)
                     await read_web_page("https://docs.langchain.com/")
-                elif await self._probe_resources(adapter):
-                    capabilities.append("resources")
+                else:
+                    advertised = negotiated_capabilities(adapter)
+                    capabilities = []
+                    if advertised is None or "tools" in advertised:
+                        catalog, _ = await self._discover(record, adapter, advertised=advertised)
+                        capabilities.append("tools")
+                    else:
+                        catalog = []
+                    if advertised is None:
+                        if await self._probe_resources(adapter):
+                            capabilities.append("resources")
+                    elif "resources" in advertised:
+                        await self._probe_resources(adapter, required=True)
+                        capabilities.append("resources")
+                    if not capabilities:
+                        raise HarnessError(
+                            "This server does not advertise tools or resources.",
+                            code="connection_capability_failed", status_code=409)
             changed = catalog != record.tools or list(record.protocol_capabilities) != capabilities
             updated = record.model_copy(update={"tools": catalog, "protocol_capabilities": capabilities, "version": record.version + int(changed), "last_tested_at": utc_now(), "last_error": None, "updated_at": utc_now()})
         except asyncio.CancelledError:
@@ -293,7 +350,8 @@ class ConnectionService:
                 unsupported = []
                 try:
                     adapter = await stack.enter_async_context(self._adapter(record, unsupported)) if record.kind == "mcp" else None
-                    discovered, actual = await self._discover(record, adapter)
+                    advertised = negotiated_capabilities(adapter) if adapter is not None else None
+                    discovered, actual = await self._discover(record, adapter, advertised=advertised)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
