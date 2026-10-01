@@ -30,7 +30,7 @@ try {
   await checkChatSaveToAgent();
   await checkChatCreateAgent();
 } finally { globalThis.fetch = originalFetch; await vite.close(); }
-console.log("Agent input inspection, scoped edits, actual schemas and mounted Chat snapshot checks passed.");
+console.log("Agent input inspection, scoped edits and mounted Chat snapshot checks passed.");
 
 async function checkInspector(AgentInputs) {
   globalThis.window = { setTimeout, clearTimeout, setInterval, clearInterval, workbench: { backendUrl: "http://127.0.0.1:8000" } };
@@ -80,17 +80,8 @@ async function checkInspector(AgentInputs) {
     assert.equal(saved.length, 1); assert.equal(saved[0].input_policy.instruction_override, "");
     await act(async () => button(renderer, "Fresh chat with these choices").props.onClick());
     assert.equal(fresh, 1); assert.match(textOf(renderer.root), /Earlier messages, tool results or summaries/);
-    assert.equal(calls.filter(call => call.path.includes("agent-runs")).length, 0, "actual diagnostic context is not fetched for next-message preview");
-    await act(async () => renderer.root.findAllByType("input").find(node => node.props.value === "actual").props.onChange());
-    await waitFor(() => assert.match(textOf(renderer.root), /Untruncated schema tail marker/), "actual full tool schema visible");
-    assert.equal(calls.find(call => call.path.includes("agent-runs")).search, "?view=diagnostic");
-    assert.match(textOf(renderer.root), /Image bytes omitted by capture policy/);
-    assert.match(textOf(renderer.root), /Captured \[redacted\] instructions/);
-    assert.match(textOf(renderer.root), /Text is unavailable in this capture/);
-    assert.doesNotMatch(textOf(renderer.root), /Text is not loaded in this preview/);
-    assert.equal(renderer.root.findAll(node => node.type === "button" && textOf(node) === "Exclude").length, 0, "historical actual inputs cannot be edited");
-    await act(async () => button(renderer, "Open in Knowledge").props.onClick());
-    assert.deepEqual(routes.at(-1), ["knowledge", "notes"], "captured Knowledge sources still open their owning editor for future versions");
+    assert.equal(calls.filter(call => call.path.includes("agent-runs")).length, 0, "next-message preview does not fetch a stored request");
+    assert.doesNotMatch(textOf(renderer.root), /Actual requests/);
     assert.deepEqual(originalRun.model_requests, [], "inspection never rewrites the accepted run");
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }

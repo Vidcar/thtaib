@@ -26,7 +26,7 @@ from workbench_backend.agents.tool_disclosure import (
 )
 from workbench_backend.connections.schemas import ConnectionSnapshot, ConnectionTool
 from workbench_backend.errors import HarnessError
-from tests.scripted_model import ScriptedChatModel
+from tests.scripted_model import RECEIVED_PROMPTS, ScriptedChatModel, reset_received_prompts
 
 
 class SchemaRecordingModel(ScriptedChatModel):
@@ -276,11 +276,14 @@ class HarnessToolDisclosureTests(unittest.TestCase):
                 self.assertEqual(blocked.status_code, 409, blocked.text)
                 self.assertEqual(blocked.json()["code"], "skill_selection_required")
                 self.assertEqual(SchemaRecordingModel.offered, [], "No skill body may reach a model before dependencies are selected")
+        reset_received_prompts()
         started = self._start(skill_version_refs=[skill["current_version_id"]], presented_tools=["echo"], input_policy=policy)
         run = wait_for_run(self.client, started["id"])
         self.assertEqual(run["status"], "completed", run.get("error"))
-        self.assertIn("ALWAYS_FROZEN_BODY_826", run["model_requests"][0]["instructions"])
-        self.assertNotIn("echo", run["model_requests"][0]["presented_tools"], "Requirements must not implicitly pin schemas")
+        self.assertEqual(run["model_requests"], [])
+        self.assertIn("ALWAYS_FROZEN_BODY_826", "\n".join(RECEIVED_PROMPTS))
+        self.assertTrue(SchemaRecordingModel.offered)
+        self.assertNotIn("echo", SchemaRecordingModel.offered[0], "Requirements must not implicitly pin schemas")
         self.assertEqual(run["input_policy"]["pinned_tools"], [])
         self.assertEqual(run["tool_outcomes"], {})
 
@@ -308,11 +311,13 @@ class HarnessToolDisclosureTests(unittest.TestCase):
         self.assertEqual(blocked.status_code, 409, blocked.text)
         self.assertEqual(blocked.json()["code"], "browser_worker_missing")
         self.assertEqual(SchemaRecordingModel.offered, [])
+        reset_received_prompts()
         started = self._start(task="Ordinary response.", presented_tools=["browser_navigate"],
             skill_version_refs=[skill["current_version_id"]])
         run = wait_for_run(self.client, started["id"])
         self.assertEqual(run["status"], "completed", run.get("error"))
-        self.assertNotIn("ALWAYS_FROZEN_BODY_826", run["model_requests"][0]["instructions"])
+        self.assertEqual(run["model_requests"], [])
+        self.assertNotIn("ALWAYS_FROZEN_BODY_826", "\n".join(RECEIVED_PROMPTS))
         self.assertEqual(run["tool_outcomes"], {})
 
     def test_always_required_connection_needs_usable_selected_tool_without_opening_adapter(self):
@@ -342,11 +347,15 @@ class HarnessToolDisclosureTests(unittest.TestCase):
             self.assertEqual(blocked.status_code, 409, blocked.text)
             self.assertEqual(blocked.json()["code"], "skill_selection_required")
             self.assertEqual(SchemaRecordingModel.offered, [])
+            reset_received_prompts()
+            SchemaRecordingModel.offered.clear()
             started = self._start(**selection, presented_tools=[name])
             run = wait_for_run(self.client, started["id"])
         self.assertEqual(run["status"], "completed", run.get("error"))
-        self.assertIn("ALWAYS_CONNECTION_BODY_831", run["model_requests"][0]["instructions"])
-        self.assertNotIn(name, run["model_requests"][0]["presented_tools"])
+        self.assertEqual(run["model_requests"], [])
+        self.assertIn("ALWAYS_CONNECTION_BODY_831", "\n".join(RECEIVED_PROMPTS))
+        self.assertTrue(SchemaRecordingModel.offered)
+        self.assertNotIn(name, SchemaRecordingModel.offered[0])
         self.assertEqual(run["tool_outcomes"], {})
 
     def test_child_graph_actual_envelope_rejects_always_skill_before_body_compilation(self):
@@ -364,32 +373,19 @@ class HarnessToolDisclosureTests(unittest.TestCase):
         self.scripted = SchemaRecordingModel([call("find_tools", {"query": "echo"}, "discover-echo"),
             call("echo", {"text": "hello"}), AIMessage(content="hello")])
         authored = "  Keep this authored instruction verbatim.\n\n"
+        reset_received_prompts()
+        SchemaRecordingModel.offered.clear()
         started = self._start(presented_tools=["echo"], input_policy={"instruction_override": authored})
         body = wait_for_run(self.client, started["id"])
         self.assertEqual(body["status"], "completed", body.get("error"))
-        first, second = body["model_requests"][:2]
-        self.assertEqual(set(first["presented_tools"]), {"read_file", "find_tools"})
-        self.assertNotIn("echo", first["presented_tools"])
-        self.assertIn("echo", second["presented_tools"])
-        self.assertEqual({tool["function"]["name"] for tool in first["tool_schemas"]}, set(first["presented_tools"]))
-        self.assertEqual({tool["function"]["name"] for tool in second["tool_schemas"]}, set(second["presented_tools"]))
-        first_source = next(row for row in first["input_sources"] if row["tool_name"] == "echo")
-        second_source = next(row for row in second["input_sources"] if row["tool_name"] == "echo")
-        self.assertEqual(first_source["estimated_tokens"], 0)
-        self.assertIsNone(first_source["content"])
-        self.assertTrue(second_source["available"])
-        self.assertTrue(second_source["observed"])
-        self.assertGreater(second_source["estimated_tokens"], 0)
-        self.assertEqual(second_source["reason"], "Tool definition supplied in this request.")
-        self.assertEqual(json.loads(second_source["content"]),
-            next(tool for tool in second["tool_schemas"] if tool["function"]["name"] == "echo"))
+        self.assertEqual(body["model_requests"], [])
+        self.assertGreaterEqual(len(SchemaRecordingModel.offered), 2)
+        first, second = SchemaRecordingModel.offered[0], SchemaRecordingModel.offered[1]
+        self.assertEqual(first, {"read_file", "find_tools"})
+        self.assertNotIn("echo", first)
+        self.assertIn("echo", second)
         self.assertEqual(body["input_policy"]["tool_loading"], "when_needed")
-        instruction_source = next(row for row in first["input_sources"] if row["id"] == "conversation_instructions")
-        self.assertEqual(instruction_source["content"], authored)
-        self.assertIn(instruction_source["content"], first["instructions"])
-        core_source = next(row for row in first["input_sources"] if row["id"] == "workbench_core")
-        self.assertTrue(core_source["observed"])
-        self.assertIn(core_source["content"], first["instructions"])
+        self.assertIn(authored.strip(), "\n".join(RECEIVED_PROMPTS))
 
     def test_local_file_discovery_does_not_set_up_unready_optional_features(self):
         from tests.support import wait_for_run
@@ -398,6 +394,7 @@ class HarnessToolDisclosureTests(unittest.TestCase):
         project.mkdir()
         connection = self.app.state.harness.connections.create(ConnectionWrite(name="My files",
             kind="mcp", transport="http", url="https://example.test/mcp"))
+        SchemaRecordingModel.offered.clear()
         self.scripted = SchemaRecordingModel([call("find_tools", {"query": "write file edit replace text"}), AIMessage(content="ready")])
         started = self._start(project_path=str(project), connection_ids=[connection.id],
             presented_tools=["read_file", "write_file", "edit_file", "glob", "grep", "browser_file_upload"])
@@ -405,7 +402,9 @@ class HarnessToolDisclosureTests(unittest.TestCase):
         self.assertEqual(body["status"], "completed", body.get("error"))
         self.assertIsNone(body["pending_interrupt"])
         self.assertFalse(any(event["kind"] == "capability_setup_requested" for event in body["events"]))
-        disclosed = set(body["model_requests"][1]["presented_tools"])
+        self.assertEqual(body["model_requests"], [])
+        self.assertGreaterEqual(len(SchemaRecordingModel.offered), 2)
+        disclosed = set(SchemaRecordingModel.offered[1])
         self.assertTrue({"read_file", "write_file", "edit_file"}.issubset(disclosed))
         self.assertFalse(any(name.startswith("browser_") for name in disclosed))
 
@@ -480,14 +479,15 @@ class HarnessToolDisclosureTests(unittest.TestCase):
             "provenance": {"actor": "human", "note": "fixture"}})
         self.assertEqual(created.status_code, 200, created.text)
         reference = created.json()
+        reset_received_prompts()
         self.scripted = SchemaRecordingModel([call("read_reference", {"entry_id": reference["id"]}), AIMessage(content="read")])
         started = self._start(memory_version_refs=[reference["current_version_id"]], presented_tools=["echo"])
         body = wait_for_run(self.client, started["id"])
         self.assertEqual(body["status"], "completed", body.get("error"))
-        first, second = body["model_requests"][:2]
-        self.assertNotIn("EXACT_FROZEN_REFERENCE_BYTES_123", first["instructions"])
-        self.assertNotIn("EXACT_FROZEN_REFERENCE_BYTES_123", str(first["messages"]))
-        self.assertIn("EXACT_FROZEN_REFERENCE_BYTES_123", str(second["messages"]))
+        self.assertEqual(body["model_requests"], [])
+        self.assertGreaterEqual(len(RECEIVED_PROMPTS), 2)
+        self.assertNotIn("EXACT_FROZEN_REFERENCE_BYTES_123", RECEIVED_PROMPTS[0])
+        self.assertIn("EXACT_FROZEN_REFERENCE_BYTES_123", "\n".join(RECEIVED_PROMPTS[1:]))
         results = [event["detail"] for event in body["events"] if event["kind"] == "tool_result" and event["detail"].get("name") == "read_reference"]
         self.assertTrue(results)
 

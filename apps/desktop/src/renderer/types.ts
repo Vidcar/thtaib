@@ -655,19 +655,6 @@ export interface KnowledgeConfig {
   note: string;
 }
 
-export interface ContextCapture {
-  id: string;
-  created_at: string;
-  expires_at: string | null;
-  redaction_mode: RedactionMode;
-  content: string | null;
-  retained: boolean;
-  redacted: boolean;
-  discarded: boolean;
-  expired: boolean;
-  redacted_fields: string[];
-}
-
 export interface InspectReport {
   bundle_id: string;
   file_path: string;

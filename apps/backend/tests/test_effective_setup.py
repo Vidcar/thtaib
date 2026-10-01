@@ -445,11 +445,7 @@ class EffectiveSetupLiveAdapterTests(unittest.TestCase):
         self.assertEqual(setup["bags"]["per_request"]["applied"]["temperature"], DISTINCT_TEMPERATURE)
         self.assertIn("not_a_real_key", setup["unsupported"]["per_request"])
         self.assertFalse(setup["startup_mismatches"])
-        capture = body["model_requests"][0]
-        self.assertEqual(capture["applied_per_request"]["temperature"], DISTINCT_TEMPERATURE)
-        self.assertIsNotNone(capture["http_payload"])
-        self.assertEqual(capture["http_payload"]["body"]["temperature"], DISTINCT_TEMPERATURE)
-        self.assertNotIn("http payload not observed", " ".join(capture["capture_gaps"]))
+        self.assertEqual(body["model_requests"], [])
 
     def test_changed_startup_is_rejected_before_outbound_request(self) -> None:
         profile_id = self._profile(startup={"ctx_size": 8192})
@@ -521,21 +517,12 @@ class EffectiveSetupLiveAdapterTests(unittest.TestCase):
         paths = {item["path"] for item in setup["materialized_knowledge"]}
         self.assertTrue(any(path.startswith("/memories/") for path in paths))
         self.assertIn("/skills/effective-live-skill/SKILL.md", paths)
-        capture = body["model_requests"][0]
-        instructions = capture["instructions"] or ""
-        self.assertIn(MEMORY_TOKEN, instructions)
-        self.assertIn("<agent_memory>", instructions)
-        self.assertNotIn(SKILL_TOKEN, instructions)
-        self.assertIn("## Selected skills", instructions)
+        self.assertEqual(body["model_requests"], [])
         outbound = json.dumps(_RecordingHandler.requests[0]["body"])
         self.assertIn(MEMORY_TOKEN, outbound)
+        self.assertIn("<agent_memory>", outbound)
         self.assertNotIn(SKILL_TOKEN, outbound)
         self.assertIn("## Selected skills", outbound)
-        gaps = " ".join(capture["capture_gaps"])
-        self.assertIn("no retrieval", gaps)
-        self.assertIn("memory edits are run-local", gaps)
-        self.assertNotIn("no durable memory", gaps)
-        self.assertNotIn("no skill versions", gaps)
 
     def test_missing_knowledge_ref_fails_closed(self) -> None:
         response = self.client.post(
@@ -695,15 +682,11 @@ class EffectiveSetupScriptedChatTests(unittest.TestCase):
         body = wait_for_run(self.client, started.json()["id"])
         self.assertEqual(body["status"], "completed", body.get("error"))
         self.assertNotIn(MEMORY_TOKEN, body["effective_setup"]["system_prompt"])
-        capture = body["model_requests"][0]
-        self.assertTrue(capture["loaded_knowledge"][0]["content_available"])
+        self.assertEqual(body["model_requests"], [])
+        self.assertTrue(body["effective_setup"]["loaded_knowledge"][0]["content_available"])
         received = "\n".join(RECEIVED_PROMPTS)
         self.assertIn(MEMORY_TOKEN, received)
         self.assertIn("<agent_memory>", received)
-        if capture.get("http_payload"):
-            self.assertIn(MEMORY_TOKEN, capture["instructions"] or "")
-        else:
-            self.assertIn("http payload not observed", " ".join(capture["capture_gaps"]))
 
     def test_explicit_max_steps_reaches_langgraph_runtime_cap(self) -> None:
         loop_script = [

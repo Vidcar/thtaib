@@ -10,11 +10,6 @@ from pathlib import Path
 from workbench_backend.agents.schemas import AgentRun, ModelRequestCapture
 from workbench_backend.chat.schemas import ChatConversation, ChatMessage
 from workbench_backend.inference.ids import utc_now
-from workbench_backend.knowledge.diagnostics import (
-    apply_capture_policy,
-    apply_run_diagnostic_policy,
-    capture_settings_for_paths,
-)
 from workbench_backend.paths import APPLICATION_DB_NAME, WorkbenchPaths
 from workbench_backend.state.schemas import ExternalEffect, RelatedFile, RunLinkage
 from workbench_backend.state.assistant_text import assistant_insert_index, assistant_text
@@ -134,8 +129,7 @@ class ApplicationStore(ChatStateStoreMixin, InteractionStoreMixin, SetupStoreMix
                 self._migrate_interaction_replay()
                 if previous is None or previous[0] == "1":
                     self._migrate_chat_identity()
-                if previous is None or previous[0] in {"1", "2"}:
-                    self._migrate_run_diagnostics()
+                self._discard_stored_model_requests()
                 self._conn.execute(
                     "INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)",
                     ("schema_version", SCHEMA_VERSION),
@@ -154,14 +148,9 @@ class ApplicationStore(ChatStateStoreMixin, InteractionStoreMixin, SetupStoreMix
             ChatConversation.model_validate(payload)
             self._conn.execute("UPDATE conversations SET payload=? WHERE id=?", (json.dumps(payload), row["id"]))
 
-    def _migrate_run_diagnostics(self) -> None:
-        """Move legacy capture arrays once, without inspecting their content."""
-        self._conn.execute(
-            """INSERT OR IGNORE INTO run_diagnostic_captures(run_id, position, payload)
-               SELECT runs.id, CAST(capture.key AS INTEGER), capture.value
-               FROM runs, json_each(runs.payload, '$.model_requests') AS capture
-               WHERE json_type(runs.payload, '$.model_requests') = 'array'"""
-        )
+    def _discard_stored_model_requests(self) -> None:
+        """Drop stored model-request copies. Runs, chats, and weights stay."""
+        self._conn.execute("DELETE FROM run_diagnostic_captures")
         self._conn.execute(
             "UPDATE runs SET payload = json_remove(payload, '$.model_requests') "
             "WHERE json_type(payload, '$.model_requests') IS NOT NULL"
@@ -197,30 +186,23 @@ class ApplicationStore(ChatStateStoreMixin, InteractionStoreMixin, SetupStoreMix
     def put_run(self, run: AgentRun) -> AgentRun:
         if not isinstance(run, AgentRun):
             raise TypeError("Only complete AgentRun records can be persisted.")
-        run = apply_run_diagnostic_policy(run, capture_settings_for_paths(self.paths))
-        return self._put_run_record(run, preserve_diagnostics=False)
+        return self._put_run_record(run)
 
     def put_execution_run(self, run: AgentRun) -> AgentRun:
-        """Persist the execution owner's already-enforced captures.
+        """Persist execution state without a copy of the model request.
 
-        Capture creation and diagnostic loading share the privacy policy. This
-        path does not inspect all saved diagnostic bodies at every tool event.
+        The caller's in-memory request list is left unchanged for the live run.
         """
         if not isinstance(run, AgentRun):
             raise TypeError("Only complete AgentRun records can be persisted.")
-        return self._put_run_record(run, preserve_diagnostics=True)
+        return self._put_run_record(run)
 
-    def _put_run_record(self, run: AgentRun, *, preserve_diagnostics: bool) -> AgentRun:
+    def _put_run_record(self, run: AgentRun) -> AgentRun:
         payload = run.model_dump_json(exclude={"model_requests"})
-        # All capture batches, linkage and Chat completion belong to one run
-        # write. Roll back failures before another store operation can commit
-        # a partial update on this shared connection.
+        # Linkage and Chat completion belong to one run write. Roll back
+        # failures before another store operation can commit a partial update.
         with self._lock, self._conn:
             self._conn.execute("BEGIN IMMEDIATE")
-            capture_count = self._conn.execute(
-                "SELECT COALESCE(MAX(position) + 1, 0) FROM run_diagnostic_captures WHERE run_id = ?",
-                (run.id,),
-            ).fetchone()[0] if preserve_diagnostics else 0
             self._conn.execute(
                 """
                 INSERT INTO runs(
@@ -254,16 +236,7 @@ class ApplicationStore(ChatStateStoreMixin, InteractionStoreMixin, SetupStoreMix
                     run.updated_at,
                 ),
             )
-            if not preserve_diagnostics:
-                self._conn.execute("DELETE FROM run_diagnostic_captures WHERE run_id = ?", (run.id,))
-            new = run.model_requests[int(capture_count):]
-            for offset in range(0, len(new), 25):
-                batch = new[offset:offset + 25]
-                self._conn.executemany(
-                    "INSERT INTO run_diagnostic_captures(run_id, position, payload) VALUES (?, ?, ?)",
-                    [(run.id, int(capture_count) + offset + index, capture.model_dump_json())
-                     for index, capture in enumerate(batch)],
-                )
+            self._conn.execute("DELETE FROM run_diagnostic_captures WHERE run_id = ?", (run.id,))
             self._replace_checkpoints_locked(run.id, run.thread_id, run.checkpoint_ids)
             self._replace_files_locked(run.id, run.related_files)
             self._reconcile_chat_completion_locked(run)
@@ -291,78 +264,29 @@ class ApplicationStore(ChatStateStoreMixin, InteractionStoreMixin, SetupStoreMix
         operational = self.get_run_operational(run_id)
         if operational is None:
             return None
-        captures = self.normalize_run_diagnostics(run_id)
-        if captures is None:
-            return None
-        return AgentRun.model_validate({**operational.model_dump(mode="python"), "model_requests": captures})
+        return AgentRun.model_validate({**operational.model_dump(mode="python"), "model_requests": []})
 
     def get_execution_run(self, run_id: str) -> AgentRun | None:
-        """Hydrate a complete record for execution/recovery, without inspection."""
+        """Hydrate execution state. Stored model-request copies are not loaded."""
         with self._lock:
             row = self._conn.execute("SELECT payload FROM runs WHERE id = ?", (run_id,)).fetchone()
-            captures = self._diagnostic_rows_locked(run_id) if row is not None else []
         if row is None:
             return None
         run = AgentRun.model_validate_json(row["payload"])
-        run.model_requests = [ModelRequestCapture.model_validate_json(payload) for _, payload in captures]
+        run.model_requests = []
         linkage = self.get_linkage(run_id)
         run.thread_id = linkage.thread_id or run.thread_id
         run.checkpoint_ids = list(linkage.checkpoint_ids)
         run.related_files = list(linkage.related_files)
         return run
 
-    def _diagnostic_rows_locked(self, run_id: str) -> list[tuple[int, str]]:
-        return [(int(row["position"]), str(row["payload"])) for row in self._conn.execute(
-            "SELECT position, payload FROM run_diagnostic_captures WHERE run_id = ? ORDER BY position",
-            (run_id,),
-        ).fetchall()]
-
     def normalize_run_diagnostics(self, run_id: str) -> list[ModelRequestCapture] | None:
-        """Enforce privacy outside locks, updating diagnostics alone by CAS.
-
-        Concurrent lifecycle/tool changes need not retry: the comparison is
-        against the capture row snapshot rather than the complete run payload.
-        A concurrent capture append/edit retries without overwriting it.
-        """
-        while True:
-            settings = capture_settings_for_paths(self.paths)
-            with self._lock:
-                row = self._conn.execute("SELECT id FROM runs WHERE id = ?", (run_id,)).fetchone()
-                original = self._diagnostic_rows_locked(run_id) if row is not None else []
-            if row is None:
-                return None
-            captures = [ModelRequestCapture.model_validate_json(payload) for _, payload in original]
-            normalized = [apply_capture_policy(value, settings) for value in captures]
-            if capture_settings_for_paths(self.paths) != settings:
-                continue
-            changed = [(original[index][0], after) for index, (before, after) in
-                       enumerate(zip(captures, normalized, strict=True)) if before is not after]
-            if not changed:
-                return normalized
-            # Only changed bodies are serialized, and this expensive work is
-            # outside the shared store lock. Unchanged saved entries stay put.
-            replacements = [(index, capture.model_dump_json()) for index, capture in changed]
-            if capture_settings_for_paths(self.paths) != settings:
-                continue
-            matched = False
-            with self._lock, self._conn:
-                # Reserve the SQLite writer before comparing the complete
-                # history, so another connection cannot append/edit after CAS.
-                self._conn.execute("BEGIN IMMEDIATE")
-                current = self._diagnostic_rows_locked(run_id)
-                if current != original:
-                    continue
-                if self._conn.execute("SELECT id FROM runs WHERE id = ?", (run_id,)).fetchone() is None:
-                    return None
-                for offset in range(0, len(replacements), 25):
-                    batch = replacements[offset:offset + 25]
-                    self._conn.executemany(
-                        "UPDATE run_diagnostic_captures SET payload = ? WHERE run_id = ? AND position = ?",
-                        [(content, run_id, position) for position, content in batch],
-                    )
-                matched = True
-            if matched:
-                return normalized
+        """No stored request body is loaded. None means the run is absent."""
+        with self._lock:
+            row = self._conn.execute("SELECT 1 FROM runs WHERE id = ?", (run_id,)).fetchone()
+        if row is None:
+            return None
+        return []
 
     def get_run_operational(self, run_id: str) -> AgentRunOperational | None:
         with self._lock:

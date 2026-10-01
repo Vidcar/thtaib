@@ -16,7 +16,6 @@ from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.app import create_app
 from workbench_backend.inference.service import ModelManager
-from workbench_backend.knowledge.schemas import KnowledgeConfig
 from workbench_backend.lab.schemas import WorkspaceCreateRequest
 from workbench_backend.paths import WorkbenchPaths
 
@@ -223,80 +222,28 @@ class KnowledgeApiTests(unittest.TestCase):
         self.assertEqual(forged.status_code, 403)
         self.assertEqual(forged.json()["code"], "knowledge_actor_forged")
 
-    def test_context_capture_default_redacts_secrets_and_is_configurable(self) -> None:
+    def test_capture_redaction_does_not_create_a_stored_request_policy(self) -> None:
         config = self.client.get("/v1/knowledge/config").json()
-        self.assertEqual(config["context_captures"]["redaction_mode"], "redact_secrets")
-        self.assertIsNone(config["context_captures"]["retention_seconds"])
+        self.assertEqual(config["context_captures"], {"retention_seconds": None, "redaction_mode": "redact_secrets"})
         self.assertTrue(config["not_rag"])
-        default = KnowledgeConfig()
-        self.assertEqual(default.context_captures.redaction_mode, "redact_secrets")
-        raw = (
-            "note API_KEY=super-secret token=abc123 SECRET_VALUE "
-            "and hf_abcdefghijklmnopqrstuvwxyz remain"
-        )
+        raw = "note API_KEY=super-secret token=abc123 SECRET_VALUE"
         captured = self.client.post("/v1/knowledge/captures", json={"content": raw, "source": "debug"})
-        self.assertEqual(captured.status_code, 200, captured.text)
-        body = captured.json()
-        self.assertTrue(body["retained"])
-        self.assertTrue(body["redacted"])
-        self.assertIn("[REDACTED]", body["content"])
-        self.assertNotIn("super-secret", body["content"])
-        self.assertNotIn("SECRET_VALUE", body["content"])
-        self.assertIn("api_key", body["redacted_fields"])
-
-        self.client.put("/v1/knowledge/config", json={"context_captures": {"redaction_mode": "retain"}})
-        retained = self.client.post(
-            "/v1/knowledge/captures",
-            json={"content": "API_KEY=visible-secret"},
-        ).json()
-        self.assertEqual(retained["redaction_mode"], "retain")
-        self.assertFalse(retained["redacted"])
-        self.assertIn("visible-secret", retained["content"])
-
-        self.client.put("/v1/knowledge/config", json={"context_captures": {"redaction_mode": "discard"}})
-        discarded = self.client.post(
-            "/v1/knowledge/captures",
-            json={"content": "API_KEY=should-not-keep"},
-        ).json()
-        self.assertTrue(discarded["discarded"])
-        self.assertFalse(discarded["retained"])
-        self.assertIsNone(discarded["content"])
-
-        self.client.put(
+        self.assertEqual(captured.status_code, 404, captured.text)
+        self.assertEqual(self.client.get("/v1/knowledge/captures").status_code, 404)
+        updated = self.client.put(
             "/v1/knowledge/config",
-            json={"context_captures": {"redaction_mode": "redact_secrets", "retention_seconds": 0}},
+            json={"context_captures": {"redaction_mode": "retain", "retention_seconds": 3600}},
         )
-        expired = self.client.post(
-            "/v1/knowledge/captures",
-            json={"content": "short lived API_KEY=temp"},
-        ).json()
-        self.assertTrue(expired["expired"])
-        self.assertIsNone(expired["content"])
-        listed = self.client.get("/v1/knowledge/captures").json()
-        match = next(item for item in listed if item["id"] == expired["id"])
-        self.assertTrue(match["expired"])
-
-    def test_partial_context_capture_settings_preserve_omitted_fields(self) -> None:
-        initial = self.client.put(
-            "/v1/knowledge/config",
-            json={"context_captures": {"retention_seconds": 3600, "redaction_mode": "retain"}},
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertEqual(updated.json()["context_captures"], {"retention_seconds": None, "redaction_mode": "redact_secrets"})
+        omitted = self.client.put("/v1/knowledge/config", json={})
+        self.assertEqual(omitted.status_code, 200, omitted.text)
+        self.assertEqual(omitted.json()["context_captures"]["redaction_mode"], "redact_secrets")
+        created = self.client.post(
+            "/v1/knowledge/entries",
+            json={"scope": "user", "kind": "memory", "content": "still editable", "provenance": HUMAN},
         )
-        self.assertEqual(initial.status_code, 200, initial.text)
-        redaction = self.client.put(
-            "/v1/knowledge/config", json={"context_captures": {"redaction_mode": "discard"}}
-        )
-        self.assertEqual(redaction.status_code, 200, redaction.text)
-        self.assertEqual(redaction.json()["context_captures"], {"retention_seconds": 3600, "redaction_mode": "discard"})
-        retention = self.client.put(
-            "/v1/knowledge/config", json={"context_captures": {"retention_seconds": 7200}}
-        )
-        self.assertEqual(retention.status_code, 200, retention.text)
-        self.assertEqual(retention.json()["context_captures"], {"retention_seconds": 7200, "redaction_mode": "discard"})
-        cleared = self.client.put(
-            "/v1/knowledge/config", json={"context_captures": {"retention_seconds": None}}
-        )
-        self.assertEqual(cleared.status_code, 200, cleared.text)
-        self.assertEqual(cleared.json()["context_captures"], {"retention_seconds": None, "redaction_mode": "discard"})
+        self.assertEqual(created.status_code, 200, created.text)
 
 
 class KnowledgeLabHarnessTests(unittest.TestCase):
@@ -374,12 +321,7 @@ class KnowledgeLabHarnessTests(unittest.TestCase):
         self.assertEqual(run["knowledge"], "application_owned")
         self.assertEqual(run["memory_version_refs"], [memory["current_version_id"]])
         self.assertEqual(run["skill_version_refs"], [skill["current_version_id"]])
-        capture = run["model_requests"][0]
-        self.assertEqual(capture["memory_versions"], [memory["current_version_id"]])
-        self.assertEqual(capture["skill_versions"], [skill["current_version_id"]])
-        gaps = " ".join(capture["capture_gaps"])
-        self.assertIn("no retrieval", gaps)
-        self.assertNotIn("no durable memory", gaps)
+        self.assertEqual(run["model_requests"], [])
 
 
 if __name__ == "__main__":

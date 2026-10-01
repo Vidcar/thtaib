@@ -25,7 +25,8 @@ class FrameworkArtifactReadTests(unittest.TestCase):
         started = self._start(presented_tools=['echo'])
         final = wait_for_run(self.client, started['id'])
         self.assertEqual(final['status'], 'completed', final.get('error'))
-        self.assertIn('read_file', final['model_requests'][1]['presented_tools'])
+        self.assertEqual(final['model_requests'], [])
+        self.assertIn('read_file', [item['name'] for item in final['tool_invocations']])
         messages = conversation_state(self.manager.paths.checkpoints_db, final['thread_id'])['messages']
         initial = next(item for item in messages if isinstance(item, ToolMessage) and item.tool_call_id == 'oversized-result')
         self.assertIn('/large_tool_results/oversized-result', initial.content)

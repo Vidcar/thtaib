@@ -318,7 +318,7 @@ class AgentCapabilitiesTests(unittest.TestCase):
         self.assertEqual(len(finished["review_observation"]["evaluations"]), 3)
         self.assertEqual(finished["completion"]["judgement"]["model_review"], verdict["explanation"])
         self.assertEqual(finished["completion"]["judgement"]["source"], "rubric_review")
-        self.assertEqual([item['purpose'] for item in finished['model_requests']], ['work', 'review'] * 3)
+        self.assertEqual(finished["model_requests"], [])
 
     def test_review_off_does_not_claim_answer_is_review(self):
         self.harness(lambda *_: ScriptedChatModel([AIMessage(content="Answer only")]))

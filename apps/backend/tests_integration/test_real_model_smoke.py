@@ -2,9 +2,9 @@
 
 Proves plumbing, not model capability: attach + health, one Chat turn that
 produces a real ``write_file`` tool call and a file in the project, a
-follow-up turn that resumes the same thread at the wire, and a profile's
-per-request bag reaching the outbound request body. Assertions target the
-product's own API responses and recorded run state, never model prose.
+follow-up turn that resumes the same thread, and a profile's per-request
+bag on the run's effective setup. Assertions target the product's own API
+responses and recorded run state, never model prose or a stored request body.
 
 Run explicitly (never picked up by ``-s tests``):
 
@@ -37,7 +37,6 @@ import httpx
 from fastapi.testclient import TestClient
 
 from workbench_backend.app import create_app
-from workbench_backend.inference.adapter import CAPTURE_TEXT_LIMIT
 
 from tests.support import close_workbench_sqlite, workbench_client
 from tests_integration.assets import SmokeAssets, SmokeAssetsUnavailable, resolve_assets
@@ -255,24 +254,10 @@ class RealModelSmokeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
-    def _first_http_body(self, run: dict[str, Any]) -> dict[str, Any]:
-        self.assertTrue(run["model_requests"], "no model request was captured")
-        capture = run["model_requests"][0]
-        self.assertNotIn("http payload not observed", " ".join(capture["capture_gaps"]))
-        payload = capture["http_payload"]
-        self.assertIsNotNone(payload, "HTTP payload was not recorded")
-        self.assertTrue(payload["url"].startswith(self.server.endpoint), payload["url"])
-        return payload["body"]
-
-    def _assert_echo_and_owned_reader(self, run: dict[str, Any], body: dict[str, Any]) -> None:
-        tools = {tool["function"]["name"]: tool["function"] for tool in body.get("tools", [])}
-        self.assertEqual(set(tools), {"echo", "read_file"})
+    def _assert_echo_and_owned_reader(self, run: dict[str, Any]) -> None:
+        self.assertEqual(run.get("model_requests") or [], [])
         self.assertEqual(run["presented_tools"], ["echo"])
         self.assertEqual(run["framework_read_paths"], ["/large_tool_results/", "/conversation_history/"])
-        description = tools["read_file"]["description"]
-        for path in run["framework_read_paths"]:
-            self.assertIn(path, description)
-        self.assertIn("Project and knowledge files are not authorized", description)
 
     def test_attach_connected_deployment_reports_healthy(self) -> None:
         deployment = self._attach()
@@ -324,15 +309,7 @@ class RealModelSmokeTests(unittest.TestCase):
         self.assertTrue(on_disk.strip())
         self.assertFalse((self.project / "large_tool_results").exists())
         self.assertFalse((self.project / "conversation_history").exists())
-
-        body = self._first_http_body(run)
-        tool_names = {tool["function"]["name"] for tool in body.get("tools", [])}
-        self.assertIn("write_file", tool_names)
-        self.assertEqual(body["messages"][-1]["role"], "user")
-        # Recorded outbound user bodies are bounded previews. These fixture
-        # prompts fit entirely within that bound, so equality remains exact.
-        self.assertLessEqual(len(WRITE_TASK), CAPTURE_TEXT_LIMIT)
-        self.assertEqual(body["messages"][-1]["content_preview"], WRITE_TASK)
+        self.assertEqual(run.get("model_requests") or [], [])
         first_run_id = run["id"]
 
         self._start_chat(conversation["id"], FOLLOW_UP_TASK)
@@ -344,21 +321,7 @@ class RealModelSmokeTests(unittest.TestCase):
         self.assertEqual(second["thread_id"], conversation["thread_id"])
         self.assertEqual(second["run_ids"], [first_run_id, follow_up["id"]])
         self.assertEqual(second["continuity"]["run_ids"], [first_run_id, follow_up["id"]])
-
-        wire = self._first_http_body(follow_up)["messages"]
-        roles = [message["role"] for message in wire]
-        self.assertEqual(roles[-1], "user")
-        self.assertLessEqual(len(FOLLOW_UP_TASK), CAPTURE_TEXT_LIMIT)
-        self.assertEqual(wire[-1]["content_preview"], FOLLOW_UP_TASK)
-        self.assertIn("tool", roles, f"prior tool result missing from resumed thread: {roles}")
-        prior_calls = {
-            call["function"]["name"]
-            for message in wire
-            if message["role"] == "assistant"
-            for call in message.get("tool_calls") or []
-        }
-        self.assertIn("write_file", prior_calls, f"prior write_file call missing at the wire: {roles}")
-        self.assertTrue(any(message["role"] == "user" and message["content_preview"] == WRITE_TASK for message in wire))
+        self.assertEqual(follow_up.get("model_requests") or [], [])
         self.assertIn("assistant_message", [event["kind"] for event in follow_up["events"]])
         self.assertGreaterEqual(len(follow_up["checkpoint_ids"]), 1)
 
@@ -402,25 +365,19 @@ class RealModelSmokeTests(unittest.TestCase):
         run = wait_for_run(self.client, started.json()["id"])
         self.assertEqual(run["status"], "completed", f"{run.get('error')}\n{self.server.log_tail()}")
 
-        body = self._first_http_body(run)
-        self.assertAlmostEqual(body["temperature"], PROFILE_TEMPERATURE)
-        self.assertEqual(body["top_k"], PROFILE_TOP_K)
-        self.assertAlmostEqual(body["min_p"], PROFILE_MIN_P)
-        self.assertEqual(body["seed"], PROFILE_SEED)
-        self.assertEqual(body["max_tokens"], PROFILE_MAX_TOKENS)
-        self.assertNotIn("max_completion_tokens", body)
-        self.assertNotIn("bogus_setting", body)
-        self._assert_echo_and_owned_reader(run, body)
+        self._assert_echo_and_owned_reader(run)
 
         setup = run["effective_setup"]
         self.assertEqual(setup["selected_profile_id"], profile_id)
         self.assertAlmostEqual(setup["bags"]["per_request"]["applied"]["temperature"], PROFILE_TEMPERATURE)
+        self.assertEqual(setup["bags"]["per_request"]["applied"]["top_k"], PROFILE_TOP_K)
+        self.assertAlmostEqual(setup["bags"]["per_request"]["applied"]["min_p"], PROFILE_MIN_P)
+        self.assertEqual(setup["bags"]["per_request"]["applied"]["seed"], PROFILE_SEED)
+        self.assertEqual(setup["bags"]["per_request"]["applied"]["max_tokens"], PROFILE_MAX_TOKENS)
         self.assertIn("bogus_setting", setup["unsupported"]["per_request"])
         self.assertEqual(setup["startup_mismatches"], [])
         self.assertEqual(setup["bags"]["startup"]["applied"]["ctx_size"], 8192)
-        capture = run["model_requests"][0]
-        self.assertEqual(capture["selected_profile_id"], profile_id)
-        self.assertAlmostEqual(capture["applied_per_request"]["temperature"], PROFILE_TEMPERATURE)
+        self.assertEqual(run["model_requests"], [])
         self.assertIn("assistant_message", [event["kind"] for event in run["events"]])
 
     def test_chat_without_project_completes_non_file_turn(self) -> None:
@@ -462,7 +419,7 @@ class RealModelSmokeTests(unittest.TestCase):
         self.assertFalse((project_operations - {"read_file"}).intersection(run["enabled_tools"]))
         self.assertEqual(run["presented_tools"], ["echo"])
         self.assertNotIn("write_file", run["presented_tools"])
-        self._assert_echo_and_owned_reader(run, self._first_http_body(run))
+        self._assert_echo_and_owned_reader(run)
         self.assertFalse(any(self.project.rglob("large_tool_results")))
         self.assertFalse(any(self.project.rglob("conversation_history")))
         self.assertIn("assistant_message", [event["kind"] for event in run["events"]])

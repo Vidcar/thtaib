@@ -3,7 +3,6 @@ import type {
   KnowledgeActor,
   KnowledgeKind,
   KnowledgeScope,
-  RedactionMode,
 } from "./types";
 
 export function runStatusLabel(status: AgentRunStatus): string {
@@ -88,21 +87,6 @@ export function knowledgeActorLabel(actor: KnowledgeActor): string {
       return "Agent";
     default: {
       const unexpected: never = actor;
-      return unexpected;
-    }
-  }
-}
-
-export function redactionModeLabel(mode: RedactionMode): string {
-  switch (mode) {
-    case "redact_secrets":
-      return "Redact secrets";
-    case "retain":
-      return "Keep original text";
-    case "discard":
-      return "Discard";
-    default: {
-      const unexpected: never = mode;
       return unexpected;
     }
   }

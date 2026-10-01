@@ -228,7 +228,6 @@ class KnowledgeRevertRequest(BaseModel):
 
 
 class KnowledgeConfigUpdateRequest(BaseModel):
-    context_captures: ContextCaptureSettings | None = None
     scope_policies: dict[KnowledgeScope, ScopeWritePolicy] | None = None
 
 
@@ -257,28 +256,6 @@ class KnowledgeProposal(BaseModel):
 class KnowledgeProposalReview(BaseModel):
     model_config = ConfigDict(extra="forbid")
     decision: Literal["accept", "reject"]
-
-
-class ContextCaptureRequest(BaseModel):
-    content: str
-    run_id: str | None = None
-    source: str | None = None
-
-
-class ContextCapture(BaseModel):
-    id: str
-    created_at: str
-    expires_at: str | None = None
-    retention_seconds: int | None = None
-    redaction_mode: RedactionMode
-    content: str | None = None
-    retained: bool
-    redacted: bool
-    discarded: bool
-    expired: bool = False
-    redacted_fields: list[str] = Field(default_factory=list)
-    run_id: str | None = None
-    source: str | None = None
 
 
 class KnowledgeRefs(BaseModel):

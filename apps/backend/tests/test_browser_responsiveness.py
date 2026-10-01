@@ -398,7 +398,7 @@ class BrowserLargeHistoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cancelled.exception.code, "run_cancelling")
         self.assertEqual((await asyncio.to_thread(self.browser.status, self.run.thread_id))["control"], "agent")
         self.assertEqual(self.session.worker.effects, 1)
-        self.assertEqual(len((await asyncio.to_thread(self.store.get_run, previous)).model_requests), 50)
+        self.assertEqual((await asyncio.to_thread(self.store.get_run, previous)).model_requests, [])
         self.harness.cancel_takeover = False
         await control_session(request, self.run.thread_id, BrowserControlRequest(action="take"))
         self.run.browser_control = "agent"
@@ -406,7 +406,7 @@ class BrowserLargeHistoryTests(unittest.IsolatedAsyncioTestCase):
         self.run.finished_at = utc_now()
         await asyncio.to_thread(self.store.put_execution_run, self.run)
         self.assertEqual((await asyncio.to_thread(self.browser.status, self.run.thread_id))["control"], "agent")
-        self.assertEqual(len((await asyncio.to_thread(self.store.get_run, self.run.id)).model_requests), 50)
+        self.assertEqual((await asyncio.to_thread(self.store.get_run, self.run.id)).model_requests, [])
 
     async def test_restart_worker_loss_and_cancelled_view_never_repeat_effects(self):
         await control_session(_Request(self.app), self.run.thread_id, BrowserControlRequest(action="take"))

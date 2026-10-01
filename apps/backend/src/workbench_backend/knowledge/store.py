@@ -12,7 +12,7 @@ import time
 from pydantic import TypeAdapter
 
 from workbench_backend.knowledge.schemas import (
-    ContextCapture,
+    ContextCaptureSettings,
     KnowledgeConfig,
     KnowledgeEntry,
     KnowledgeVersion,
@@ -29,23 +29,24 @@ class KnowledgeStore:
         self.root.mkdir(parents=True, exist_ok=True)
         self.entries_path = self.root / "entries.json"
         self.versions_dir = self.root / "versions"
-        self.captures_dir = self.root / "captures"
         self.config_path = self.root / "config.json"
         self.proposals_dir = self.root / "proposals"
         self.versions_dir.mkdir(parents=True, exist_ok=True)
-        self.captures_dir.mkdir(parents=True, exist_ok=True)
         self.proposals_dir.mkdir(parents=True, exist_ok=True)
 
     def read_config(self) -> KnowledgeConfig:
         if not self.config_path.is_file():
-            # Diagnostics are reads. Concurrent initial readers must not
-            # publish defaults over another caller's newly saved choices.
+            # Concurrent initial readers must not publish defaults over
+            # another caller's newly saved choices.
             return KnowledgeConfig()
-        return KnowledgeConfig.model_validate_json(self.config_path.read_text(encoding="utf-8"))
+        config = KnowledgeConfig.model_validate_json(self.config_path.read_text(encoding="utf-8"))
+        # A saved redaction choice must not revive a stored request policy.
+        return config.model_copy(update={"context_captures": ContextCaptureSettings()})
 
     def write_config(self, config: KnowledgeConfig) -> KnowledgeConfig:
-        self._write_json(self.config_path, config.model_dump(mode="json"))
-        return config
+        stored = config.model_copy(update={"context_captures": ContextCaptureSettings()})
+        self._write_json(self.config_path, stored.model_dump(mode="json"))
+        return stored
 
     def list_entries(self) -> list[KnowledgeEntry]:
         return self._read_list(self.entries_path, KnowledgeEntry)
@@ -121,28 +122,6 @@ class KnowledgeStore:
 
     def list_proposals(self) -> list[KnowledgeProposal]:
         return [KnowledgeProposal.model_validate_json(p.read_text(encoding="utf-8")) for p in sorted(self.proposals_dir.glob("proposal_*.json"))]
-
-    def put_capture(self, capture: ContextCapture) -> ContextCapture:
-        path = self.captures_dir / f"{capture.id}.json"
-        self._write_json(path, capture.model_dump(mode="json"))
-        return capture
-
-    def get_capture(self, capture_id: str) -> ContextCapture | None:
-        path = self.captures_dir / f"{capture_id}.json"
-        if not path.is_file():
-            return None
-        return ContextCapture.model_validate_json(path.read_text(encoding="utf-8"))
-
-    def list_captures(self) -> list[ContextCapture]:
-        return [
-            ContextCapture.model_validate_json(path.read_text(encoding="utf-8"))
-            for path in sorted(self.captures_dir.glob("kcap_*.json"))
-        ]
-
-    def delete_capture(self, capture_id: str) -> None:
-        path = self.captures_dir / f"{capture_id}.json"
-        if path.is_file():
-            path.unlink()
 
     def _read_list(self, path: Path, model: type[KnowledgeEntry]) -> list[KnowledgeEntry]:
         if not path.is_file():

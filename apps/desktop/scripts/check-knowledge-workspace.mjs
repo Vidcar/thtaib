@@ -169,12 +169,11 @@ async function checkKnowledgeIndependentLoads(Panel) {
     await act(async () => button(renderer, "Rename").props.onClick());
     await act(async () => field(renderer, "Display name", "input").props.onChange({ target: { value: "Draft display name" } }));
     await act(async () => { settings.resolve(json(config)); await tick(); });
-    await act(async () => segmented(renderer.root, "Redaction", "discard").props.onChange());
     await act(async () => { renderer.update(React.createElement(Panel, { active: false })); await tick(); });
     await act(async () => { renderer.update(React.createElement(Panel, { active: true })); await tick(); });
     assert.equal(field(renderer, "Content", "textarea").props.value, "Keep my draft");
     assert.equal(field(renderer, "Display name", "input").props.value, "Draft display name");
-    assert.equal(segmented(renderer.root, "Redaction", "discard").props.checked, true, "an unsaved capture choice survives navigation");
+    assert.equal(renderer.root.findAll(node => node.props?.label === "Redaction").length, 0, "knowledge editing has no capture redaction control");
     await act(async () => field(renderer, "Content", "textarea").props.onChange({ target: { value: record.content } }));
     assert.doesNotMatch(text(catalogueRow(renderer.root, "Useful memory")), /Unsaved changes/, "restoring the saved body clears its dirty marker");
     await act(async () => button(renderer, "New memory").props.onClick());

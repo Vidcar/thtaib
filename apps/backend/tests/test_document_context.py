@@ -28,7 +28,7 @@ from workbench_backend.state.store import ApplicationStore
 from tests.support import close_workbench_sqlite
 from tests import test_chat as chat_test_support
 from tests import test_agent_capabilities as helper_fixture
-from tests.scripted_model import ScriptedChatModel, set_generate_hold, wait_for_generate_hold
+from tests.scripted_model import RECEIVED_PROMPTS, ScriptedChatModel, reset_received_prompts, set_generate_hold, wait_for_generate_hold
 from langchain_core.messages import AIMessage
 
 
@@ -217,6 +217,7 @@ class ChatDocumentPersistenceTests(unittest.TestCase):
         self.scripted = ScriptedChatModel([
             AIMessage(content="", tool_calls=[{"name": "search_knowledge", "args": {"query": "ORCHID"}, "id": "search_docs"}]),
             AIMessage(content="Found the selected receipt.")])
+        reset_received_prompts()
         started = self.client.post(f'/v1/chat/conversations/{chat["id"]}/start', json={
             "task": "Find the receipt", "attachment_ids": [asset.id]})
         self.assertEqual(started.status_code, 200, started.text)
@@ -229,7 +230,8 @@ class ChatDocumentPersistenceTests(unittest.TestCase):
         self.assertNotIn("model_requests", run)
         diagnostic = self.client.get(f'/v1/agent-runs/{finished["current_run_id"]}', params={"view": "diagnostic"})
         self.assertEqual(diagnostic.status_code, 200, diagnostic.text)
-        self.assertIn('lexical', str(diagnostic.json()["model_requests"][-1]["messages"]))
+        self.assertEqual(diagnostic.json()["model_requests"], [])
+        self.assertIn("lexical", "\n".join(RECEIVED_PROMPTS))
         self.scripted = ScriptedChatModel([AIMessage(content="No documents selected now.")])
         removed = self.client.post(f'/v1/chat/conversations/{chat["id"]}/start', json={
             "task": "Continue after removing every document", "document_asset_ids": []})
@@ -260,6 +262,7 @@ class ChatDocumentPersistenceTests(unittest.TestCase):
         self.assertNotIn("ORCHID-PRIVATE-RECEIPT", str(finished["current_run"]["content_blocks"]))
         self.assertIn(asset.id, str(finished["current_run"]["content_blocks"]))
         self.scripted = ScriptedChatModel([AIMessage(content="", tool_calls=[{"id": "read_receipt", "name": "read_attachment", "args": {"asset_id": asset.id}}]), AIMessage(content="Read receipt.")])
+        reset_received_prompts()
         follow = self.client.post(f'/v1/chat/conversations/{chat["id"]}/start', json={"task": "What does the receipt say?", "presented_tools": ["read_attachment"]})
         self.assertEqual(follow.status_code, 200, follow.text)
         read = chat_test_support.wait_for_chat(self.client, chat["id"])
@@ -268,7 +271,8 @@ class ChatDocumentPersistenceTests(unittest.TestCase):
         self.assertNotIn("model_requests", read["current_run"])
         diagnostic = self.client.get(f'/v1/agent-runs/{read["current_run_id"]}', params={"view": "diagnostic"})
         self.assertEqual(diagnostic.status_code, 200, diagnostic.text)
-        self.assertIn("ORCHID-PRIVATE-RECEIPT", str(diagnostic.json()["model_requests"][-1]["messages"]))
+        self.assertEqual(diagnostic.json()["model_requests"], [])
+        self.assertIn("ORCHID-PRIVATE-RECEIPT", "\n".join(RECEIVED_PROMPTS))
         self.scripted = ScriptedChatModel([AIMessage(content="Selection removed.")])
         removed = self.client.post(f'/v1/chat/conversations/{chat["id"]}/start', json={"task": "Continue without documents", "document_asset_ids": [], "presented_tools": []})
         self.assertEqual(removed.status_code, 200, removed.text)
@@ -360,7 +364,8 @@ class HelperMemorySelectionTests(unittest.TestCase):
         finished = wait_for_run(self.client, started['id'])
         self.assertEqual(finished['status'], 'completed', finished.get('error'))
         self.assertEqual(finished['memory_version_refs'], [version])
-        contents = str(finished['model_requests'][-1]['messages'])
+        contents = actual_inputs[-1]
+        self.assertEqual(finished["model_requests"], [])
         self.assertIn('PAUSED-ORIGINAL-MEMORY', contents)
         self.assertIn(original_path, contents)
         self.assertNotIn('LATER-MEMORY-VERSION', contents)
@@ -386,11 +391,13 @@ class HelperMemorySelectionTests(unittest.TestCase):
         ])
         child_prompts = []
         child_inputs = []
+        child_requests = []
 
         class HelperModel(ScriptedChatModel):
             def _generate(self, messages, *args, **kwargs):
                 child_prompts.append(messages[0].content)
                 child_inputs.append(messages[-1].content)
+                child_requests.append(str(messages))
                 return super()._generate(messages, *args, **kwargs)
 
         self.harness(lambda run, _sink: HelperModel([AIMessage(content='Helper finished')])
@@ -409,7 +416,8 @@ class HelperMemorySelectionTests(unittest.TestCase):
         self.assertIn('HELPER-MEMORY-CONTENT', str(child_prompts[0]))
         self.assertNotIn('PARENT-MEMORY-CONTENT', str(child_prompts[0]))
         self.assertIsNone(child.content_blocks)
-        self.assertNotIn('Current turn memory selection:', str(child.model_requests[-1].messages))
+        self.assertEqual(child.model_requests, [])
+        self.assertNotIn('Current turn memory selection:', child_requests[-1])
 
 
 class ProjectOutlineTests(unittest.TestCase):

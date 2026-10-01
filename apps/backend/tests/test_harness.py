@@ -370,20 +370,13 @@ class HarnessApiTests(unittest.TestCase):
         ]
         self.assertEqual(assistant_events, ["second assistant"])
 
-    def test_actual_model_request_is_captured(self) -> None:
+    def test_actual_model_request_is_not_stored(self) -> None:
         started = self._start(input_policy={"pinned_tools": ["echo"]})
         body = wait_for_run(self.client, started["id"])
-        self.assertTrue(body["model_requests"])
-        capture = body["model_requests"][0]
-        self.assertIn("echo", capture["available_tools"])
-        self.assertIn("echo", capture["presented_tools"])
-        self.assertEqual(capture["memory_versions"], [])
-        self.assertEqual(capture["retrieved_material"], [])
-        gaps = " ".join(capture["capture_gaps"])
-        self.assertIn("no retrieval", gaps)
-        self.assertIn("no durable memory", gaps)
-        self.assertIn("context_observation", capture)
-        self.assertEqual(capture["context_observation"]["summarization_path"], "deepagents-upstream")
+        self.assertEqual(body["status"], "completed", body.get("error"))
+        self.assertEqual(body["model_requests"], [])
+        self.assertIn("echo", body["presented_tools"])
+        self.assertEqual(body["context_observation"]["summarization_path"], "deepagents-upstream")
 
     def test_rejects_arbitrary_history_injection_fields(self) -> None:
         response = self.client.post(
@@ -466,7 +459,8 @@ class HarnessApiTests(unittest.TestCase):
         started = self._start(presented_tools=["write_todos"], input_policy={"tool_loading": "always"})
         body = wait_for_run(self.client, started["id"])
         self.assertEqual(body["status"], "completed", body.get("error"))
-        self.assertIn("write_todos", body["model_requests"][0]["presented_tools"])
+        self.assertEqual(body["model_requests"], [])
+        self.assertIn("write_todos", body["presented_tools"])
         self.assertTrue(any(event["kind"] == "tool_result" and event["detail"].get("name") == "write_todos" for event in body["events"]))
 
     def test_enabled_tools_are_not_silently_removed(self) -> None:
@@ -507,8 +501,7 @@ class HarnessApiTests(unittest.TestCase):
         body = wait_for_run(self.client, started["id"])
         self.assertEqual(body["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory", "read_tool_result", "list_connection_resources", "read_connection_resource", "read_file"])
         self.assertEqual(body["presented_tools"], ["echo"])
-        self.assertEqual(body["model_requests"][0]["available_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory", "read_tool_result", "list_connection_resources", "read_connection_resource", "read_file"])
-        self.assertCountEqual(body["model_requests"][0]["presented_tools"], ["echo", "read_file"])
+        self.assertEqual(body["model_requests"], [])
         self.assertEqual(body["framework_read_paths"], ["/large_tool_results/", "/conversation_history/"])
         project = self.root / "agt-005-project"
         project.mkdir()
@@ -1661,8 +1654,8 @@ class HarnessApiTests(unittest.TestCase):
         self.assertFalse(any(self.root.rglob("rag-index*")))
         self.assertFalse(any(self.root.rglob("knowledge-store*")))
         self.assertTrue((self.root / "knowledge").is_dir())
-        capture = body["model_requests"][0]
-        self.assertEqual(capture["retrieved_material"], [])
+        self.assertEqual(body["model_requests"], [])
+        self.assertEqual(body.get("retrieved_material") or [], [])
 
     def test_missing_deployment_endpoint_is_rejected(self) -> None:
         response = self.client.post(
