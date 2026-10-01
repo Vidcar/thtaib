@@ -31,6 +31,7 @@ from workbench_backend.paths import WorkbenchPaths
 
 from tests.scripted_model import ScriptedChatModel
 from tests.support import close_workbench_sqlite, offline_workbench_client, wait_for_run
+from tests.test_host_shell import run_direct_interrupt_decision, wait_for_interrupt
 
 
 FILE_TOOLS = ("ls", "read_file", "write_file", "edit_file", "glob", "grep", "delete")
@@ -343,6 +344,17 @@ class ExistingEngineTests(unittest.TestCase):
             body = started.json()
             self.assertTrue(body["host_shell"]["available"])
             self.assertEqual(body["host_shell"]["cwd"], str(home))
+            self.assertIsNone(body.get("pending_interrupt"))
+            paused = wait_for_interrupt(self.client, body["id"])
+            pending = paused["pending_interrupt"]
+            self.assertEqual(pending["kind"], "deepagents_interrupt_on")
+            self.assertEqual(pending["action_requests"][0]["name"], "execute")
+            self.assertEqual(pending["action_requests"][0]["args"]["command"], "cd")
+            approved = self.client.post(
+                f"/v1/agent-runs/{body['id']}/interrupt-decision",
+                json=run_direct_interrupt_decision(paused, "approve"),
+            )
+            self.assertEqual(approved.status_code, 200, approved.text)
             finished = wait_for_run(self.client, body["id"])
         self.assertEqual(finished["status"], "completed", finished.get("error"))
         output = finished["tool_outcomes"]["call_cwd"]["result"]

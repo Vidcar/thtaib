@@ -448,17 +448,26 @@ class HarnessToolDisclosureTests(unittest.TestCase):
         self.assertEqual(final["status"], "completed", final.get("error"))
 
     def test_projectless_selected_shell_pauses_only_when_used(self):
+        from pathlib import Path
         from tests.support import wait_for_run
+        home = str(Path.home().resolve())
         self.scripted = SchemaRecordingModel([call("find_tools", {"query": "execute"}, "discover-shell"),
             call("execute", {"command": "echo no-project"}, "need-project"), AIMessage(content="skipped")])
         started = self._start(presented_tools=["execute"], approval_mode="full_access")
+        self.assertTrue(started["host_shell"]["available"])
+        self.assertEqual(started["host_shell"]["cwd"], home)
+        self.assertIsNone(started.get("pending_interrupt"))
         paused = self._wait_for_pending_interrupt(started["id"])
-        action = paused["pending_interrupt"]["action_requests"][0]
-        self.assertEqual(action["setup"]["target"], "project")
-        self.assertTrue(action["setup"]["requires_new_input"])
+        pending = paused["pending_interrupt"]
+        self.assertEqual(pending["kind"], "deepagents_interrupt_on")
+        action = pending["action_requests"][0]
+        self.assertEqual(action["name"], "execute")
+        self.assertEqual(action["args"]["command"], "echo no-project")
+        self.assertIsNone(action.get("setup"))
+        self.assertEqual(paused["host_shell"]["cwd"], home)
         decision = self.client.post(f"/v1/agent-runs/{started['id']}/interrupt-decision", json={
-            "interrupt_id": paused["pending_interrupt"]["interrupt_id"],
-            "namespace": paused["pending_interrupt"].get("namespace", []), "decisions": [{"type": "reject"}]})
+            "interrupt_id": pending["interrupt_id"],
+            "namespace": pending.get("namespace", []), "decisions": [{"type": "reject"}]})
         self.assertEqual(decision.status_code, 200, decision.text)
         body = wait_for_run(self.client, started["id"])
         self.assertEqual(body["status"], "completed", body.get("error"))

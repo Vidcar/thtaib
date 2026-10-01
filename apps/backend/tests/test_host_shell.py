@@ -244,6 +244,16 @@ class HostShellPolicyTests(unittest.TestCase):
         self.assertFalse(pauses("full_access", "docs_search", {"query": "notes"}))
         self.assertFalse(pauses("full_access", "write_file", {"file_path": "a.txt", "content": "text"}))
         self.assertFalse(pauses("full_access", "edit_file", {"file_path": "a.txt", "old_string": "a", "new_string": "b"}))
+        project_free = _run(project_path=None, presented=["execute"])
+        project_free.approval_mode = "full_access"
+        free_gate = interrupt_on_for_run(project_free)
+        assert free_gate is not None
+
+        class _FreeReq:
+            tool_call = {"name": "execute", "args": {"command": "echo no-project"}}
+
+        self.assertTrue(free_gate["execute"]["when"](_FreeReq()))  # type: ignore[index]
+        self.assertIn("resolved user profile", str(free_gate["execute"]["description"]))
 
     def test_pending_interrupt_and_decisions(self) -> None:
         pending = pending_interrupt_from_raw(
