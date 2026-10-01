@@ -8,7 +8,6 @@ id, recorded in ``application.sqlite``.
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 import threading
 from concurrent.futures import Future
 from pathlib import Path
@@ -179,33 +178,6 @@ def close_all_sqlite_checkpointers() -> None:
         keys = list(_HOLDERS)
     for key in keys:
         _close_holder(key)
-
-
-def copy_checkpoints_for_backup(source: Path, destination: Path) -> None:
-    """Copy ``checkpoints.sqlite`` through sqlite backup without private-table SQL."""
-
-    resolved = source.expanduser().resolve()
-    if resolved.name != CHECKPOINTS_DB_NAME:
-        raise ValueError("Checkpointer backup source must be checkpoints.sqlite.")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    with _LOCK:
-        holder = _HOLDERS.get(str(resolved))
-    if holder is not None:
-        async def backup() -> None:
-            async with aiosqlite.connect(str(destination)) as target:
-                await holder.saver.conn.backup(target)
-        holder.submit(backup()).result()
-        return
-    if not resolved.exists():
-        return
-    src_conn = sqlite3.connect(str(resolved))
-    dest_conn = sqlite3.connect(str(destination))
-    try:
-        src_conn.backup(dest_conn)
-        dest_conn.commit()
-    finally:
-        dest_conn.close()
-        src_conn.close()
 
 
 def delete_checkpoint_thread(path: Path, thread_id: str) -> bool:

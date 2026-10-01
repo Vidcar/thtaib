@@ -3,7 +3,7 @@ import logging
 import queue
 import threading
 
-from workbench_backend.state.backup import BackupError
+from workbench_backend.state.maintenance import MaintenanceError
 
 log = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ class ChatCoordinator:
                                 state.asset_lifecycle.collect_verified_outputs_for_run(conversation.id, run.id)
                         state.chat.observe_terminal_run(run)
                     state.chat.dispatch_idle_queued()
-            except BackupError:
+            except MaintenanceError:
                 if not self.closed.wait(0.2):
                     self.events.put(run_id)
             except Exception:
