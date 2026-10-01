@@ -1,4 +1,4 @@
-import { useId, type CSSProperties, type ReactNode } from "react";
+import { useId, useState, type CSSProperties, type ReactNode } from "react";
 import { HoverHelp } from "./HoverHelp";
 import { Icon } from "./Icon";
 import "./CompactControls.css";
@@ -103,12 +103,29 @@ export function SliderField({ id, label, value, resolved, min, max, step, exact,
   </div>;
 }
 
+/** `null` clears the value. `undefined` is an incomplete or rejected draft and must not be stored. */
+export function committedNumber(raw: string, bounds: { min?: number; max?: number; step?: number | "any" } = {}): number | null | undefined {
+  if (raw === "") return null;
+  if (!/^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(raw) || /[eE]$|[eE][+-]$|\.$/.test(raw)) return undefined;
+  const next = Number(raw);
+  if (!Number.isFinite(next)) return undefined;
+  if (bounds.step === 1 && !Number.isInteger(next)) return undefined;
+  if (bounds.min != null && next < bounds.min) return undefined;
+  if (bounds.max != null && next > bounds.max) return undefined;
+  return next;
+}
+
 export function NumberField({ id, label, value, placeholder, min, max, step, unit, onChange, disabled, wide = false }: {
   id?: string; label: string; value: number | string | null; placeholder?: string; min?: number; max?: number; step?: number | "any"; unit?: string;
   onChange: (value: number | null) => void; disabled?: boolean; wide?: boolean;
 }) {
+  const [draft, setDraft] = useState<string | null>(null);
   return <span className={wide ? "number-field number-field-wide" : "number-field"}>
-    <input id={id} type="number" aria-label={id ? undefined : label} min={min} max={max} step={step} value={value ?? ""} placeholder={placeholder} disabled={disabled} onChange={event => onChange(event.target.value === "" ? null : Number(event.target.value))} />
+    <input id={id} type="number" aria-label={id ? undefined : label} min={min} max={max} step={step} value={draft ?? (value ?? "")} placeholder={placeholder} disabled={disabled} onChange={event => {
+      const next = committedNumber(event.target.value, { min, max, step });
+      if (next === undefined) { setDraft(event.target.value); return; }
+      setDraft(null); onChange(next);
+    }} onBlur={() => setDraft(null)} />
     {unit ? <span className="field-unit">{unit}</span> : null}
   </span>;
 }
