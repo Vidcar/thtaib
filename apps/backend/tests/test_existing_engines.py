@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import sys
 import tempfile
@@ -34,6 +35,14 @@ from tests.support import close_workbench_sqlite, offline_workbench_client, wait
 
 FILE_TOOLS = ("ls", "read_file", "write_file", "edit_file", "glob", "grep", "delete")
 JOB_TOOLS = ("start_command", "command_status", "stop_command")
+ROOT_LISTING_NAMES = frozenset({
+    "large_tool_results",
+    "conversation_history",
+    "retrieved",
+    "memories",
+    "skills",
+    "captures",
+})
 SKILL_BODY = (
     "---\nname: review-checklist\n"
     "description: Use the review checklist before answering.\n---\n\n"
@@ -47,6 +56,25 @@ def _tool_names(tools: list[Any]) -> list[str]:
         name = tool.get("name") if isinstance(tool, dict) else getattr(tool, "name", None)
         if isinstance(name, str):
             names.append(name)
+    return names
+
+
+def _listed_root_names(result: Any) -> set[str]:
+    if isinstance(result, list):
+        items = result
+    else:
+        text = str(result).strip()
+        if text == "No files found":
+            return set()
+        parsed = ast.literal_eval(text)
+        if not isinstance(parsed, list):
+            raise AssertionError(text[:200])
+        items = parsed
+    names: set[str] = set()
+    for item in items:
+        path = str(item).strip().rstrip("/")
+        if path.startswith("/") and len(path) > 1:
+            names.add(path.split("/", 2)[1])
     return names
 
 
@@ -326,8 +354,79 @@ class ExistingEngineTests(unittest.TestCase):
             self.assertEqual(extra.count(name), 1)
         shells = _shell_defaults(calls[0]["middleware"])
         self.assertEqual({id(item) for item in shells}, {id(shells[0])})
-        self.assertEqual(shells[0].cwd, home)
+        self.assertNotEqual(shells[0].cwd, home)
+        self.assertEqual(shells[0].command_cwd, home)
         self.assertFalse((home / "host-shell-approved.txt").exists())
+
+    def test_project_free_root_listing_does_not_list_the_home_directory(self) -> None:
+        home = Path.home().resolve()
+        home_names = {child.name for child in home.iterdir()}
+        blocked_name = next(
+            (name for name in sorted(home_names) if name not in ROOT_LISTING_NAMES),
+            None,
+        )
+        self.assertIsNotNone(blocked_name)
+        memory = self._knowledge("memory", "MEM-ENGINES-ROOT")
+        calls: list[dict[str, Any]] = []
+        from deepagents import graph as deepagents_graph
+        original = deepagents_graph.create_agent
+
+        def spy(*args: Any, **kwargs: Any):
+            calls.append({
+                "middleware": list(kwargs.get("middleware") or []),
+                "tools": list(kwargs.get("tools") or []),
+            })
+            return original(*args, **kwargs)
+
+        self._install([
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "ls", "args": {"path": "/"}, "id": "call_ls"}],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[{
+                    "name": "read_file",
+                    "args": {"file_path": f"/{blocked_name}"},
+                    "id": "call_read",
+                }],
+            ),
+            AIMessage(content="Checked the root."),
+        ])
+        with patch("deepagents.graph.create_agent", spy):
+            started = self._start(
+                task="List the root.",
+                approval_mode="full_access",
+                presented_tools=["execute"],
+                input_policy={"tool_loading": "always"},
+                memory_version_refs=[memory["current_version_id"]],
+            )
+            self.assertEqual(started.status_code, 200, started.text)
+            body = started.json()
+            self.assertTrue(body["host_shell"]["available"])
+            self.assertEqual(body["host_shell"]["cwd"], str(home))
+            finished = wait_for_run(self.client, body["id"])
+        self.assertEqual(finished["status"], "completed", finished.get("error"))
+        listing = finished["tool_outcomes"]["call_ls"]
+        self.assertEqual(listing["outcome"], "succeeded", listing.get("result"))
+        listed = _listed_root_names(listing["result"])
+        self.assertTrue(listed)
+        self.assertTrue(listed <= ROOT_LISTING_NAMES)
+        self.assertFalse(listed & (home_names - ROOT_LISTING_NAMES))
+        read = finished["tool_outcomes"]["call_read"]
+        self.assertEqual(read["outcome"], "failed", read.get("result"))
+        self.assertIn("bound project folder", str(read["result"]))
+        self.assertEqual(len(calls), 1)
+        from langchain.agents.middleware import HumanInTheLoopMiddleware
+        gates = [item for item in calls[0]["middleware"] if isinstance(item, HumanInTheLoopMiddleware)]
+        self.assertEqual(len(gates), 1)
+        self.assertIn("execute", gates[0].interrupt_on)
+        shells = _shell_defaults(calls[0]["middleware"])
+        self.assertEqual({id(item) for item in shells}, {id(shells[0])})
+        self.assertIsInstance(shells[0], LocalShellBackend)
+        self.assertNotEqual(shells[0].cwd, home)
+        self.assertEqual(shells[0].command_cwd, home)
+        self.assertTrue(shells[0].cwd.is_relative_to((self.root / "data").resolve()))
 
     def test_project_free_job_starts_in_the_user_profile(self) -> None:
         home = Path.home().resolve()
