@@ -227,36 +227,30 @@ class MutationCancellationTests(unittest.IsolatedAsyncioTestCase):
         self.request = SimpleNamespace(tool_call={"name": "write_file", "args": {"file_path": "/file.txt", "content": "written"}, "id": "native-async"},
             runtime=SimpleNamespace(state={"messages": []}))
 
-    async def test_repeated_cancellation_waiting_for_lease_does_not_strand_lock(self):
+    async def test_queued_cancellation_does_not_steal_or_strand_the_lease(self):
         from workbench_backend.agents.file_operations import project_mutation_lock
         lock = project_mutation_lock(self.project)
-        lock.acquire()
-        attempted = threading.Event()
-        class ObservedLock:
-            def acquire(self):
-                attempted.set()
-                return lock.acquire()
-            def release(self):
-                lock.release()
-        middleware = WorkbenchHarnessMiddleware(self.run)
-        middleware._native_mutation_lock = lambda request: ObservedLock()
+        self.assertTrue(lock.acquire(blocking=False))
         called = []
         async def handler(request):
             called.append(True)
             return ToolMessage(content="bad", name="write_file", tool_call_id="native-async")
-        task = asyncio.create_task(middleware.awrap_tool_call(self.request, handler))
+        task = asyncio.create_task(WorkbenchHarnessMiddleware(self.run).awrap_tool_call(self.request, handler))
         try:
-            self.assertTrue(await asyncio.to_thread(attempted.wait, 5))
+            for _ in range(50):
+                if lock.waiting():
+                    break
+                await asyncio.sleep(0.02)
+            self.assertGreaterEqual(lock.waiting(), 1)
             task.cancel()
             await asyncio.sleep(0)
             task.cancel()
-            await asyncio.sleep(0)
-            self.assertFalse(task.done())
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=2)
+            self.assertEqual(called, [])
+            self.assertFalse(lock.acquire(blocking=False), "queued cancellation must leave the holder admitted")
         finally:
             lock.release()
-        with self.assertRaises(asyncio.CancelledError):
-            await asyncio.wait_for(task, timeout=5)
-        self.assertEqual(called, [])
         self.assertTrue(lock.acquire(blocking=False))
         lock.release()
 

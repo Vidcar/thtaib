@@ -82,10 +82,78 @@ def enabled_catalogue() -> list[str]:
     return [*ENABLED_TOOL_NAMES, *browser, *preview, *desktop]
 
 
-def tool_descriptions() -> list[dict[str, str]]:
+_GROUP_LABELS = {
+    "project": "Project files",
+    "shell": "Host shell",
+    "browser": "Browser",
+    "windows": "Windows control",
+    "preview": "Preview",
+    "diagnostics": "Diagnostics",
+    "planning": "Planning",
+    "input": "Questions",
+    "knowledge": "Knowledge",
+    "connections": "Connections",
+}
+_OPT_IN_GROUPS = frozenset({"browser", "windows", "preview"})
+
+
+def standard_context_key(*, project_bound: bool, knowledge_routes: bool = False, attachment_available: bool = False, capture_routes: bool = False) -> str:
+    return "-".join((
+        "project" if project_bound else "projectless",
+        "knowledge" if knowledge_routes else "noknowledge",
+        "attachments" if attachment_available else "noattachments",
+        "capture" if capture_routes else "nocapture",
+    ))
+
+
+def tool_descriptions() -> list[dict[str, object]]:
+    from workbench_backend.agents.execution_policy import PLAN_TOOLS
     from workbench_backend.agents.tool_catalogue import TOOL_PRESENTATIONS
-    return [{"id": name, "name": TOOL_PRESENTATIONS[name].label,
-        "description": TOOL_PRESENTATIONS[name].description} for name in enabled_catalogue()]
+    described = []
+    for name in enabled_catalogue():
+        presentation = TOOL_PRESENTATIONS[name]
+        described.append({
+            "id": name,
+            "name": presentation.label,
+            "description": presentation.description,
+            "group": presentation.group,
+            "prerequisites": list(presentation.prerequisites),
+            "opt_in": name in OPT_IN_TOOL_NAMES or presentation.group in _OPT_IN_GROUPS,
+            "plan_eligible": name in PLAN_TOOLS,
+        })
+    return described
+
+
+def catalogue_projection() -> dict[str, object]:
+    """Backend-owned groups, Standard sets and Plan eligibility for one catalogue."""
+
+    from workbench_backend.agents.execution_policy import PLAN_TOOLS
+    from workbench_backend.agents.tool_catalogue import TOOL_PRESENTATIONS
+    tools = tool_descriptions()
+    order = []
+    for name in enabled_catalogue():
+        group = TOOL_PRESENTATIONS[name].group
+        if group not in order:
+            order.append(group)
+    defaults = {}
+    for project_bound in (False, True):
+        for knowledge_routes in (False, True):
+            for attachment_available in (False, True):
+                for capture_routes in (False, True):
+                    key = standard_context_key(project_bound=project_bound, knowledge_routes=knowledge_routes,
+                        attachment_available=attachment_available, capture_routes=capture_routes)
+                    presented, _denied, _files, _shell = resolve_presented_tools(
+                        None, project_bound=project_bound, knowledge_routes=knowledge_routes,
+                        attachment_available=attachment_available, capture_routes=capture_routes)
+                    defaults[key] = presented
+    return {
+        "enabled": enabled_catalogue(),
+        "tools": tools,
+        "groups": [{"id": group, "label": _GROUP_LABELS.get(group, group.replace("_", " ").title())} for group in order],
+        "defaults": defaults,
+        "plan_tools": sorted(PLAN_TOOLS),
+        "plan_public_web_remote_names": ["read_web_page", "search_web"],
+    }
 
 
 def enabled_for_project(

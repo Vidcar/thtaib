@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { api } from "./api";
+import { standardToolSelection, type ToolCatalogueProjection } from "./chatSetup";
 import { AgentMessageFeed } from "./AgentMessageFeed";
 import { ChatModelControls } from "./ChatModelControls";
 import { ApprovalModeControl, approvalModeLabel, type ApprovalMode } from "./ApprovalModeControl";
@@ -224,7 +225,7 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled, onNavigate }
   const [configuration, setConfiguration] = useState<SetupConfiguration>({});
   const [showInputs, setShowInputs] = useState(false);
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>("ask");
-  const [enabledTools, setEnabledTools] = useState<string[]>([]);
+  const [toolCatalogue, setToolCatalogue] = useState<ToolCatalogueProjection | null>(null);
   const [deploymentId, setDeploymentId] = useState("");
   const [embeddingDeploymentId, setEmbeddingDeploymentId] = useState("");
   const [task, setTask] = useState("");
@@ -245,7 +246,7 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled, onNavigate }
     const [nextDeployments, tools, nextProfiles] = await Promise.all([api.deployments(), api.agentTools(), api.profiles()]);
     setDeployments(nextDeployments);
     setProfiles(nextProfiles);
-    setEnabledTools(tools.enabled);
+    setToolCatalogue(tools);
     setDeploymentId((current) => current || nextDeployments[0]?.id || "");
     setLoadError("");
   }
@@ -320,6 +321,8 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled, onNavigate }
       setRun(next);
     }
   }
+
+  const standardTools = standardToolSelection(toolCatalogue, Boolean(projectPath.trim()), false, false) ?? [];
 
   if (loadError) {
     return (
@@ -420,7 +423,7 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled, onNavigate }
           <button type="submit" disabled={(!deploymentId && !configuration.model_configuration_id) || !task.trim() || Boolean(liveRunId) || Boolean(pendingSubmit) || starting}>
             <Icon name="send" size={15} /> Run task
           </button>
-          <HoverHelp title="Available tools">{enabledTools.length ? enabledTools.join(", ") : "No tools available."} File and shell tools need a project folder.</HoverHelp>
+          <HoverHelp title="Available tools">{(standardTools.length ? standardTools.join(", ") : "Standard tools are unavailable until the catalogue loads.")} File and shell tools need a project folder. Opt-in tools stay off until an agent selects them.</HoverHelp>
         </div>
       </form>
 

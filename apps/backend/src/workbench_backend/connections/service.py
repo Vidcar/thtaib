@@ -32,6 +32,14 @@ def connection_error_handler(original):
     return handle
 
 
+def _resource_method_missing(error) -> bool:
+    code = getattr(getattr(error, "error", None), "code", None)
+    if code == -32601:
+        return True
+    message = str(error).lower()
+    return "method not found" in message or "-32601" in message
+
+
 def namespaced(connection_id, remote_name):
     suffix = hashlib.sha256(remote_name.encode()).hexdigest()[:16]
     readable = re.sub(r"[^a-zA-Z0-9_]", "_", remote_name)[:20]
@@ -90,7 +98,7 @@ class ConnectionService:
         fields = request.model_dump(exclude={"expected_version"})
         if current.credential_ref and (request.transport != "http" or request.url != current.url):
             raise HarnessError("Remove this connection's credential before changing its destination.", code="credential_destination_changed", status_code=409)
-        updated = current.model_copy(update={**fields, "version": current.version + 1, "tools": [], "last_tested_at": None, "last_error": None, "updated_at": utc_now()})
+        updated = current.model_copy(update={**fields, "version": current.version + 1, "tools": [], "protocol_capabilities": [], "last_tested_at": None, "last_error": None, "updated_at": utc_now()})
         return self._view(self.store.put(updated, expected_version=request.expected_version))
 
     def disconnect(self, connection_id):
@@ -146,10 +154,33 @@ class ConnectionService:
             snapshots.append(ConnectionSnapshot.model_validate(record.model_dump()))
         return snapshots
 
+    def confirmed_capabilities(self, record) -> set[str]:
+        """Capabilities recorded by a successful test.
+
+        A legacy record with tools and no capability list remains tool-ready.
+        An empty tool list is ready only when the test recorded a capability.
+        """
+
+        recorded = set(getattr(record, "protocol_capabilities", ()) or ())
+        if recorded:
+            return recorded
+        if record.tools:
+            return {"tools"}
+        return set()
+
     def _require_ready(self, record):
         self._require(record)
-        if not record.last_tested_at or not record.tools or record.last_error:
+        if not record.last_tested_at or record.last_error or not self.confirmed_capabilities(record):
             raise HarnessError(f"Test {record.name} in Settings before using it.", code="connection_test_required", status_code=409)
+
+    def require_resource_capability(self, record):
+        self._require(record)
+        if not record.last_tested_at or record.last_error:
+            raise HarnessError(f"Test {record.name} in Settings before using it.", code="connection_test_required", status_code=409)
+        if "resources" not in self.confirmed_capabilities(record):
+            raise HarnessError(
+                f"{record.name} does not provide resource access. A tool manifest does not enable resources, and no tools were added.",
+                code="resources_unsupported", status_code=409)
 
     def _revalidate(self, snapshot):
         current = self.get(snapshot.id)
@@ -209,6 +240,18 @@ class ConnectionService:
             records.append(ConnectionTool(id=name, name=name, remote_name=tool.name, description=tool.description, input_schema=schema, output_schema=outputs.get(tool.name)))
         return records, tools
 
+    async def _probe_resources(self, adapter) -> bool:
+        client = getattr(adapter, "client", None)
+        if client is None or not callable(getattr(client, "list_resources_mcp", None)):
+            return False
+        try:
+            await client.list_resources_mcp()
+        except Exception as error:
+            if _resource_method_missing(error):
+                return False
+            raise
+        return True
+
     async def test(self, connection_id):
         record = self.get(connection_id)
         self._require(record)
@@ -216,12 +259,15 @@ class ConnectionService:
             async with AsyncExitStack() as stack:
                 adapter = await stack.enter_async_context(self._adapter(record, [])) if record.kind == "mcp" else None
                 catalog, _ = await self._discover(record, adapter)
+                capabilities = ["tools"]
                 if record.kind == "public_web":
                     from workbench_backend.connections.public_web import search_web, read_web_page
                     await search_web("LangChain documentation", 1)
                     await read_web_page("https://docs.langchain.com/")
-            changed = catalog != record.tools
-            updated = record.model_copy(update={"tools": catalog, "version": record.version + int(changed), "last_tested_at": utc_now(), "last_error": None, "updated_at": utc_now()})
+                elif await self._probe_resources(adapter):
+                    capabilities.append("resources")
+            changed = catalog != record.tools or list(record.protocol_capabilities) != capabilities
+            updated = record.model_copy(update={"tools": catalog, "protocol_capabilities": capabilities, "version": record.version + int(changed), "last_tested_at": utc_now(), "last_error": None, "updated_at": utc_now()})
         except asyncio.CancelledError:
             raise
         except Exception as exc:

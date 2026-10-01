@@ -115,6 +115,8 @@ Ordinary Chat SHALL offer Deep Agents built-in `ls`, `read_file`, `write_file`, 
 
 Selecting project file reading SHALL retain that access when knowledge search is also enabled. The reader description SHALL match its effective access. A reader supplied only for saved tool results, conversation history or retrieved evidence MUST remain restricted to those supplied routes and MUST NOT authorize project or knowledge file access.
 
+Native project writes, edits, deletions and structured applies for one project SHALL share one admission gate. Waiting asynchronous operations SHALL NOT occupy the blocking workers required to finish and release the active mutation. Different projects and ordinary reads SHALL continue independently. Same-path conflicts in one tool-call batch SHALL still be rejected. After admission and before the effect, the product SHALL recheck cancellation, run eligibility and the applicable approval or grant. Cancellation or resume SHALL NOT replay an effect or change the original tool-call identity.
+
 #### Scenario: No custom file deletion
 - **WHEN** ordinary Chat has not explicitly selected destructive deletion
 - **THEN** native read/write/edit/list/search are available as selected while custom rename/delete and recursive `delete` are absent
@@ -148,6 +150,11 @@ Selecting project file reading SHALL retain that access when knowledge search is
 - **WHEN** Chat has active tools but has not selected file reading and receives an automatic reader for saved results or retrieved evidence
 - **THEN** the reader SHALL permit only supplied result routes and describe that restriction
 - **AND** project and knowledge files, traversal and host-drive paths SHALL remain denied; tools-off SHALL execute no reader.
+
+#### Scenario: Contended mutations of different files
+- **WHEN** more project mutations are waiting than blocking workers are available, including native edits and structured applies to different files
+- **THEN** the active mutation can finish and release admission, and a later mutation can acquire it
+- **AND** cancelling a queued mutation does not release another operation's admission or execute the cancelled call.
 
 ### Requirement: ENV-023 - Generate an image through a configured ComfyUI
 
@@ -252,7 +259,9 @@ Work-mode Chat SHALL offer optional Windows window tools with Off, Selected wind
 
 ### Requirement: ENV-029 - Preflight conversation capability groups
 
-Agents setup SHALL expose project files, host shell, browser and Windows control as understandable tool groups with individual choices, together with configured connection/tool dependencies. These choices SHALL be saved with the agent and resolved for new submissions; the composer `+` and Chat agent dropdown SHALL NOT duplicate them. Project file availability SHALL require the bound authorized project; selecting a group MUST NOT grant a broader window, file, network or approval scope. Chat SHALL own access/mode and live Windows target/grants, Browser its session controls and Settings installation/connections. The effective selected tools SHALL remain distinct from browser worker/session availability and live authority. Disabling Browser or Windows control in a saved agent MUST NOT leave a tool selected solely to read its captures. The backend SHALL validate the same effective selection and current authority at setup preview, admission, dispatch and restored/helper execution. A stale/missing window, absent broad grant, unavailable browser worker/session or unsupported mode SHALL yield a specific corrective action before affected tools are presented. Explicit agent requirements SHALL be checked before sending; unconfigured optional When needed features SHALL not block ordinary chat and SHALL pause with a focused setup action only when needed. Saved intention without a current grant MUST NOT be described as ready. Running/queued/paused setups retain their snapshots; future submissions use the latest saved agent.
+Agents setup SHALL expose project files, host shell, browser and Windows control as understandable tool groups with individual choices, together with configured connection/tool dependencies. Group membership, Standard membership and Plan eligibility SHALL come from the backend catalogue for the applicable project, knowledge, attachment and capture context. These choices SHALL be saved with the agent and resolved for new submissions; the composer `+` and Chat agent dropdown SHALL NOT duplicate them. Project file availability SHALL require the bound authorized project; selecting a group MUST NOT grant a broader window, file, network or approval scope. Chat SHALL own access/mode and live Windows target/grants, Browser its session controls and Settings installation/connections. The effective selected tools SHALL remain distinct from browser worker/session availability and live authority. Disabling Browser or Windows control in a saved agent MUST NOT leave a tool selected solely to read its captures. The backend SHALL validate the same effective selection and current authority at setup preview, admission, dispatch and restored/helper execution. A stale/missing window, absent broad grant, unavailable browser worker/session or unsupported mode SHALL yield a specific corrective action before affected tools are presented. Explicit agent requirements SHALL be checked before sending; unconfigured optional When needed features SHALL not block ordinary chat and SHALL pause with a focused setup action only when needed. Saved intention without a current grant MUST NOT be described as ready. Running/queued/paused setups retain their snapshots; future submissions use the latest saved agent.
+
+Omission SHALL keep Standard resolution. An explicit empty selection SHALL stay empty. Changing one Standard choice SHALL save an explicit list that starts from the backend Standard selection for that context and SHALL NOT add an unselected opt-in operation. If the catalogue is unavailable, the editor SHALL NOT invent or persist a derived default. An existing explicit selection SHALL be reloaded unchanged. The Plan projection SHALL show only backend-eligible readers and trusted namespaced public-web operations.
 
 #### Scenario: Stale selected window
 - **WHEN** a conversation remembers Windows control but its selected window is gone
@@ -276,6 +285,15 @@ Agents setup SHALL expose project files, host shell, browser and Windows control
 
 - **WHEN** an agent selects a tool whose connection or worker is unavailable
 - **THEN** Chat shows a concise corrective route to the owning setup/connection screen without introducing tool toggles or granting access.
+
+#### Scenario: One Standard change does not add opt-in tools
+- **WHEN** a new agent using Standard tools changes one non-opt-in choice and is saved, reloaded and admitted
+- **THEN** the explicit selection matches the backend Standard set for that project or projectless context except the changed choice
+- **AND** destructive, host, resource and diagnostic opt-in operations stay unselected, including in projectless and project-bound contexts.
+
+#### Scenario: Catalogue failure does not invent a selection
+- **WHEN** the tool catalogue cannot be loaded
+- **THEN** the editor does not persist a locally invented default list.
 
 ### Requirement: ENV-030 - Use one owned Chrome context for agents and browser viewing
 
@@ -332,7 +350,7 @@ When an enabled optional feature requires setup, the product SHALL pause its sav
 
 ### Requirement: ENV-032 - Retain acquired evidence before bounded presentation
 
-Browser snapshots, acquired public-page text, command output and preview logs SHALL retain complete permitted acquired content before generating a bounded preview. Results SHALL identify source, acquisition coverage, byte/character units and an authorized bounded range/search continuation that can recover late errors and long single lines. Retention SHALL use existing result/asset owners and MUST NOT grant access to another conversation, excluded project file, credential or arbitrary host path. Transfer/disk acquisition limits SHALL be explicit; omitted bytes MUST NOT be called complete.
+Browser snapshots, acquired public-page text, command output and preview logs SHALL retain complete permitted acquired content before generating a bounded preview. Results SHALL identify source, acquisition coverage, byte/character units and an authorized bounded range/search continuation that can recover late errors and long single lines. Continuation guidance SHALL name a reader that is accepted for that run, or the authorised line-oriented fallback when that is the only accepted reader. When no reader is accepted, including when tools are off, the notice SHALL state that limitation and SHALL NOT imply that discovery can grant access. Retention SHALL use existing result/asset owners and MUST NOT grant access to another conversation, excluded project file, credential or arbitrary host path. Transfer/disk acquisition limits SHALL be explicit; omitted bytes MUST NOT be called complete. Reading retained evidence SHALL NOT execute the original producer again.
 
 #### Scenario: Late error outside the preview
 - **WHEN** a long command or page contains relevant text outside its initial preview
@@ -341,6 +359,11 @@ Browser snapshots, acquired public-page text, command output and preview logs SH
 #### Scenario: Unauthorized retained result
 - **WHEN** a different owner or revoked selection attempts to read the result
 - **THEN** access is rejected without broadening framework or project access.
+
+#### Scenario: Guidance matches the accepted reader
+- **WHEN** retained output is presented to a run whose selection includes the retained-result reader, only the line-oriented file reader, or neither
+- **THEN** the notice recommends the accepted reader, describes the line-oriented fallback, or states that no reader is accepted
+- **AND** an explicit exclusion or tools-off selection is not given a reader by the notice.
 
 ### Requirement: ENV-033 - Extend owned browser evidence and testing
 
@@ -358,6 +381,8 @@ Selected browser capabilities SHALL include the supported single-network-request
 
 Explicitly selected extensions SHALL support one structured exact multi-edit mechanism with original-byte identity, prevalidation, overlap rejection and one atomic file replacement; managed command launch/status/output/stop with stable owned identities; bounded selected MCP resource listing/reading; and selected immutable skill-script execution. These operations SHALL use existing execution, permission, result, connection and process owners. Skill scripts SHALL verify frozen version/resource hashes, materialize only into an owned execution directory, require independently selected host-command authority and retain truthful output/exit/cancellation. Resource text SHALL remain untrusted reference data. Lost acknowledgements and restart SHALL preserve uncertainty without replaying effects; cancellation SHALL settle owned processes.
 
+A connection SHALL be ready for the protocol capabilities confirmed by its last successful test. A successful empty tool manifest SHALL NOT by itself make a tested resource-capable connection unready, and a successful tool manifest SHALL NOT make unsupported resources appear supported. Failed tests, disabled connections, missing credentials and changed versions SHALL remain unready or rejected. Resource operations SHALL stay unavailable when the tested server does not support them. Neither readiness nor resource reading SHALL fabricate tools.
+
 #### Scenario: Invalid or stale edit batch
 - **WHEN** a structured edit has a stale original hash, overlapping replacements or an unmatched original string
 - **THEN** no file bytes change and a correctable result identifies the invalid input.
@@ -374,3 +399,8 @@ Explicitly selected extensions SHALL support one structured exact multi-edit mec
 #### Scenario: MCP resources are bounded selections
 - **WHEN** a selected supported connection lists or reads a resource
 - **THEN** connection/version authority and limits are rechecked, content is retained as reference data and no extra tool or account is enabled.
+
+#### Scenario: Resource-only connection in either loading mode
+- **WHEN** a tested resource-only connection is saved and a run is admitted with definitions loaded always or when needed
+- **THEN** listing and reading its resources succeed and no tools are fabricated
+- **AND** revocation or a changed version rejects later access, while a tools-only server does not gain resource access from an empty or successful tool manifest.

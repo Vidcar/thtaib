@@ -15,7 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 import time
-from contextlib import nullcontext, asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
@@ -260,7 +260,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 return self._browser_action_reconsidered(request)
             self._begin_tool(request)
             try:
-                with self._native_mutation_lock(request) or nullcontext():
+                with self._mutation_lease(request):
                     self._require_dispatch_allowed()
                     self._before_tool_effect(request)
                     try:
@@ -313,7 +313,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
 
     def _native_mutation_lock(self, request):
         name, _, _ = _tool_call_parts(request)
-        if self.fixture_bank is None and self.run.project_path and name in {"write_file", "edit_file", "delete"}:
+        if self.fixture_bank is None and self.run.project_path and name in {"write_file", "edit_file", "delete", "apply_edits"}:
             from workbench_backend.agents.file_operations import project_mutation_lock
             return project_mutation_lock(Path(self.run.project_path))
         return None
@@ -336,20 +336,36 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 content=previous.result, status="error" if previous.outcome == "failed" else "success"), evidence)
         self.execution_control.record_tool_outcome(self.run, updated)
 
+    @contextmanager
+    def _mutation_lease(self, request):
+        lock = self._native_mutation_lock(request)
+        if lock is None:
+            yield
+            return
+        from workbench_backend.agents.file_operations import ADMITTED_PROJECT_MUTATION
+        lock.acquire()
+        token = ADMITTED_PROJECT_MUTATION.set(lock)
+        try:
+            yield
+        finally:
+            ADMITTED_PROJECT_MUTATION.reset(token)
+            lock.release()
+
     @asynccontextmanager
     async def _amutation_lease(self, request):
         lock = self._native_mutation_lock(request)
         if lock is None:
             yield
             return
-        acquire = asyncio.create_task(asyncio.to_thread(lock.acquire))
-        _, interrupted = await _settle_owned_task(acquire)
-        if interrupted is not None:
-            lock.release()
-            raise interrupted
+        # Park on the loop. Do not submit this wait to the worker pool: the
+        # admitted mutation needs those workers to finish and release the gate.
+        from workbench_backend.agents.file_operations import ADMITTED_PROJECT_MUTATION
+        await lock.acquire_async()
+        token = ADMITTED_PROJECT_MUTATION.set(lock)
         try:
             yield
         finally:
+            ADMITTED_PROJECT_MUTATION.reset(token)
             lock.release()
 
     def _handle_tool_failure(self, request, exc):

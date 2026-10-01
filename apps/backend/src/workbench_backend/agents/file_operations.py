@@ -1,6 +1,9 @@
 """Selected project mutation extensions; native file tools keep their ownership."""
 from __future__ import annotations
 
+import asyncio
+from collections import deque
+import contextvars
 import hashlib
 import json
 import os
@@ -21,6 +24,129 @@ MAX_EDIT_BYTES = 4_000_000
 MAX_DELETE_ENTRIES = 100_000
 _locks: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
 _lock_guard = threading.Lock()
+# Set only around an admitted mutation. The synchronous tool body borrows this
+# same lease; a different project, or a direct caller, still acquires.
+ADMITTED_PROJECT_MUTATION: contextvars.ContextVar = contextvars.ContextVar("admitted_project_mutation", default=None)
+
+
+class _MutationWaiter:
+    __slots__ = ("kind", "signal", "admitted")
+
+    def __init__(self, kind: str, signal) -> None:
+        self.kind = kind
+        self.signal = signal
+        self.admitted = False
+
+
+class ProjectMutationLease:
+    """Per-project gate whose asynchronous waiters do not occupy worker threads.
+
+    The mutex covers only the queue. An async waiter parks on a Future and a
+    synchronous caller parks on an Event. Release transfers ownership in FIFO
+    order and leaves the gate held, so cancelling one waiter cannot admit two.
+    """
+
+    def __init__(self) -> None:
+        self._mutex = threading.Lock()
+        self._held = False
+        self._waiters: deque[_MutationWaiter] = deque()
+
+    def waiting(self) -> int:
+        with self._mutex:
+            return len(self._waiters)
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        if not blocking:
+            with self._mutex:
+                if self._held or self._waiters:
+                    return False
+                self._held = True
+                return True
+        waiter = None
+        with self._mutex:
+            if not self._held:
+                self._held = True
+                return True
+            event = threading.Event()
+            waiter = _MutationWaiter("sync", event)
+            self._waiters.append(waiter)
+        if timeout is None or timeout < 0:
+            event.wait()
+            return True
+        if event.wait(timeout):
+            return True
+        with self._mutex:
+            if not waiter.admitted:
+                try:
+                    self._waiters.remove(waiter)
+                except ValueError:
+                    pass
+                return False
+        self.release()
+        return False
+
+    async def acquire_async(self) -> None:
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        waiter = _MutationWaiter("async", future)
+        with self._mutex:
+            if not self._held:
+                self._held = True
+                return
+            self._waiters.append(waiter)
+        try:
+            await future
+        except asyncio.CancelledError:
+            release = False
+            with self._mutex:
+                if waiter.admitted:
+                    release = True
+                else:
+                    try:
+                        self._waiters.remove(waiter)
+                    except ValueError:
+                        release = waiter.admitted
+            if release:
+                self.release()
+            raise
+
+    def release(self) -> None:
+        with self._mutex:
+            if not self._held:
+                raise RuntimeError("project mutation lease released while free")
+            self._handoff_locked()
+
+    def _handoff_locked(self) -> None:
+        while self._waiters:
+            waiter = self._waiters.popleft()
+            if waiter.kind == "async":
+                future = waiter.signal
+                if future.cancelled() or future.done():
+                    continue
+                waiter.admitted = True
+                future.get_loop().call_soon_threadsafe(self._resolve_future, future)
+                return
+            waiter.admitted = True
+            waiter.signal.set()
+            return
+        self._held = False
+
+    @staticmethod
+    def _resolve_future(future) -> None:
+        if not future.done():
+            future.set_result(True)
+
+    def __enter__(self):
+        if ADMITTED_PROJECT_MUTATION.get() is self:
+            return self
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if ADMITTED_PROJECT_MUTATION.get() is self:
+            return False
+        self.release()
+        return False
 
 
 class ExactEdit(BaseModel):
@@ -35,13 +161,13 @@ class ApplyEditsInput(BaseModel):
     base_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$", description="Omit for a read-only preview and original hash. Supply that unchanged original-byte hash to apply atomically.")
 
 
-def project_mutation_lock(project: Path):
+def project_mutation_lock(project: Path) -> ProjectMutationLease:
     """Serialize custom and native project mutations across graphs/helpers."""
     key = str(canonical_root(project))
     with _lock_guard:
         current = _locks.get(key)
         if current is None:
-            current = threading.Lock()
+            current = ProjectMutationLease()
             _locks[key] = current
         return current
 

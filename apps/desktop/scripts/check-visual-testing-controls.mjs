@@ -37,7 +37,7 @@ function button(renderer, label) { const found = renderer.root.findAll(node => n
 const vite = await createViteServer({ root: desktopRoot, appType: "custom", server: { middlewareMode: true, hmr: false }, logLevel: "error" });
 try {
   const { VisualTestingControls } = await vite.ssrLoadModule("/src/renderer/VisualTestingControls.tsx");
-  const { browserToolNames, defaultNextTurnTools, desktopToolNames, effectiveNextTurnTools, withBrowserTools, withDesktopTools } = await vite.ssrLoadModule("/src/renderer/chatSetup.ts");
+  const { browserToolNames, desktopToolNames, effectiveNextTurnTools, standardToolSelection, withBrowserTools, withDesktopTools } = await vite.ssrLoadModule("/src/renderer/chatSetup.ts");
   const { scopedSetupConfiguration } = await vite.ssrLoadModule("/src/renderer/SetupConfigurationEditor.tsx");
   const browser = withBrowserTools(["grep"], true, true, false);
   assert.ok(browserToolNames.every(name => browser.includes(name)));
@@ -46,10 +46,14 @@ try {
   const desktop = withDesktopTools(browser, true, true, false);
   assert.ok(desktopToolNames.every(name => desktop.includes(name)));
   assert.equal(desktop.includes("read_file"), false, "Windows selection does not insert a file tool");
-  assert.deepEqual(effectiveNextTurnTools(["browser_navigate", "desktop_inspect", "execute", "grep", "task"], "plan"), ["grep", "task"], "Setup's Plan summary contains only tools the next Plan turn can use");
-  assert.deepEqual(effectiveNextTurnTools(["browser_navigate", "execute"], "work"), ["browser_navigate", "execute"], "Work summary reflects selected capabilities");
-  assert.deepEqual(defaultNextTurnTools(["echo", "read_file", "ls", "execute", "read_attachment", "browser_navigate"], false, false, false), ["echo"], "projectless default summary omits file, shell, attachment, and optional visual tools");
-  assert.deepEqual(defaultNextTurnTools(["echo", "read_file", "ls", "execute", "read_attachment"], false, true, true), ["echo", "read_file", "ls", "read_attachment"], "next-turn default includes read routes and attachments only when available");
+  const planTools = ["ls", "read_file", "glob", "grep", "read_attachment", "read_reference", "read_tool_result", "find_tools", "search_knowledge", "write_todos", "ask_user", "echo", "time_now", "task"];
+  const trustedWeb = "cx_public_search_web_" + "ab".repeat(8);
+  assert.deepEqual(effectiveNextTurnTools(["browser_navigate", "desktop_inspect", "execute", "grep", "task", "web_search", trustedWeb], "plan", planTools, ["search_web", "read_web_page"]), ["grep", "task", trustedWeb], "Plan summary uses backend eligibility and trusted public-web names");
+  assert.deepEqual(effectiveNextTurnTools(["browser_navigate", "execute"], "work", planTools), ["browser_navigate", "execute"], "Work summary reflects selected capabilities");
+  assert.deepEqual(effectiveNextTurnTools(["grep", "read_tool_result"], "plan"), [], "a missing Plan payload does not invent eligibility");
+  assert.equal(standardToolSelection({ defaults: {} }, false, false, false), null, "missing Standard context does not invent a selection");
+  assert.deepEqual(standardToolSelection({ defaults: { "projectless-noknowledge-noattachments-nocapture": ["time_now", "read_tool_result"] } }, false, false, false), ["time_now", "read_tool_result"], "Standard membership comes from the catalogue context");
+  assert.deepEqual(standardToolSelection({ defaults: { "projectless-knowledge-attachments-nocapture": ["time_now", "read_file", "ls", "read_attachment"] } }, false, true, true), ["time_now", "read_file", "ls", "read_attachment"], "read routes appear only in the context the catalogue supplies");
   assert.ok(browserToolNames.every(name => withDesktopTools(desktop, false, true, false).includes(name)), "revoking Windows keeps browser tools");
   assert.deepEqual(scopedSetupConfiguration({ instructions: "Research", presented_tools: desktop, desktop_access: "selected", approval_mode: "full_access" }, "agent"), { instructions: "Research", presented_tools: desktop }, "agent retains tools while Chat alone supplies live access grants");
   const windowChoices = [];

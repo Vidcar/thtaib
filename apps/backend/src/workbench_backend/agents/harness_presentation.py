@@ -109,7 +109,11 @@ def apply_filesystem_shell_gates(input_policy, presented, filesystem_blocked, sh
         pinned_blocked = set(input_policy.pinned_tools).intersection([*filesystem_blocked, *shell_blocked])
         if pinned_blocked:
             raise HarnessError("Pinned file and shell tools need a project folder.", code="filesystem_requires_project", status_code=409)
-        presented.extend(name for name in [*filesystem_blocked, *shell_blocked] if name not in presented)
+        # Project discovery stays out until a project is bound. An explicitly
+        # selected shell or preview tool stays selected so use can pause for a
+        # project instead of looking unselected.
+        presented.extend(name for name in shell_blocked if name not in presented)
+        return presented
     if filesystem_blocked and not progressive:
         raise HarnessError(
             "Filesystem tools require a bound project folder.",
@@ -157,6 +161,7 @@ def apply_automatic_read_paths(request, knowledge_plan, presented, retrieval_pre
 def apply_disclosure_and_plan_filter(request, input_policy, helpers, knowledge_plan, presented, connection_snapshots=()):
     if helpers and request.presented_tools != []:
         presented = [*presented, "task"]
+    excluded: set[str] = set()
     if input_policy is not None:
         excluded = {source.removeprefix("tool:") for source in input_policy.excluded_sources if source.startswith("tool:")}
         presented = [name for name in presented if name not in excluded]
@@ -168,9 +173,38 @@ def apply_disclosure_and_plan_filter(request, input_policy, helpers, knowledge_p
             if helper_refs or getattr(knowledge_plan, "references", None) and any(row.mode == "when_needed" for row in knowledge_plan.references):
                 presented.append("read_reference")
         presented = [name for name in presented if name not in excluded]
+    presented = include_selected_public_web(request, presented, connection_snapshots)
+    presented = [name for name in presented if name not in excluded]
     if request.work_mode == "plan":
         presented = [name for name in presented if name in plan_tool_names(connection_snapshots)]
     return presented
+
+
+def include_selected_public_web(request, presented, connection_snapshots):
+    """Add trusted search/page tools for a connection the user already selected.
+
+    Tools off and explicit exclusions stay empty. No other connection operation
+    is added, and this does not invent a connection id.
+    """
+
+    if getattr(request, "presented_tools", None) == []:
+        return presented
+    from workbench_backend.connections.service import namespaced
+    policy = getattr(request, "input_policy", None)
+    excluded = {source.removeprefix("tool:") for source in getattr(policy, "excluded_sources", ()) if str(source).startswith("tool:")}
+    added = []
+    seen = set(presented)
+    for connection in connection_snapshots:
+        if getattr(connection, "kind", None) != "public_web" or getattr(connection, "transport", None) != "builtin":
+            continue
+        for tool in connection.tools:
+            if tool.remote_name not in {"search_web", "read_web_page"}:
+                continue
+            if tool.name != namespaced(connection.id, tool.remote_name) or tool.name in excluded or tool.name in seen:
+                continue
+            added.append(tool.name)
+            seen.add(tool.name)
+    return [*presented, *added]
 
 
 def validate_required_presentation(
