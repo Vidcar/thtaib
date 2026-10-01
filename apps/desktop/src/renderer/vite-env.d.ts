@@ -13,7 +13,6 @@ interface WorkbenchBridge {
   currentAppearancePreview?: () => Promise<unknown>;
   publishAppearancePreview?: (value: unknown) => Promise<unknown>;
   onAppearancePreview?: (callback: (value: unknown) => void) => () => void;
-  activateRestore?: (destination: string) => Promise<void>;
   saveAsset?: (input: { assetId: string; sessionId?: string; projectPath?: string }) => Promise<string | null>;
   onAttention?: (callback: (conversationId: string | null, runId: string) => void) => () => void;
 }

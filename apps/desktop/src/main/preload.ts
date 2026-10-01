@@ -15,7 +15,6 @@ contextBridge.exposeInMainWorld("workbench", {
     ipcRenderer.on("workbench:appearance-preview-state", listener);
     return () => ipcRenderer.removeListener("workbench:appearance-preview-state", listener);
   },
-  activateRestore: (destination: string) => ipcRenderer.invoke("workbench:activate-restore", destination),
   saveAsset: (input: { assetId: string; sessionId?: string; projectPath?: string }) => ipcRenderer.invoke("workbench:save-asset", input),
   onAttention: (callback: (conversationId: string | null, runId: string) => void) => {
     const listener = (_event: unknown, id: string | null, runId: string) => callback(id, runId);

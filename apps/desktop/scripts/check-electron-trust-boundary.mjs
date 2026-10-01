@@ -56,12 +56,11 @@ for (const mode of ["dev", "file"]) {
 }
 assert.equal(fixed.bridge.invalidSelectPath, "Unsupported selection", "selectPath should reject invalid kind before native dialog");
 assert.equal(fixed.bridge.invalidSaveAsset, "Invalid file scope", "saveAsset should reject invalid payload before backend/native dialog");
-assert.equal(fixed.bridge.invalidActivateRestore, "Invalid restored location", "activateRestore should reject invalid destination before backend call");
 assert.equal(fixed.bridge.selectPathNavigation, "This document cannot use desktop actions.", "selectPath should reject if requester navigates while dialog is pending");
 assert.equal(fixed.bridge.saveAssetBackendNavigation, "This document cannot use desktop actions.", "saveAsset should reject if requester navigates while backend content fetch is pending");
 assert.equal(fixed.bridge.saveAssetDialogNavigation, "no write after requester navigation", "saveAsset should not write after requester navigation while save dialog is pending");
 assert.equal(fixed.bridge.binarySave, true, "Save copy must preserve original binary image bytes");
-assert.equal(fixed.bridge.activateRestoreNavigation, "no reload after requester navigation", "activateRestore should not reload windows after requester navigation while backend activation is pending");
+assert.match(fixed.bridge.activateRestore, /No handler registered/, "desktop must not expose application restore");
 
 console.log("Electron trust-boundary fixture passed");
 console.log("Vulnerable reproduction:", JSON.stringify({
@@ -234,23 +233,6 @@ async function main() {
     if (url.pathname === "/v1/desktop/work") {
       response.setHeader("Content-Type", "application/json");
       response.end(JSON.stringify({ active_run_ids: [], active_import_ids: [] }));
-      return;
-    }
-    if (url.pathname === "/v1/backups/activate") {
-      bridge.activateRequested = true;
-      const pending = bridge.activateDeferred;
-      if (pending) {
-        pending.promise.then(() => {
-          response.setHeader("Content-Type", "application/json");
-          response.end(JSON.stringify({ activated: true }));
-        }).catch((error) => {
-          response.statusCode = 500;
-          response.end(String(error));
-        });
-        return;
-      }
-      response.setHeader("Content-Type", "application/json");
-      response.end(JSON.stringify({ activated: true }));
       return;
     }
     if (url.pathname === "/redirect-token") {
@@ -454,7 +436,7 @@ async function runBridgeTests(appUrl, replacementUrl) {
 
     bridge.invalidSelectPath = await invokeBridgeExpectError(trusted, "workbench:select-path", "drive");
     bridge.invalidSaveAsset = await invokeBridgeExpectError(trusted, "workbench:save-asset", { assetId: "../bad" });
-    bridge.invalidActivateRestore = await invokeBridgeExpectError(trusted, "workbench:activate-restore", "");
+    bridge.activateRestore = await invokeBridgeExpectError(trusted, "workbench:activate-restore", "D:\\RestoredWorkbench");
 
     delete bridge.handlerResults["workbench:select-path"];
     void fireBridgeInvoke(trusted, "workbench:select-path", "file");
@@ -499,23 +481,6 @@ async function runBridgeTests(appUrl, replacementUrl) {
     bridge.binarySave = binaryResult.status === "resolved" && existsSync(binaryPath) && readFileSync(binaryPath).equals(binary);
     delete bridge.assetPayload;
 
-    await trusted.loadURL(appUrl);
-    bridge.activateDeferred = createDeferred();
-    bridge.activateRequested = false;
-    bridge.reloadCount = 0;
-    delete bridge.handlerResults["workbench:activate-restore"];
-    const originalReload = trusted.reload.bind(trusted);
-    trusted.reload = () => {
-      bridge.reloadCount += 1;
-      return originalReload();
-    };
-    void fireBridgeInvoke(trusted, "workbench:activate-restore", "D:\\\\RestoredWorkbench");
-    await waitFor(() => bridge.activateRequested === true, "activate backend pending");
-    await trusted.loadURL(replacementUrl);
-    bridge.activateDeferred.resolve();
-    await waitForHandler("workbench:activate-restore");
-    bridge.activateRestoreNavigation = bridge.reloadCount === 0 ? "no reload after requester navigation" : "reloaded after requester navigation";
-    delete bridge.activateDeferred;
     trusted.destroy();
   } finally {
     dialog.showOpenDialog = originalOpenDialog;

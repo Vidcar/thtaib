@@ -19,7 +19,7 @@ try {
   ({ appearanceTokens } = await vite.ssrLoadModule("/src/renderer/appearanceCatalog.ts"));
   await checkPreferencesWaitForHydrationAndSave(RecoverySettingsPanel);
   await checkLateInitialRefreshCannotReplaceSavedPreferences(RecoverySettingsPanel);
-  await checkBackupDestinationIsArchiveInsideTypedFolder(RecoverySettingsPanel);
+  await checkSettingsCategoriesHaveNoBackup(RecoverySettingsPanel);
 } finally {
   await vite.close();
 }
@@ -203,13 +203,10 @@ async function checkLateInitialRefreshCannotReplaceSavedPreferences(RecoverySett
   await act(async () => renderer.unmount());
 }
 
-async function checkBackupDestinationIsArchiveInsideTypedFolder(RecoverySettingsPanel) {
-  const requests = [];
+async function checkSettingsCategoriesHaveNoBackup(RecoverySettingsPanel) {
   globalThis.fetch = async (url, init = {}) => {
     const parsed = new URL(String(url));
     const request = { method: init.method ?? "GET", path: parsed.pathname, body: init.body ? JSON.parse(String(init.body)) : null };
-    requests.push(request);
-
     if (parsed.pathname === "/v1/settings/presentation") {
       return jsonResponse({
         theme: "system",
@@ -220,23 +217,6 @@ async function checkBackupDestinationIsArchiveInsideTypedFolder(RecoverySettings
     }
     if (parsed.pathname === "/v1/settings/grants") {
       return jsonResponse([]);
-    }
-    if (parsed.pathname === "/v1/work/active") {
-      return jsonResponse({ active_run_ids: [] });
-    }
-    if (parsed.pathname === "/v1/backups" && request.method === "POST") {
-      return jsonResponse({
-        archive_path: request.body.destination,
-        manifest: {
-          format: "local-ai-workbench-backup",
-          schema_version: 1,
-          created_at: "2026-09-22T12:00:00Z",
-          backup_id: "backup_test",
-          source: {},
-          counts: {},
-          external_references: [],
-        },
-      });
     }
     throw new Error(`unexpected request ${request.method} ${parsed.pathname}`);
   };
@@ -250,48 +230,15 @@ async function checkBackupDestinationIsArchiveInsideTypedFolder(RecoverySettings
     await tick();
   });
 
-  await submitBackup(renderer, "D:\\CodeProjects\\thtaib\\.scratch\\packet03-native-backups");
-  const typedFolderRequest = backupRequests(requests).at(-1);
-  assert.equal(typedFolderRequest.body.include_browser_profiles, false, "browser sign-ins stay out of backups by default");
-  assertNestedBackupArchive(
-    typedFolderRequest.body.destination,
-    "D:\\CodeProjects\\thtaib\\.scratch\\packet03-native-backups",
-  );
-
-  await act(async () => renderer.root.findByProps({ role: "switch", "aria-label": "Include browser sign-ins (sensitive)" }).props.onClick());
-  await submitBackup(renderer, "D:\\CodeProjects\\thtaib\\.scratch\\packet03-native-backups\\");
-  const trailingSeparatorRequest = backupRequests(requests).at(-1);
-  assert.equal(trailingSeparatorRequest.body.include_browser_profiles, true, "the sensitive backup choice is sent explicitly");
-  assertNestedBackupArchive(
-    trailingSeparatorRequest.body.destination,
-    "D:\\CodeProjects\\thtaib\\.scratch\\packet03-native-backups",
-  );
+  const nav = renderer.root.find((node) => node.type === "nav" && node.props["aria-label"] === "Settings categories");
+  const labels = nav.findAll((node) => node.type === "button").map((node) => textOf(node));
+  assert.deepEqual(labels, ["Appearance", "Notifications", "Defaults", "Connections", "Permissions"]);
+  const visible = textOf(renderer.root);
+  assert.equal(visible.includes("Backup"), false, "Settings must not show a Backup section");
+  assert.equal(visible.toLowerCase().includes("browser sign-in"), false, "Settings must not offer browser sign-in backup");
+  assert.equal(renderer.root.findAll((node) => node.type === "button" && textOf(node).includes("Create backup")).length, 0);
+  assert.equal(renderer.root.findAll((node) => node.type === "button" && textOf(node).includes("Restore")).length, 0);
   await act(async () => renderer.unmount());
-}
-
-async function submitBackup(renderer, destinationFolder) {
-  const destination = inputByPlaceholder(renderer, "Choose a folder for the backup archive");
-  await act(async () => {
-    destination.props.onChange({ target: { value: destinationFolder } });
-  });
-  await act(async () => {
-    button(renderer, "Create backup").props.onClick();
-    await tick();
-  });
-}
-
-function assertNestedBackupArchive(destination, folder) {
-  assert.notEqual(destination, folder, "backup request must not send the folder path as the archive path");
-  assert.ok(destination.startsWith(`${folder}\\`), `backup archive should be nested under typed folder, got ${destination}`);
-  assert.match(destination, /local-ai-workbench-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.workbench-backup\.zip$/);
-}
-
-function backupRequests(requests) {
-  return requests.filter((request) => request.method === "POST" && request.path === "/v1/backups");
-}
-
-function inputByPlaceholder(renderer, placeholder) {
-  return renderer.root.find((node) => node.type === "input" && node.props.placeholder === placeholder);
 }
 
 function themeSelect(renderer) {
@@ -308,7 +255,7 @@ function themeSelect(renderer) {
 }
 
 function preferenceCheckboxes(renderer) {
-  const controls = renderer.root.findAll((node) => node.type === "button" && node.props.role === "switch" && node.props["aria-label"] !== "Include browser sign-ins (sensitive)");
+  const controls = renderer.root.findAll((node) => node.type === "button" && node.props.role === "switch");
   assert.equal(controls.length, 3, "all three boolean preferences use independent switches");
   return controls;
 }

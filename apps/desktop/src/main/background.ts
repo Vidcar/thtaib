@@ -4,7 +4,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { ensureSharedSecret, resolveProductDataRoot, WORKBENCH_BACKEND_ORIGIN, WORKBENCH_LOCAL_TOKEN_HEADER } from "./localTrust";
-import { requireTrustedIpc, installLocalTrustHeader } from "./trustBoundary";
+import { requireTrustedIpc } from "./trustBoundary";
 
 let tray: Tray | undefined;
 let quitting = false;
@@ -117,23 +117,6 @@ export async function installBackground(openWindow: () => void): Promise<void> {
     if (result.canceled || !result.filePath) return null;
     await writeFile(result.filePath, bytes);
     return result.filePath;
-  });
-  ipcMain.handle("workbench:activate-restore", async (event, destination: unknown) => {
-    requireTrustedIpc(event);
-    if (typeof destination !== "string" || !destination || destination.length > 4096) throw new Error("Invalid restored location");
-    await backend("backups/activate", "POST", { destination_root: destination });
-    requireTrustedIpc(event);
-    const deadline = Date.now() + 45000;
-    while (Date.now() < deadline) {
-      try {
-        await backend("desktop/work");
-        requireTrustedIpc(event);
-        installLocalTrustHeader(ensureSharedSecret(resolveProductDataRoot()));
-        for (const window of BrowserWindow.getAllWindows()) window.reload();
-        return;
-      } catch { await new Promise(resolve => setTimeout(resolve, 250)); }
-    }
-    throw new Error("The restore was selected, but the local service has not restarted. Reopen Local AI Workbench to retry startup.");
   });
   timer = setInterval(() => { void pollAttention(openWindow); }, 3000);
 }

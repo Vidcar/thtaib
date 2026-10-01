@@ -53,44 +53,6 @@ export interface MatchedPermissionGrant extends PermissionGrant {
   display_name: string;
 }
 
-export interface BackupExternalReference {
-  kind: "project" | "model" | "runtime" | "credential";
-  path: string | null;
-  id: string | null;
-  included: false;
-  missing: boolean;
-}
-
-export interface BackupManifest {
-  format: "local-ai-workbench-backup";
-  format_version: 1;
-  product_version: string;
-  backup_id: string;
-  created_at: string;
-  files: Array<{ path: string; sha256: string; size_bytes: number }>;
-  directories: string[];
-  included_roots: string[];
-  external_references: BackupExternalReference[];
-  checkpoint_versions: Record<string, string>;
-  credentials_excluded: true;
-  browser_profiles_included?: boolean;
-  no_effect_replay: true;
-  note: string;
-}
-
-export interface BackupCreateResult {
-  archive_path: string;
-  manifest: BackupManifest;
-}
-
-export interface BackupRestoreResult {
-  destination_root: string;
-  manifest: BackupManifest;
-  missing_dependencies: BackupExternalReference[];
-  activated: false;
-  no_effect_replay: true;
-}
-
 export interface AttentionItem {
   run_id: string;
   conversation_id: string | null;
@@ -137,14 +99,6 @@ export const packet03Api = {
   allowProjectFiles: (payload: { project_id: string; operations: Array<"write_file" | "edit_file">; excluded_paths: string[] }) =>
     packet03Request<PermissionGrant>("/v1/settings/grants/project-files", { method: "POST", body: JSON.stringify(payload) }),
   revokeGrant: (grantId: string) => packet03Request<{ revoked: true }>(`/v1/settings/grants/${encodeURIComponent(grantId)}`, { method: "DELETE" }),
-  createBackup: (destination: string, include_browser_profiles = false) =>
-    packet03Request<BackupCreateResult>("/v1/backups", { method: "POST", body: JSON.stringify({ destination, include_browser_profiles }) }),
-  restoreBackup: (archivePath: string, destinationRoot: string) =>
-    packet03Request<BackupRestoreResult>("/v1/backups/restore", {
-      method: "POST",
-      body: JSON.stringify({ archive_path: archivePath, destination_root: destinationRoot }),
-    }),
   attention: () => packet03Request<AttentionItem[]>("/v1/desktop/attention"),
   dismissAttention: (identity: string) => packet03Request<{ dismissed: true }>(`/v1/desktop/attention/${encodeURIComponent(identity)}/dismiss`, { method: "POST" }),
-  activeWork: () => packet03Request<{ active_run_ids: string[] }>("/v1/desktop/work"),
 };
