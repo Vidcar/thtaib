@@ -495,7 +495,7 @@ class HarnessService:
             run = self._require_run(run_id)
             if run.finalization_phase is not None:
                 raise HarnessError(
-                    "Execution has finished and this run is saving its project snapshot.",
+                    "Execution has finished and this run is saving its settled result.",
                     code="run_finalizing",
                     status_code=409,
                 )
@@ -1733,8 +1733,11 @@ class HarnessService:
 
     async def _alink_new_checkpoints(self, run: AgentRun, agent: object) -> None:
         anchor = run.checkpoint_ids[0] if run.checkpoint_ids else run.pre_run_checkpoint_id
+        # Invoke may pin checkpoint_id to the resume row. Linkage reads the
+        # thread, and that id is only the exclusive stop.
+        linked = {"configurable": {"thread_id": run.thread_id or run.id}}
         try:
-            added = await acheckpoint_ids_from_graph(agent, _invoke_config(run), stop_at_id=anchor)
+            added = await acheckpoint_ids_from_graph(agent, linked, stop_at_id=anchor)
         except ValueError as exc:
             run.events.append(AgentEvent(at=utc_now(), kind="checkpoint_linkage_failed",
                 detail={"code": "checkpoint_anchor_missing", "message": str(exc)}))
