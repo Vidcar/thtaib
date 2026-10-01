@@ -115,13 +115,16 @@ export function committedNumber(raw: string, bounds: { min?: number; max?: numbe
   return next;
 }
 
-export function NumberField({ id, label, value, placeholder, min, max, step, unit, onChange, disabled, wide = false }: {
+export function NumberField({ id, label, value, placeholder, min, max, step, unit, onChange, disabled, wide = false, commitEmpty = true }: {
   id?: string; label: string; value: number | string | null; placeholder?: string; min?: number; max?: number; step?: number | "any"; unit?: string;
   onChange: (value: number | null) => void; disabled?: boolean; wide?: boolean;
+  /** When false, an emptied field stays a draft and blur restores the last value. */
+  commitEmpty?: boolean;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   return <span className={wide ? "number-field number-field-wide" : "number-field"}>
     <input id={id} type="number" aria-label={id ? undefined : label} min={min} max={max} step={step} value={draft ?? (value ?? "")} placeholder={placeholder} disabled={disabled} onChange={event => {
+      if (event.target.value === "" && !commitEmpty) { setDraft(""); return; }
       const next = committedNumber(event.target.value, { min, max, step });
       if (next === undefined) { setDraft(event.target.value); return; }
       setDraft(null); onChange(next);

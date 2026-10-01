@@ -37,6 +37,7 @@ try {
   const { capacityFit, ModelCapacityPreview } = await vite.ssrLoadModule("/src/renderer/ModelCapacityPreview.tsx");
   const { HuggingFaceImport } = await vite.ssrLoadModule("/src/renderer/HuggingFaceImport.tsx");
   await checkUnnamedSetup(DeploymentsPanel);
+  await checkEmptyFixedContext(DeploymentsPanel);
   await checkExplicitSetupChoiceAndSwa(DeploymentsPanel);
   await checkLateCreateOwnership(DeploymentsPanel);
   await checkCreatePreservesDraft(DeploymentsPanel);
@@ -47,6 +48,7 @@ try {
   await checkSavedChecks(ModelChecks, modelCheckKinds);
   await checkCapacity(capacityFit, ModelCapacityPreview);
   await checkImportBoundary(HuggingFaceImport);
+  await checkEmptySearch(HuggingFaceImport);
   console.log("Models workspace saved setup, capability scope, capacity and import boundary checks passed.");
 } finally { globalThis.fetch = priorFetch; globalThis.window = priorWindow; await vite.close(); }
 
@@ -96,6 +98,27 @@ async function checkUnnamedSetup(Panel) {
     await change(() => button(renderer, "Load").props.onClick());
     const load = receiver.calls.find(item => item.path.endsWith("/v1/deployments/managed"));
     assert.equal(load?.body.profile_id, "named", "Load uses the explicit saved setup id");
+    assert.deepEqual(receiver.unexpected, []);
+  } finally { await unmount(renderer); }
+}
+
+async function checkEmptyFixedContext(Panel) {
+  let renderer;
+  const model = bundle("first", "kept");
+  const savedProfiles = [profile("kept", "first", { ctx_size: 8192 })];
+  const receiver = setupReceiver({ profiles: () => savedProfiles });
+  try {
+    renderer = await mount(Panel, { selectedBundleId: model.id, initialBundles: [model], initialProfiles: savedProfiles, onBundlesChanged: async () => {} });
+    const field = () => renderer.root.findAllByType("input").find(node => node.props.id === "model-context-number");
+    const dirty = () => renderer.root.findByProps({ className: "model-save-state" }).props["data-dirty"];
+    assert.equal(field().props.value, 8192);
+    await change(() => field().props.onChange({ target: { value: "" } }));
+    assert.equal(field().props.value, "", "an emptied fixed context stays visible while editing");
+    assert.equal(control(renderer, "NumberField", "Exact context").props.value, 8192, "the saved context stays in place while the field is empty");
+    assert.equal(dirty(), false, "clearing the context text does not mark the saved setup unsaved");
+    await change(() => field().props.onBlur());
+    assert.equal(field().props.value, 8192, "leaving an empty context restores the saved value");
+    assert.equal(dirty(), false);
     assert.deepEqual(receiver.unexpected, []);
   } finally { await unmount(renderer); }
 }
@@ -363,6 +386,28 @@ async function checkCapacity(fit, Preview) {
     assert.equal(previewContext(renderer).props.value, 8192, "leaving an invalid context restores the last accepted value");
     await change(() => previewContext(renderer).props.onChange({ target: { value: "4096" } }));
     assert.equal(rejected.ctx_size, 4096, "a whole context within bounds replaces the preview value");
+  } finally { await unmount(renderer); }
+}
+
+async function checkEmptySearch(Import) {
+  let renderer;
+  globalThis.fetch = async url => {
+    const path = String(url);
+    if (path.includes("/huggingface/search")) return response([]);
+    if (path.endsWith("/v1/imports")) return response([]);
+    throw new Error("Unexpected import workspace request " + path);
+  };
+  try {
+    renderer = await mount(Import, { onStarted: async () => {} });
+    const find = () => renderer.root.findByProps({ "aria-label": "Find a model" });
+    await change(() => find().props.onChange({ target: { value: "zzzznotamodelxyz" } }));
+    assert.equal(text(renderer.root).includes("No matching models."), false, "typing a query does not claim the search finished");
+    assert.ok(text(renderer.root).includes("Search by a model name or publisher."));
+    await change(() => renderer.root.findByProps({ className: "models-find-search" }).props.onSubmit({ preventDefault() {} }));
+    assert.ok(text(renderer.root).includes("No matching models."), "an empty search tells the user nothing matched");
+    await change(() => find().props.onChange({ target: { value: "another name" } }));
+    assert.equal(text(renderer.root).includes("No matching models."), false, "editing the query clears the finished empty result");
+    assert.ok(text(renderer.root).includes("Search by a model name or publisher."));
   } finally { await unmount(renderer); }
 }
 

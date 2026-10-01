@@ -13,7 +13,7 @@ import { ApprovalModeControl, approvalModeLabel, approvalModeOf, type ApprovalMo
 import { Icon } from "./Icon";
 import type { ChatLaunch, ConversationListActions, HistoryNotice } from "./WorkbenchSidebar";
 import { ComposerAttachments } from "./ComposerAttachments";
-import { ChatDock, chatDockGeometry, useConversationDockView, type ChatRailPage } from "./ChatDock";
+import { acceptedProjectFilePath, ChatDock, chatDockGeometry, isRefusedProjectPathNotice, refusedProjectPathNotice, useConversationDockView, type ChatRailPage } from "./ChatDock";
 import { ComposerPicker, composerMatches, type ComposerChoice } from "./ComposerPicker";
 import { MessageTaskActions } from "./MessageTaskActions";
 import { VisualTestingControls } from "./VisualTestingControls";
@@ -888,18 +888,31 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }, [openRail]);
   const fileProjectId = conversation?.project_id ?? projectId;
   const selectedPath = dockView.projectId === fileProjectId ? dockView.path : "";
+  const [message, setMessage] = useState("");
   const selectFile = useCallback((path: string) => {
-    updateDockView({ projectId: fileProjectId, path });
+    const accepted = acceptedProjectFilePath(path);
+    if (!accepted) {
+      const refusal = refusedProjectPathNotice(path);
+      if (refusal) setMessage(refusal);
+      return;
+    }
+    setMessage(current => isRefusedProjectPathNotice(current) ? "" : current);
+    updateDockView({ projectId: fileProjectId, path: accepted });
   }, [fileProjectId, updateDockView]);
   const openFile = useCallback((path: string) => {
+    const accepted = acceptedProjectFilePath(path);
+    if (!accepted) {
+      const refusal = refusedProjectPathNotice(path);
+      if (refusal) setMessage(refusal);
+      return;
+    }
     openRail("files");
-    selectFile(path);
+    selectFile(accepted);
   }, [openRail, selectFile]);
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const historySignature = conversations.map(item => `${item.id}:${item.title ?? ""}:${item.display_title ?? ""}:${item.archived ? 1 : 0}`).join("|");
   const [knowledgeEntries, setKnowledgeEntries] = useState<KnowledgeEntry[]>([]);
   const [selectedKnowledgeIds, setSelectedKnowledgeIds] = useState<string[]>([]);
-  const [message, setMessage] = useState("");
   const [loadErrors, setLoadErrors] = useState<Record<string, string>>({});
   const loadError = Object.entries(loadErrors).map(([label, error]) => `${label}: ${error}`).join(" · ");
   const catalogueActive = useRef(false);

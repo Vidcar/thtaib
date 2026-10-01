@@ -2,7 +2,7 @@
 import unittest
 from unittest.mock import patch
 import httpx
-from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, OfflineModeIsEnabled
+from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, OfflineModeIsEnabled, RepositoryNotFoundError
 from workbench_backend.errors import ManagerError
 from workbench_backend.inference.hf_fetch import HuggingFaceFetcher
 
@@ -14,6 +14,7 @@ class HubAccessTests(unittest.TestCase):
                     (GatedRepoError('gated', response=httpx.Response(403, request=httpx.Request('GET','https://huggingface.co'))), 'hf_gated')]
         for status, code in [(401,'hf_authentication'), (403,'hf_inaccessible'), (404,'hf_inaccessible'), (503,'hf_service')]:
             failures.append((HfHubHTTPError('sensitive-token-not-for-output', response=httpx.Response(status, request=httpx.Request('GET','https://huggingface.co'))), code))
+        failures.append((RepositoryNotFoundError('sensitive-token-not-for-output', response=httpx.Response(401, request=httpx.Request('GET','https://huggingface.co'))), 'hf_inaccessible'))
         for error, code in failures:
             with self.subTest(code=code):
                 def lazy():

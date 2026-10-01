@@ -13,7 +13,7 @@ import httpx
 from urllib.parse import parse_qs, urlparse, unquote
 
 from huggingface_hub import HfApi, hf_hub_download, snapshot_download
-from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, OfflineModeIsEnabled
+from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, OfflineModeIsEnabled, RepositoryNotFoundError
 
 from workbench_backend.errors import ManagerError
 from workbench_backend.inference.schemas import HubRepository, HubSearchResult, HubSource, HubVariant, ResponseRecipe
@@ -58,6 +58,10 @@ def search_metadata(item: object) -> tuple[int | None, list[str], str | None]:
 def _access_error(exc: Exception) -> ManagerError:
     if isinstance(exc, GatedRepoError):
         return ManagerError("This repository is gated. Accept its publisher's terms and configure Hugging Face access on this machine, then retry.", code="hf_gated", status_code=400)
+    # Hugging Face answers a missing or hidden repository with HTTP 401 and
+    # RepositoryNotFoundError, including when a valid token can read other repositories.
+    if isinstance(exc, RepositoryNotFoundError):
+        return ManagerError("This repository or revision is unavailable to your account. Check its name and your access, then retry.", code="hf_inaccessible", status_code=400)
     if isinstance(exc, (OfflineModeIsEnabled, httpx.TransportError)):
         return ManagerError("Hugging Face cannot be reached. Check your connection and offline-mode setting, then retry.", code="hf_offline", status_code=503)
     status = getattr(getattr(exc, "response", None), "status_code", None)

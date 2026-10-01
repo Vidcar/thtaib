@@ -1488,6 +1488,29 @@ async function testSelectedFileBelongsToProject(vite) {
     await act(async () => button(renderer, "Conversation B").props.onClick());
     await waitFor(() => assert.equal(dock()?.props.projectId, "project_b"), "second chat selected again");
     assert.equal(dock().props.selectedPath, "hold.py", "each chat retains its own file selection");
+    await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "chat is bound before a refused path");
+    const requested = harness.state.requests.projectFiles.length;
+    await act(async () => dock().props.onSelectPath("/skills/browser-validation/SKILL.md"));
+    await flush();
+    assert.equal(harness.state.requests.projectFiles.length, requested, "a skill path is not read through the project file endpoint");
+    assert.equal(dock().props.selectedPath, "hold.py", "refusing a skill path keeps the current project file");
+    assert.match(allText(renderer), /That path is managed knowledge or history, not a project file\./, "a skill path explains managed knowledge");
+    await act(async () => dock().props.onSelectPath(".."));
+    await flush();
+    assert.equal(harness.state.requests.projectFiles.length, requested, "a parent path is not read through the project file endpoint");
+    assert.equal(dock().props.selectedPath, "hold.py", "refusing a parent path keeps the current project file");
+    assert.match(allText(renderer), /That path is outside the project\./, "a parent path is outside the project");
+    assert.doesNotMatch(allText(renderer), /managed knowledge or history/, "a parent path is not described as knowledge");
+    await act(async () => dock().props.onSelectPath("C:/outside.txt"));
+    await flush();
+    assert.equal(harness.state.requests.projectFiles.length, requested, "a drive path is not read through the project file endpoint");
+    assert.equal(dock().props.selectedPath, "hold.py", "refusing a drive path keeps the current project file");
+    assert.match(allText(renderer), /That path is outside the project\./, "a drive path is outside the project");
+    assert.doesNotMatch(allText(renderer), /managed knowledge or history/, "a drive path is not described as knowledge");
+    await act(async () => dock().props.onSelectPath("notes.txt"));
+    await waitFor(() => assert.deepEqual(harness.state.requests.projectFiles.at(-1), { projectId: "project_b", path: "notes.txt" }), "a later project file is requested");
+    assert.equal(dock().props.selectedPath, "notes.txt", "an accepted project file replaces the selection");
+    assert.doesNotMatch(allText(renderer), /managed knowledge or history|That path is outside the project/, "an accepted project file clears the refusal notice");
   } finally { await closeHarness(renderer, harness); }
 }
 
