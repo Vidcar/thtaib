@@ -687,6 +687,10 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         if not self.run.presented_tools:
             return ToolMessage(content="Tools are explicitly off for this run; no action was executed.", name=name, tool_call_id=call_id, status="error")
         if name == "read_file" and name not in self.run.presented_tools and self.run.framework_read_paths:
+            policy = getattr(self.run, "input_policy", None)
+            excluded = {source.removeprefix("tool:") for source in getattr(policy, "excluded_sources", ()) if str(source).startswith("tool:")}
+            if "read_file" in excluded:
+                return ToolMessage(content="This reader is excluded for this run. The action was not executed.", name=name, tool_call_id=call_id, status="error")
             path = str(args.get("file_path", "")).replace("\\", "/")
             parts = path.split("/")
             allowed = not path.startswith("//") and not any(part in {".", ".."} or ":" in part for part in parts)
@@ -704,9 +708,28 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         if deferred_tools(self.run) and not self.run.project_path and name in {*FILESYSTEM_TOOL_NAMES, *SHELL_TOOL_NAMES}:
             # The inner native disclosure wrapper pauses the selected action
             # for project setup; it cannot execute without a new bound input.
-            if not (_allow_projectless_knowledge_tool(name, args, self.run)
+            # A virtual knowledge or capture reader is already treated as ready,
+            # so a path outside those routes is refused here instead of running.
+            virtual_reader = name in KNOWLEDGE_ROUTE_READ_TOOLS and (
+                knowledge_routes_selected(self.run.memory_version_refs, self.run.skill_version_refs)
+                or self.run.capture_routes_enabled
+                or self.run.framework_read_paths
+            )
+            if (_allow_projectless_knowledge_tool(name, args, self.run)
                     or _allow_projectless_capture_tool(name, args, self.run)
                     or name == "read_file" and self.run.framework_read_paths):
+                pass
+            elif virtual_reader:
+                return ToolMessage(
+                    content=(
+                        "Filesystem tools require a bound project folder. "
+                        "This run has no project; the file was not written."
+                    ),
+                    name=name,
+                    tool_call_id=call_id,
+                    status="error",
+                )
+            else:
                 return None
         if name in FILESYSTEM_TOOL_NAMES and not self.run.project_path:
             if (_allow_projectless_knowledge_tool(name, args, self.run)
@@ -767,7 +790,10 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         allowed = set(self.run.presented_tools)
         if self.run.work_mode == "plan":
             allowed.intersection_update(plan_tool_names(self.run.connection_snapshots))
-        if self.run.framework_read_paths:
+        policy = getattr(self.run, "input_policy", None)
+        excluded = {source.removeprefix("tool:") for source in getattr(policy, "excluded_sources", ()) if str(source).startswith("tool:")}
+        allowed.difference_update(excluded)
+        if self.run.framework_read_paths and "read_file" not in excluded:
             allowed.add("read_file")
         selected: list[Any] = []
         for item in tools or []:

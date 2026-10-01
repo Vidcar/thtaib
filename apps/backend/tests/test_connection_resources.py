@@ -349,6 +349,98 @@ class ConnectionCapabilityAdmissionTests(unittest.IsolatedAsyncioTestCase):
             await connection_resource_tools(empty, untested_run)[0].ainvoke({"connection_id": untested.id})
         self.assertEqual(not_ready.exception.code, "connection_test_required")
 
+    async def test_server_without_tools_list_is_ready_for_resources_only(self):
+        server = MCPServer(name="resources only")
+        @server.resource("audit://note")
+        def note() -> str:
+            """Return a retained note."""
+            return ("n" * 9000) + "LATE_MARKER"
+        for method in ("tools/list", "tools/call"):
+            server._lowlevel_server._request_handlers.pop(method, None)
+        service = self._service(server)
+        created = self._create(service, "Resources without tools")
+        tested = await service.test(created.id)
+        self.assertIsNone(tested.last_error, tested.last_error)
+        self.assertEqual(tested.tools, [])
+        self.assertEqual(tested.protocol_capabilities, ["resources"])
+        reloaded = ConnectionService(self.store, adapter_factory=service.adapter_factory).get(tested.id)
+        self.assertEqual(reloaded.tools, [])
+        self.assertEqual(reloaded.protocol_capabilities, ["resources"])
+        self.assertTrue(service.available(tested.id))
+
+        for loading in ("always", "when_needed"):
+            snapshots, external = self._admit(service, tested.id, loading)
+            self.assertEqual(external, [])
+            self.assertEqual(snapshots[0].tools, [])
+            self.assertEqual(service.get(tested.id).protocol_capabilities, ["resources"])
+
+        run = self._run(self._admit(service, tested.id, "when_needed")[0])
+        tools = {tool.name: tool for tool in connection_resource_tools(service, run)}
+        listing = json.loads(await tools["list_connection_resources"].ainvoke({"connection_id": tested.id}))
+        self.assertEqual([item["uri"] for item in listing["resources"]], ["audit://note"])
+        read = json.loads(await tools["read_connection_resource"].ainvoke({"connection_id": tested.id, "uri": "audit://note"}))
+        retained_path = read["contents"][0]["result_path"]
+        self.assertNotIn("LATE_MARKER", read["contents"][0]["preview"])
+        found = OwnedToolResults(service.application.paths, run).read(retained_path, query="LATE_MARKER")
+        self.assertIn("LATE_MARKER", found["matches"][0]["content"])
+        self.assertIn("read_tool_result", found["result"]["notice"])
+
+        current = service.get(tested.id)
+        service.store.put(current.model_copy(update={"version": current.version + 1}), expected_version=current.version)
+        with self.assertRaises(HarnessError) as changed:
+            await tools["list_connection_resources"].ainvoke({"connection_id": tested.id})
+        self.assertEqual(changed.exception.code, "connection_changed")
+
+    async def test_advertised_capability_failures_are_not_inferred_from_error_text(self):
+        from mcp import MCPError
+        from mcp_types import METHOD_NOT_FOUND
+
+        class Client:
+            def __init__(self, *, tools, resources, error):
+                self.server_capabilities = SimpleNamespace(tools=tools, resources=resources)
+                self.error = error
+                self.tool_calls = 0
+            async def list_tools(self):
+                self.tool_calls += 1
+                raise self.error
+            async def list_resources_mcp(self):
+                raise self.error
+
+        def service_for(client):
+            @asynccontextmanager
+            async def factory(_record, _unsupported):
+                yield SimpleNamespace(client=client, list_tools=client.list_tools)
+            return ConnectionService(self.store, adapter_factory=factory)
+
+        missing = Client(tools=object(), resources=None, error=MCPError(METHOD_NOT_FOUND, "Method not found"))
+        missing_service = service_for(missing)
+        missing_record = await missing_service.test(self._create(missing_service, "Advertised tools missing").id)
+        self.assertIn("tools/list", missing_record.last_error)
+        self.assertEqual(missing_record.protocol_capabilities, [])
+        self.assertFalse(missing_service.available(missing_record.id))
+        self.assertGreaterEqual(missing.tool_calls, 1)
+
+        text = Client(tools=object(), resources=None, error=RuntimeError("method not found"))
+        text_service = service_for(text)
+        text_record = await text_service.test(self._create(text_service, "Unrelated method text").id)
+        self.assertIn("Could not connect", text_record.last_error)
+        self.assertNotIn("method not found", text_record.last_error)
+        self.assertEqual(text_record.protocol_capabilities, [])
+
+        resources = Client(tools=None, resources=object(), error=MCPError(METHOD_NOT_FOUND, "Method not found"))
+        resource_service = service_for(resources)
+        resource_record = await resource_service.test(self._create(resource_service, "Advertised resources missing").id)
+        self.assertIn("resources/list", resource_record.last_error)
+        self.assertEqual(resource_record.protocol_capabilities, [])
+        self.assertEqual(resources.tool_calls, 0)
+
+        neither = Client(tools=None, resources=None, error=RuntimeError("should not be called"))
+        neither_service = service_for(neither)
+        neither_record = await neither_service.test(self._create(neither_service, "No capabilities").id)
+        self.assertIn("does not advertise tools or resources", neither_record.last_error)
+        self.assertEqual(neither_record.protocol_capabilities, [])
+        self.assertEqual(neither.tool_calls, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

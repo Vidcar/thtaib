@@ -13,7 +13,7 @@ from fastapi import HTTPException
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.harness_backend import roots_overlap, canonical_root
 from workbench_backend.agents.schemas import AgentRun, AgentStartRequest, InterruptDecisionRequest
-from workbench_backend.agents.tools import enabled_for_project, resolve_presented_tools
+from workbench_backend.agents.tools import enabled_for_project, resolve_presented_tools, unpinned_project_reads
 from workbench_backend.agents.setup_service import SetupService, configuration_from_request, cleared_configuration_fields
 from workbench_backend.agents.setup_schemas import AgentInputPolicy, AgentInputPreview, InputSourceRow, ProjectCreateRequest, SetupConfiguration, ReviewConfiguration, FrozenExecutionSelection, ResolvedSetupSelection
 from workbench_backend.agents.input_sources import create_input_preview, merge_input_policy, HISTORY_HINT
@@ -1585,7 +1585,7 @@ class ChatService:
         frozen_connections: list[ConnectionSnapshot] | None = None,
         frozen_configuration: SetupConfiguration | None = None,
     ) -> str | None:
-        defer_optional, pinned, required_tools, required_connections = self._preflight_optional_tool_policy(
+        defer_optional, pinned, required_tools, required_connections, input_policy = self._preflight_optional_tool_policy(
             conversation, frozen_configuration)
         self._preflight_agent_browser_control(conversation)
         deployment = self._preflight_conversation_deployment(conversation)
@@ -1593,7 +1593,8 @@ class ChatService:
             conversation, frozen_connections, defer_optional=defer_optional,
             pinned=pinned, required_connections=required_connections)
         _presented = self._preflight_presented_tools(
-            conversation, request, connection_snapshots, defer_optional=defer_optional, pinned=pinned)
+            conversation, request, connection_snapshots, defer_optional=defer_optional, pinned=pinned,
+            input_policy=input_policy, required_tools=required_tools)
         self._preflight_frozen_setup_requirements(conversation, frozen_configuration, _presented)
         self._preflight_browser_and_desktop(
             conversation, _presented, defer_optional=defer_optional, pinned=pinned, required_tools=required_tools)
@@ -1602,7 +1603,7 @@ class ChatService:
 
     def _preflight_optional_tool_policy(
         self, conversation: ChatConversation, frozen_configuration: SetupConfiguration | None,
-    ) -> tuple[bool, set[str] | None, set[str], set[str]]:
+    ) -> tuple[bool, set[str] | None, set[str], set[str], AgentInputPolicy | None]:
         policy = frozen_configuration.input_policy if frozen_configuration is not None else conversation.input_policy
         defer_optional = policy is not None and policy.tool_loading == "when_needed"
         pinned = set(policy.pinned_tools) if defer_optional else None
@@ -1611,7 +1612,7 @@ class ChatService:
             # Required setup is checked before an Always-included skill body;
             # this does not pin its tool schemas or expand selected capabilities.
             pinned.update(required_tools)
-        return defer_optional, pinned, required_tools, required_connections
+        return defer_optional, pinned, required_tools, required_connections, policy
 
     def _preflight_agent_browser_control(self, conversation: ChatConversation) -> None:
         browser = getattr(self.harness, "browser", None)
@@ -1663,6 +1664,8 @@ class ChatService:
         *,
         defer_optional: bool,
         pinned: set[str] | None,
+        input_policy: AgentInputPolicy | None = None,
+        required_tools: set[str] | None = None,
     ) -> list[str]:
         capture_routes = (
             any(name in {"browser_take_screenshot", "desktop_screenshot"} for name in (conversation.presented_tools or []))
@@ -1689,12 +1692,16 @@ class ChatService:
                 status_code=400,
                 details={"tools": denied},
             )
-        if filesystem_blocked and (not defer_optional or pinned.intersection(filesystem_blocked)):
+        # Unpinned project reads are omitted in both loading modes. Pinned reads,
+        # skill-required reads and file mutations still require a project.
+        optional_reads = unpinned_project_reads(filesystem_blocked, input_policy) - set(required_tools or ())
+        blocking_files = [name for name in filesystem_blocked if name not in optional_reads]
+        if blocking_files and (not defer_optional or pinned.intersection(blocking_files)):
             raise ChatError(
                 "Filesystem tools require a bound project folder.",
                 code="filesystem_requires_project",
                 status_code=400,
-                details={"tools": filesystem_blocked},
+                details={"tools": blocking_files},
             )
         if shell_blocked and (not defer_optional or pinned.intersection(shell_blocked)):
             raise ChatError(

@@ -10,7 +10,7 @@ from workbench_backend.agents.retrieval import (
 )
 from workbench_backend.agents.schemas import ToolMode
 from workbench_backend.agents.tool_disclosure import FIND_TOOLS, always_skill_dependencies
-from workbench_backend.agents.tools import KNOWLEDGE_ROUTE_READ_TOOLS, resolve_presented_tools
+from workbench_backend.agents.tools import KNOWLEDGE_ROUTE_READ_TOOLS, resolve_presented_tools, unpinned_project_reads
 from workbench_backend.assets.schemas import RetainedAssetListFilters, RetainedAssetOrigin
 from workbench_backend.errors import HarnessError
 
@@ -114,12 +114,15 @@ def apply_filesystem_shell_gates(input_policy, presented, filesystem_blocked, sh
         # project instead of looking unselected.
         presented.extend(name for name in shell_blocked if name not in presented)
         return presented
-    if filesystem_blocked and not progressive:
+    # Eager loading uses the same project-read rule. Unpinned ls/read_file/glob/grep
+    # are omitted until a project is bound. Mutations stay required.
+    required_files = [name for name in filesystem_blocked if name not in unpinned_project_reads(filesystem_blocked, input_policy)]
+    if required_files:
         raise HarnessError(
             "Filesystem tools require a bound project folder.",
             code="filesystem_requires_project",
             status_code=400,
-            details={"tools": filesystem_blocked},
+            details={"tools": required_files},
         )
     if shell_blocked and not progressive:
         raise HarnessError(

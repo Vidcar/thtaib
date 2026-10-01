@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,7 +14,10 @@ from langchain_core.messages import AIMessage
 
 from workbench_backend.agents.execution_policy import PLAN_TOOLS
 from workbench_backend.agents.harness import HarnessService
+from workbench_backend.agents.tool_disclosure import always_skill_dependencies
+from workbench_backend.errors import HarnessError
 from workbench_backend.agents.schemas import AgentRun
+from workbench_backend.agents.setup_schemas import AgentInputPolicy
 from workbench_backend.agents.tool_results import OwnedToolResults, continuation_notice, result_reader_tool
 from workbench_backend.agents.tools import OPT_IN_TOOL_NAMES, catalogue_projection, standard_context_key
 from workbench_backend.app import create_app
@@ -165,53 +169,106 @@ class ResearcherTemplateTests(AuditHarnessTests):
         config = {**template["configuration"], **configuration}
         return self._save(template["name"], config)
 
-    def test_projectless_document_research_without_a_skill_or_project_tools(self) -> None:
-        setup = self._save_template()
-        self.assertEqual(setup["configuration"]["skill_entry_ids"], [])
+    def _policy(self, loading: str, **extra: Any) -> dict:
+        policy = {**self._template()["configuration"]["input_policy"], "tool_loading": loading, **extra}
+        return policy
+
+    def _read_attachment(self, setup: dict, receipt: str, *, task: str) -> dict:
         chat = self._chat(agent_setup_id=setup["id"], work_mode="plan")
         asset = RetainedAssetService(self.app.state.app_store).retain_upload(RetainedUploadRequest(
             session_id=chat["id"], filename="source.md", content_type="text/markdown",
-            content_base64=base64.b64encode(b"DOC_RECEIPT_77").decode()))
+            content_base64=base64.b64encode(receipt.encode()).decode()))
         self.scripted = ScriptedChatModel([
             AIMessage(content="", tool_calls=[{"name": "read_attachment", "args": {"asset_id": asset.id}, "id": "read-doc"}]),
             AIMessage(content="Cited the document."),
         ])
-        started = self.client.post(f"/v1/chat/conversations/{chat['id']}/start", json={"task": "Read the attached source.", "attachment_ids": [asset.id]})
+        started = self.client.post(f"/v1/chat/conversations/{chat['id']}/start", json={"task": task, "attachment_ids": [asset.id]})
         self.assertEqual(started.status_code, 200, started.text)
         finished = wait_for_chat(self.client, chat["id"])
         run = finished["current_run"]
         self.assertEqual(run["status"], "completed", run.get("error"))
-        presented = set(run["presented_tools"])
-        self.assertIn("read_attachment", presented)
-        self.assertIn("read_tool_result", presented)
-        self.assertFalse(presented & {"ls", "glob", "grep", "execute", "delete"})
-        diagnostic = self.client.get(f"/v1/agent-runs/{finished['current_run_id']}", params={"view": "diagnostic"})
-        self.assertIn("DOC_RECEIPT_77", str(diagnostic.json()))
+        self.assertIn(receipt, str(self.client.get(f"/v1/agent-runs/{finished['current_run_id']}", params={"view": "diagnostic"}).json()))
+        return run
+
+    def test_projectless_document_research_without_a_skill_or_project_tools(self) -> None:
+        saved_tools = self._template()["configuration"]["presented_tools"]
+        self.assertTrue({"ls", "read_file", "glob", "grep", "read_attachment", "read_tool_result"} <= set(saved_tools))
+        for loading in ("when_needed", "always"):
+            with self.subTest(loading=loading):
+                setup = self._save_template(input_policy=self._policy(loading))
+                self.assertEqual(setup["configuration"]["skill_entry_ids"], [])
+                self.assertEqual(setup["configuration"]["presented_tools"], saved_tools)
+                reloaded = self.client.get(f"/v1/agent-setups/{setup['id']}").json()
+                self.assertEqual(reloaded["configuration"]["presented_tools"], saved_tools)
+                self.assertEqual(reloaded["configuration"]["input_policy"]["tool_loading"], loading)
+                presented = set(self._read_attachment(setup, "DOC_RECEIPT_77", task="Read the attached source.")["presented_tools"])
+                self.assertIn("read_attachment", presented)
+                self.assertIn("read_tool_result", presented)
+                self.assertFalse(presented & {"ls", "read_file", "glob", "grep", "execute", "delete"})
+
+    def _assert_offered_reader_is_virtual(self, model: ScriptedChatModel) -> None:
+        rendered: list[str] = []
+        names: list[str | None] = []
+        for tool in model.bound_tools:
+            if isinstance(tool, dict):
+                function = tool.get("function") if isinstance(tool.get("function"), dict) else tool
+                names.append(function.get("name"))
+                rendered.append(json.dumps(tool))
+                continue
+            names.append(getattr(tool, "name", None))
+            schema = getattr(tool, "args_schema", None)
+            if isinstance(schema, dict):
+                body = schema
+            elif schema is not None and hasattr(schema, "model_json_schema"):
+                body = schema.model_json_schema()
+            else:
+                body = {}
+            rendered.append(json.dumps({
+                "name": getattr(tool, "name", ""),
+                "description": getattr(tool, "description", ""),
+                "schema": body,
+            }))
+        self.assertIn("read_file", names, rendered)
+        self.assertNotIn("glob", names)
+        self.assertNotIn("grep", names)
+        text = "\n".join(rendered)
+        self.assertNotIn("Project-relative", text)
+        self.assertNotIn("/ is the project root", text)
+        self.assertIn("/skills/", text)
+        self.assertIn("is not a project root", text)
 
     def test_installed_research_skill_does_not_add_project_filesystem(self) -> None:
         installed = self.client.post("/v1/knowledge/skills/bundled/evidence-research/install", json={})
         self.assertEqual(installed.status_code, 200, installed.text)
-        setup = self._save_template()
-        self.assertEqual(setup["configuration"]["skill_entry_ids"], [installed.json()["id"]])
-        chat = self._chat(agent_setup_id=setup["id"])
-        asset = RetainedAssetService(self.app.state.app_store).retain_upload(RetainedUploadRequest(
-            session_id=chat["id"], filename="source.md", content_type="text/markdown",
-            content_base64=base64.b64encode(b"SKILL_RECEIPT_77").decode()))
-        self.scripted = ScriptedChatModel([
-            AIMessage(content="", tool_calls=[{"name": "read_attachment", "args": {"asset_id": asset.id}, "id": "read-doc"}]),
-            AIMessage(content="Cited the skilled document."),
-        ])
-        started = self.client.post(f"/v1/chat/conversations/{chat['id']}/start", json={
-            "task": "Read the attached source with the research skill.", "attachment_ids": [asset.id]})
-        self.assertEqual(started.status_code, 200, started.text)
-        finished = wait_for_chat(self.client, chat["id"])
-        admitted = finished["current_run"]
-        self.assertEqual(admitted["status"], "completed", admitted.get("error"))
-        self.assertIn("read_attachment", admitted["presented_tools"])
-        self.assertIn("read_tool_result", admitted["presented_tools"])
-        self.assertFalse(set(admitted["presented_tools"]) & {"glob", "grep", "execute", "delete"})
-        self.assertIn("SKILL_RECEIPT_77", str(self.client.get(
-            f"/v1/agent-runs/{finished['current_run_id']}", params={"view": "diagnostic"}).json()))
+        for loading in ("when_needed", "always"):
+            with self.subTest(loading=loading):
+                setup = self._save_template(input_policy=self._policy(loading))
+                self.assertEqual(setup["configuration"]["skill_entry_ids"], [installed.json()["id"]])
+                self.assertIn("glob", setup["configuration"]["presented_tools"])
+                admitted = self._read_attachment(setup, "SKILL_RECEIPT_77", task="Read the attached source with the research skill.")
+                presented = set(admitted["presented_tools"])
+                self.assertIn("read_attachment", presented)
+                self.assertIn("read_tool_result", presented)
+                self.assertTrue({"ls", "read_file"} <= presented)
+                self.assertFalse(presented & {"glob", "grep", "execute", "delete"})
+                self._assert_offered_reader_is_virtual(self.scripted)
+                chat = self._chat(agent_setup_id=setup["id"], work_mode="plan")
+                self.scripted = ScriptedChatModel([
+                    AIMessage(content="", tool_calls=[{"name": "read_file", "args": {"file_path": "/src/secret.txt"}, "id": "project-read"}]),
+                    AIMessage(content="", tool_calls=[{"name": "read_file", "args": {"file_path": "/skills/evidence-research/SKILL.md"}, "id": "skill-read"}]),
+                    AIMessage(content="Reviewed the skill."),
+                ])
+                started = self.client.post(
+                    f"/v1/chat/conversations/{chat['id']}/start",
+                    json={"task": "Read the skill, not a project file."},
+                )
+                self.assertEqual(started.status_code, 200, started.text)
+                finished = wait_for_chat(self.client, chat["id"])
+                self.assertEqual(finished["current_run"]["status"], "completed", finished["current_run"].get("error"))
+                diagnostic = str(self.client.get(
+                    f"/v1/agent-runs/{finished['current_run_id']}", params={"view": "diagnostic"}).json())
+                self.assertIn("the file was not written", diagnostic)
+                self.assertIn("Choose an applicable selected source route", diagnostic)
 
     def test_plan_public_web_comes_only_from_the_selected_builtin_connection(self) -> None:
         created = self.client.post("/v1/connections", json={"name": "Public pages", "kind": "public_web", "transport": "builtin"})
@@ -232,14 +289,96 @@ class ResearcherTemplateTests(AuditHarnessTests):
         off_setup = self._save_template(connection_ids=[connection_id], presented_tools=[])
         off = self._finish(self._chat(agent_setup_id=off_setup["id"], work_mode="plan"), task="Tools are off.")
         self.assertEqual(off["presented_tools"], [])
+        always = self._save_template(connection_ids=[connection_id], input_policy=self._policy("always"))
+        always_run = self._finish(self._chat(agent_setup_id=always["id"], work_mode="plan"), task="Find a public source.")
+        always_presented = set(always_run["presented_tools"])
+        self.assertTrue(expected <= always_presented)
+        self.assertFalse(always_presented & {"glob", "grep", "ls", "execute", "delete"})
 
     def test_project_bound_research_keeps_project_reads(self) -> None:
-        setup = self._save_template()
-        run = self._finish(self._chat(agent_setup_id=setup["id"], project_path=str(self.project), work_mode="plan"))
-        presented = set(run["presented_tools"])
-        self.assertTrue({"ls", "read_file", "glob", "grep", "read_tool_result"} <= presented)
-        self.assertNotIn("execute", presented)
-        self.assertNotIn("delete", presented)
+        for loading in ("when_needed", "always"):
+            with self.subTest(loading=loading):
+                setup = self._save_template(input_policy=self._policy(loading))
+                run = self._finish(self._chat(agent_setup_id=setup["id"], project_path=str(self.project), work_mode="plan"))
+                presented = set(run["presented_tools"])
+                self.assertTrue({"ls", "read_file", "glob", "grep", "read_tool_result"} <= presented)
+                self.assertNotIn("execute", presented)
+                self.assertNotIn("delete", presented)
+
+    def test_pinned_reads_and_eager_mutation_or_shell_still_require_a_project(self) -> None:
+        pinned = self._save_template(input_policy=self._policy("always", pinned_tools=["read_attachment", "read_tool_result", "glob"]))
+        self.assertIn("glob", pinned["configuration"]["presented_tools"])
+        chat = self._chat(agent_setup_id=pinned["id"], work_mode="plan")
+        blocked = self.client.post(f"/v1/chat/conversations/{chat['id']}/start", json={"task": "Search the project."})
+        self.assertEqual(blocked.status_code, 400, blocked.text)
+        self.assertEqual(blocked.json()["code"], "filesystem_requires_project")
+        self.assertIn("glob", blocked.json()["tools"])
+        mutation = self._save("Eager write", {"presented_tools": ["write_file"], "input_policy": {"tool_loading": "always"}})
+        write_chat = self._chat(agent_setup_id=mutation["id"])
+        write = self.client.post(f"/v1/chat/conversations/{write_chat['id']}/start", json={"task": "Write."})
+        self.assertEqual(write.status_code, 400, write.text)
+        self.assertEqual(write.json()["code"], "filesystem_requires_project")
+        shell = self._save("Eager shell", {"presented_tools": ["execute"], "input_policy": {"tool_loading": "always"}})
+        shell_chat = self._chat(agent_setup_id=shell["id"])
+        command = self.client.post(f"/v1/chat/conversations/{shell_chat['id']}/start", json={"task": "Run."})
+        self.assertEqual(command.status_code, 400, command.text)
+        self.assertEqual(command.json()["code"], "shell_requires_project")
+
+    def test_framework_reader_does_not_satisfy_a_required_project_read(self) -> None:
+        run = SimpleNamespace(
+            presented_tools=["echo"], framework_read_paths=["/large_tool_results/", "/conversation_history/"],
+            work_mode="work", project_path=None, connection_snapshots=[],
+            input_policy=AgentInputPolicy(tool_loading="always"))
+        skill = SimpleNamespace(kind="skill", mode="always", required_tools=["read_file"],
+            required_connections=[], requires_project=False)
+        with self.assertRaises(HarnessError) as blocked:
+            always_skill_dependencies(run, SimpleNamespace(references=[skill]))
+        self.assertEqual(blocked.exception.code, "skill_selection_required")
+        satisfied = SimpleNamespace(
+            presented_tools=["read_file"], framework_read_paths=[], work_mode="work",
+            project_path=str(self.project), connection_snapshots=[],
+            input_policy=AgentInputPolicy(tool_loading="always"))
+        self.assertEqual(always_skill_dependencies(satisfied, SimpleNamespace(references=[skill])), ({"read_file"}, set()))
+
+    def test_skill_required_project_read_is_not_satisfied_by_the_framework_reader(self) -> None:
+        created = self.client.post("/v1/knowledge/entries", json={
+            "scope": "user", "kind": "skill", "display_name": "Needs project search",
+            "content": "---\nname: needs-project-search\ndescription: Search project files.\nrequired-tools:\n  - glob\n---\nSearch the project.\n",
+            "provenance": {"actor": "human", "note": "fixture"},
+        })
+        self.assertEqual(created.status_code, 200, created.text)
+        skill = created.json()
+        reader = self.client.post("/v1/knowledge/entries", json={
+            "scope": "user", "kind": "skill", "display_name": "Needs a file reader",
+            "content": "---\nname: needs-file-reader\ndescription: Read selected files.\nrequired-tools:\n  - read_file\n---\nRead a file.\n",
+            "provenance": {"actor": "human", "note": "fixture"},
+        })
+        self.assertEqual(reader.status_code, 200, reader.text)
+        for loading in ("when_needed", "always"):
+            with self.subTest(loading=loading, selection="framework-only"):
+                setup = self._save("Framework is not a project read", {
+                    "presented_tools": ["echo"],
+                    "skill_entry_ids": [reader.json()["id"]],
+                    "input_policy": {"tool_loading": loading, "pinned_tools": [], "reference_loading": {reader.json()["id"]: "always"}},
+                })
+                self.assertEqual(setup["configuration"]["presented_tools"], ["echo"])
+                created_chat = self.client.post("/v1/chat/conversations", json={
+                    "deployment_id": self.deployment_id, "approval_mode": "full_access", "agent_setup_id": setup["id"]})
+                self.assertEqual(created_chat.status_code, 409, created_chat.text)
+                self.assertEqual(created_chat.json()["code"], "skill_selection_required")
+                self.assertIn("read_file", created_chat.json()["error"])
+            with self.subTest(loading=loading, selection="required-glob"):
+                selected = self._save("Required search still needs a project", {
+                    "presented_tools": ["glob"],
+                    "skill_entry_ids": [skill["id"]],
+                    "input_policy": {"tool_loading": loading, "reference_loading": {skill["id"]: "always"}},
+                })
+                self.assertIn("glob", selected["configuration"]["presented_tools"])
+                selected_chat = self.client.post("/v1/chat/conversations", json={
+                    "deployment_id": self.deployment_id, "approval_mode": "full_access", "agent_setup_id": selected["id"]})
+                self.assertEqual(selected_chat.status_code, 409, selected_chat.text)
+                self.assertEqual(selected_chat.json()["code"], "skill_selection_required")
+                self.assertIn("glob", selected_chat.json()["error"])
 
 
 class RetainedReaderTemplateTests(AuditHarnessTests):
@@ -308,11 +447,84 @@ class RetainedReaderTemplateTests(AuditHarnessTests):
             self.assertIn("LATE_MARKER", str(result))
             self.assertNotIn("execute", template["configuration"]["presented_tools"] if template_id == "browser-validator" else [])
 
+    def _owner_from(self, run: dict) -> AgentRun:
+        policy = run.get("input_policy")
+        return AgentRun(
+            id=run["id"], deployment_id=self.deployment_id, task=run.get("task") or "Look this up.",
+            thread_id=run["thread_id"], parent_run_id=run.get("parent_run_id"),
+            presented_tools=list(run["presented_tools"]), enabled_tools=list(run.get("enabled_tools") or run["presented_tools"]),
+            framework_read_paths=list(run.get("framework_read_paths") or []),
+            work_mode=run.get("work_mode") or "work",
+            input_policy=AgentInputPolicy.model_validate(policy) if policy else None,
+            created_at=utc_now(), updated_at=utc_now())
+
+    def test_browser_only_setup_reads_retained_text_with_the_framework_reader(self) -> None:
+        setup = self._save("Browser only", {
+            "presented_tools": ["browser_snapshot"],
+            "input_policy": {"tool_loading": "when_needed", "pinned_tools": []},
+        })
+        self.assertEqual(setup["configuration"]["presented_tools"], ["browser_snapshot"])
+        chat = self._chat(agent_setup_id=setup["id"], work_mode="work")
+        first = self._finish(chat, task="Look at the page later.")
+        self.assertIn("browser_snapshot", first["presented_tools"])
+        self.assertNotIn("read_file", first["presented_tools"])
+        self.assertNotIn("read_tool_result", first["presented_tools"])
+        self.assertEqual(first["framework_read_paths"], ["/large_tool_results/", "/conversation_history/"])
+        owner = self._owner_from(first)
+        notice = continuation_notice(owner)
+        self.assertIn("framework-only line reader", notice)
+        self.assertIn("/large_tool_results/", notice)
+        self.assertIn("cannot search inside one long line", notice)
+        self.assertIn("not authorized", notice)
+        self.assertNotIn("no accepted reader", notice)
+        retained = OwnedToolResults(self.app.state.manager.paths, owner).retain(
+            "LATE_MARKER\nshort retained page text", source={"kind": "fixture", "acquisition_complete": True})
+        self.assertEqual(retained["notice"], notice)
+        read = self._read(chat, retained["path"], tool="read_file", args={"file_path": retained["path"]})
+        self.assertNotIn("read_file", read["run"]["presented_tools"])
+        self.assertIn("LATE_MARKER", str(read["diagnostic"]))
+        later = SimpleNamespace(
+            id="later-selection", thread_id=first["thread_id"], parent_run_id=None, presented_tools=[],
+            framework_read_paths=["/large_tool_results/", "/conversation_history/"], work_mode="work",
+            input_policy=None, connection_snapshots=[])
+        revisited = OwnedToolResults(self.app.state.manager.paths, later).read(retained["path"], query="LATE_MARKER")
+        self.assertIn("framework-only line reader", revisited["result"]["notice"])
+        self.assertIn("no accepted reader", revisited["reader_notice"])
+        self.assertNotEqual(revisited["result"]["notice"], revisited["reader_notice"])
+
+        excluded = self._save("Browser reader excluded", {
+            "presented_tools": ["browser_snapshot"],
+            "input_policy": {"tool_loading": "when_needed", "pinned_tools": [], "excluded_sources": ["tool:read_file"]},
+        })
+        excluded_chat = self._chat(agent_setup_id=excluded["id"], work_mode="work")
+        excluded_run = self._finish(excluded_chat, task="Do not read framework files.")
+        excluded_notice = continuation_notice(self._owner_from(excluded_run))
+        self.assertNotIn("framework-only line reader", excluded_notice)
+        self.assertIn("no accepted reader", excluded_notice)
+        blocked = self._read(excluded_chat, "/large_tool_results/owned/" + "a" * 32 + ".txt", tool="read_file",
+            args={"file_path": "/large_tool_results/owned/" + "a" * 32 + ".txt"})
+        outcome = blocked["diagnostic"]["tool_outcomes"]["read-kept"]
+        self.assertEqual(outcome["outcome"], "failed")
+        self.assertIn("excluded", outcome["result"])
+        self.assertNotIn("LATE_MARKER", str(outcome["result"]))
+
     def test_exclusion_tools_off_owner_mismatch_and_read_file_fallback(self) -> None:
+        self.assertIn("read_file can also read it", continuation_notice(SimpleNamespace()))
+        self.assertNotIn("framework-only", continuation_notice(SimpleNamespace()))
         self.assertIn("no accepted reader", continuation_notice(SimpleNamespace(presented_tools=[])))
         self.assertIn("Discovery cannot", continuation_notice(SimpleNamespace(presented_tools=[])))
+        tools_off = SimpleNamespace(presented_tools=[], framework_read_paths=["/large_tool_results/"], work_mode="work")
+        self.assertIn("no accepted reader", continuation_notice(tools_off))
+        self.assertNotIn("framework-only", continuation_notice(tools_off))
         self.assertIn("cannot search inside one long line", continuation_notice(SimpleNamespace(presented_tools=["read_file"])))
         self.assertIn("read_tool_result", continuation_notice(SimpleNamespace(presented_tools=["read_tool_result", "read_file"])))
+        selected_reader = SimpleNamespace(
+            presented_tools=["browser_snapshot", "read_tool_result"],
+            framework_read_paths=["/large_tool_results/", "/conversation_history/"], work_mode="work")
+        selected_notice = continuation_notice(selected_reader)
+        self.assertIn("read_tool_result", selected_notice)
+        self.assertNotIn("no accepted reader", selected_notice)
+        self.assertNotIn("framework-only", selected_notice)
 
         excluded = self._save("No reader", {"presented_tools": ["read_file", "read_tool_result"], "input_policy": {"excluded_sources": ["tool:read_tool_result"]}})
         chat = self._chat(agent_setup_id=excluded["id"], project_path=str(self.project))

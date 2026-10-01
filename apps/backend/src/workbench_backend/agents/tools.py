@@ -18,6 +18,9 @@ from workbench_backend.agents.tool_catalogue import model_description
 
 VISIBILITY_TOOL_NAMES = ("echo", "time_now")
 FILESYSTEM_TOOL_NAMES = ("ls", "read_file", "write_file", "edit_file", "glob", "grep", "delete", "apply_edits")
+# Project discovery stays in a saved selection and is admitted only with a project.
+# The definition-loading preference does not make an unpinned read required.
+OPTIONAL_PROJECT_READS = frozenset({"ls", "read_file", "glob", "grep"})
 KNOWLEDGE_ROUTE_READ_TOOLS = ("ls", "read_file")
 SHELL_TOOL_NAMES = ("execute", "execute_skill_script", "start_command", "command_status", "stop_command")
 PLANNING_TOOL_NAMES = ("write_todos",)
@@ -178,6 +181,19 @@ def enabled_for_project(
     if attachment_available:
         enabled.extend(ATTACHMENT_TOOL_NAMES)
     return enabled
+
+
+def unpinned_project_reads(names, input_policy) -> set[str]:
+    """Project reads that stay optional under either definition-loading preference.
+
+    A missing policy keeps the historical strict check. Pinned names stay required.
+    Callers still treat skill-required names, mutations and shell as required.
+    """
+
+    if input_policy is None:
+        return set()
+    pinned = set(getattr(input_policy, "pinned_tools", ()) or ())
+    return {name for name in names if name in OPTIONAL_PROJECT_READS and name not in pinned}
 
 
 def resolve_presented_tools(
