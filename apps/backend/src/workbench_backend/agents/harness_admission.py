@@ -609,8 +609,8 @@ def _persist_admitted_run(service, admitted):
 
     # Native summarization must see reducible history before the final
     # outbound guard decides whether the current request can fit.
-    # The project reservation precedes both model loading and this snapshot.
-    starting_snapshot_id = service._capture_starting_snapshot(request, project_path)
+    # A run does not copy the project before it starts.
+    starting_snapshot_id = None
     now = utc_now()
     run = AgentRun(
         id=new_id("agent"),

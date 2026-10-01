@@ -1,12 +1,10 @@
-"""Explicit Chat branches using public checkpoint and existing snapshot APIs."""
+"""Explicit Chat branches using the public checkpoint API."""
 
 from __future__ import annotations
 
 import copy
 
 import shutil
-
-from pathlib import Path
 
 from typing import Any, Literal
 
@@ -21,10 +19,6 @@ from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
 from workbench_backend.errors import ChatError
 
 from workbench_backend.inference.ids import new_id, utc_now
-
-from workbench_backend.lab.schemas import LabWorkspace, SnapshotManifest
-
-from workbench_backend.lab.snapshot import restore_snapshot_tree
 
 from workbench_backend.state.checkpointer import open_sqlite_checkpointer, delete_checkpoint_thread, checkpoint_history
 
@@ -83,16 +77,12 @@ class ChatBranches:
             )
             source_run = run if request.mode in {"continue", "regenerate"} or index == 0 else chat.harness.get_run_operational(conversation.run_ids[index - 1])
             branch = self._branch_from_turn(conversation, run, request, source_checkpoint, index)
-            workspace, destination, manifest = self._branch_workspace(chat, branch, run, request)
             try:
                 if source_checkpoint:
                     clone_terminal_checkpoint(
                         chat.manager.paths.checkpoints_db, source_run.thread_id, source_checkpoint, branch.thread_id,
                         include_tip_writes=request.mode != "regenerate",
                     )
-                if workspace is not None:
-                    restore_snapshot_tree(Path(manifest.tree_path), destination, included_files=manifest.included_files)
-                    chat.lab.store.put_workspace(workspace)
                 saved = chat.store.put(branch)
                 self._inherit_branch_assets(chat, conversation, branch)
                 if request.mode == "regenerate":
@@ -100,7 +90,7 @@ class ChatBranches:
             except Exception:
                 accepted = self._find_existing_regeneration_run(run.id, branch.thread_id) if request.mode == "regenerate" else None
                 if accepted is None:
-                    self._discard_branch(chat, branch, workspace, destination)
+                    self._discard_branch(chat, branch, None, None)
                 raise
             return chat._view(saved)
 
@@ -141,19 +131,6 @@ class ChatBranches:
                 "per_request_overrides": dict(run.effective_setup.bags.per_request.requested) if run.effective_setup else {}},
             updated_at=utc_now())
         return branch
-
-    def _branch_workspace(self, chat, branch, run, request):
-        if not run.project_path:
-            return None, None, None
-        snapshot_id = run.final_snapshot_id if request.mode in {"continue", "regenerate"} else run.starting_snapshot_id
-        manifest = SnapshotManifest.model_validate_json((chat.manager.paths.snapshots / snapshot_id / "manifest.json").read_text(encoding="utf-8"))
-        workspace_id = new_id("ws")
-        destination = chat.manager.paths.workspaces / workspace_id
-        workspace = LabWorkspace(id=workspace_id, display_name=branch.title, path=str(destination),
-            origin="restored", parent_workspace_id=run.workspace_id, snapshot_id=manifest.id, created_at=utc_now())
-        branch.workspace_id = workspace.id
-        branch.project_path = workspace.path
-        return workspace, destination, manifest
 
     def _inherit_branch_assets(self, chat, conversation, branch) -> None:
         # A branch inherits only documents available to its selected
@@ -269,11 +246,6 @@ class ChatBranches:
         if mode != "continue" and conversation.run_ids.index(run.id) > 0 and not self._checkpoint(conversation, run, mode):
             return "The checkpoint before this task is unavailable."
 
-        if run.project_path:
-            snapshot = run.final_snapshot_id if mode == "continue" else run.starting_snapshot_id
-            if not snapshot or not (self.chat.manager.paths.snapshots / snapshot / "manifest.json").is_file():
-                return "This turn has no matching retained project snapshot."
-
         return None
 
     def _regenerate_reason(self, conversation, run) -> str | None:
@@ -281,11 +253,6 @@ class ChatBranches:
             return "Only a completed assistant reply can be considered for answer regeneration."
         if not run.checkpoint_ids:
             return "This reply has no retained checkpoints to inspect for a pre-answer boundary."
-        if run.project_path and (
-            not run.final_snapshot_id
-            or not (self.chat.manager.paths.snapshots / run.final_snapshot_id / "manifest.json").is_file()
-        ):
-            return "This turn has no matching retained project snapshot."
         try:
             checkpoint_id = find_pre_answer_checkpoint(
                 self.chat.manager.paths.checkpoints_db,
