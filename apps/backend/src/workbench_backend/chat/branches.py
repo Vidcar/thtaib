@@ -75,21 +75,22 @@ class ChatBranches:
                 if request.mode == "regenerate"
                 else self._checkpoint(conversation, run, request.mode)
             )
-            if request.mode == "regenerate":
-                saved = self._accept_regeneration(chat, conversation, conversation, run, source_checkpoint)
-                return chat._view(saved)
-            source_run = run if request.mode == "continue" or index == 0 else chat.harness.get_run_operational(conversation.run_ids[index - 1])
+            source_run = run if request.mode in {"continue", "regenerate"} or index == 0 else chat.harness.get_run_operational(conversation.run_ids[index - 1])
             branch = self._branch_from_turn(conversation, run, request, source_checkpoint, index)
             try:
                 if source_checkpoint:
                     clone_terminal_checkpoint(
                         chat.manager.paths.checkpoints_db, source_run.thread_id, source_checkpoint, branch.thread_id,
-                        include_tip_writes=True,
+                        include_tip_writes=request.mode != "regenerate",
                     )
                 saved = chat.store.put(branch)
                 self._inherit_branch_assets(chat, conversation, branch)
+                if request.mode == "regenerate":
+                    saved = self._accept_regeneration(chat, saved, branch, run, source_checkpoint)
             except Exception:
-                self._discard_branch(chat, branch, None, None)
+                accepted = self._find_existing_regeneration_run(run.id, branch.thread_id) if request.mode == "regenerate" else None
+                if accepted is None:
+                    self._discard_branch(chat, branch, None, None)
                 raise
             return chat._view(saved)
 

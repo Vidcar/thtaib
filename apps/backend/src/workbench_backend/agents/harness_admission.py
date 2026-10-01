@@ -683,12 +683,8 @@ def _persist_admitted_run(service, admitted):
         run.input_message_id = input_message_id
     # Agent-run / Lab own one thread per run. Chat follow-ups pass the
     # conversation thread so LangGraph resumes the same checkpointer state.
-    # A resume forks from the requested checkpoint. The thread head can be a
-    # later sibling, so it is not the anchor for checkpoints this run writes.
     run.thread_id = request.thread_id or run.id
-    if request.resume_checkpoint_id:
-        run.pre_run_checkpoint_id = request.resume_checkpoint_id
-    elif request.thread_id:
+    if request.thread_id:
         try:
             run.pre_run_checkpoint_id = checkpoint_head_id(service.manager.paths.checkpoints_db, run.thread_id)
         except CheckpointReadError as exc:
