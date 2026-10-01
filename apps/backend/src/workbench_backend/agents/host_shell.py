@@ -24,6 +24,7 @@ from typing import Any
 
 from deepagents import FilesystemPermission
 from langchain.agents.middleware import ToolCallRequest
+from langchain_core.tools import ToolException
 
 from workbench_backend.agents.harness_backend import host_shell_requested
 from workbench_backend.agents.memory_skills import knowledge_routes_selected
@@ -40,6 +41,7 @@ from workbench_backend.agents.schemas import (
 from pydantic import ValidationError
 
 SKILLS_WRITE_DENY_PATHS = ("/skills/**",)
+OWNED_RESULT_WRITE_DENY_PATHS = ("/large_tool_results/owned/**",)
 
 # These names belong to Workbench-owned adapters. Target inspection and
 # screenshot capture are read operations once the browser/window scope is
@@ -52,6 +54,8 @@ VISUAL_ACTION_TOOLS = frozenset({
     "browser_drag", "browser_file_upload", "browser_mouse_move_xy", "browser_mouse_click_xy",
     "browser_mouse_drag_xy", "browser_mouse_down", "browser_mouse_up", "browser_mouse_wheel",
     "desktop_send_keys", "start_preview", "stop_preview",
+    "browser_emulate_media", "start_command", "stop_command",
+    "apply_edits", "execute_skill_script", "list_connection_resources", "read_connection_resource",
 })
 
 HOST_SHELL_NOTE = (
@@ -80,7 +84,8 @@ def filesystem_permissions_for_run(run: AgentRun) -> list[FilesystemPermission] 
     )
     if recorded and not knowledge_routes:
         return None
-    rules: list[FilesystemPermission] = []
+    rules: list[FilesystemPermission] = [FilesystemPermission(
+        operations=["write"], paths=list(OWNED_RESULT_WRITE_DENY_PATHS), mode="deny")]
     if run.skill_version_refs:
         rules.append(
             FilesystemPermission(
@@ -137,7 +142,7 @@ def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | 
             "allowed_decisions": ["respond", "reject"],
             "description": "Answer this task question. Answering does not grant access to any other tool.",
         }
-    for name in ("write_file", "edit_file"):
+    for name in ("write_file", "edit_file", "delete"):
         if name not in run.presented_tools:
             continue
         def file_approval(request: ToolCallRequest, name=name) -> bool:
@@ -147,7 +152,8 @@ def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | 
                 return False
             return not saved_permission(name, args, request)
         result[name] = {"allowed_decisions": ["approve", "reject"], "when": file_approval,
-            "description": "Change a file in this project. Review the exact source and destination before allowing it."}
+            "description": "Permanently delete this exact project target and its subtree. There is no recycle bin or automatic undo. Review the target before allowing deletion."
+                if name == "delete" else "Change a file in this project. Review the exact source and destination before allowing it."}
     for name in VISUAL_ACTION_TOOLS.intersection(run.presented_tools):
         def visual_approval(request: ToolCallRequest, name=name) -> bool:
             call = request.tool_call
@@ -156,13 +162,15 @@ def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | 
             # actions can open, select, or close tabs.
             if name == "browser_tabs" and isinstance(args, dict) and args.get("action") == "list":
                 return False
+            if name == "apply_edits" and isinstance(args, dict) and args.get("base_sha256") is None:
+                return False
             if auto_external:
                 return False
             return not saved_permission(name, args, request)
         result[name] = {
             "allowed_decisions": ["approve", "reject"],
             "when": visual_approval,
-            "description": "Use the authorized browser, window, or project preview with these exact inputs.",
+            "description": "Use this selected operation with these exact inputs. Approval does not enable other operations.",
         }
     for connection in run.connection_snapshots:
         if connection.kind != "mcp":
@@ -180,6 +188,20 @@ def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | 
             result[name] = {"allowed_decisions": ["approve", "reject"], "when": external_approval,
                 "description": f"Use {selected.remote_name} through {connection.name}. Review the exact inputs before allowing this external action."}
     return result or None
+
+
+def recheck_saved_authorization(run: AgentRun, name: str, args: dict, call_id: str, grants: Any) -> None:
+    """Recheck the particular saved grant immediately before an effect.
+
+    A newly added or broader grant must not substitute for the one recorded
+    by the native approval predicate. Explicit once approvals have no saved
+    grant and continue through their own native resume authority.
+    """
+    if run.tool_authorizations.get(call_id) != "saved_permission":
+        return
+    snapshot = run.tool_authorization_grants.get(call_id)
+    if snapshot is None or grants is None or grants.matching_grant_by_id(run, name, args, snapshot.id) is None:
+        raise ToolException("The saved permission used for this action was revoked or no longer matches. No action ran. Retry to request current approval.")
 
 
 def approval_mode_instructions(mode: str, *, compact: bool = False) -> str:

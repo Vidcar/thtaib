@@ -20,6 +20,7 @@ import httpx
 from langchain_core.language_models.model_profile import ModelProfile
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
+from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from pydantic import PrivateAttr
 
@@ -232,14 +233,29 @@ class WorkbenchChatOpenAI(ChatOpenAI):
 
     def project_context_payload(self, messages: list[Any], *, tools: list[Any] | None = None,
                                 response_format: Any = None) -> dict[str, Any]:
-        from langchain_core.utils.function_calling import convert_to_openai_tool
+        from workbench_backend.agents.tool_schema import model_tool_schema
         settings: dict[str, Any] = {}
         if tools:
-            settings["tools"] = [convert_to_openai_tool(tool) for tool in tools]
+            settings["tools"] = [model_tool_schema(tool) for tool in tools]
         if response_format is not None:
             settings["response_format"] = response_format
         payload = super()._get_request_payload(messages, **settings)
         return self._project_payload(payload, self._convert_input(messages).to_messages())
+
+    def bind_tools(self, tools, **kwargs):
+        # Supply native schemas in already formatted function dictionaries so
+        # LangChain does not recursively strip literal keys named title.
+        from workbench_backend.agents.tool_schema import model_tool_schema
+        strict = kwargs.get("strict")
+        if kwargs.get("response_format") and strict is not False and not self.use_responses_api:
+            strict = True
+        # Custom native tools must reach the pinned adapter unchanged: its
+        # converter does not recognize an already formatted custom dictionary
+        # and would convert it a second time into a function tool.
+        return super().bind_tools([
+            tool if isinstance(tool, BaseTool) and (tool.metadata or {}).get("type") == "custom_tool"
+            else model_tool_schema(tool, strict=strict) for tool in tools
+        ], **kwargs)
 
     def set_input_token_counting(self, client: httpx.Client, endpoint: str, *, native: bool) -> None:
         """Configure the existing native count endpoint without owning another client."""

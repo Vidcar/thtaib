@@ -254,6 +254,12 @@ class ConnectionService:
                     raise HarnessError(f"{record.name} could not connect or list tools. Test the connection in Settings.", code="connection_transport_failed", status_code=409) from None
                 if discovered != snapshot.tools:
                     raise HarnessError(f"The tools from {record.name} changed. Test the connection and start a new message.", code="connection_schema_changed", status_code=409)
+                if record.kind == "public_web":
+                    from workbench_backend.agents.tool_results import OwnedToolResults
+                    from workbench_backend.connections.public_web import public_web_tools
+                    # Runtime retention is bound only after the frozen schema
+                    # check. Cold discovery/inspection acquires no page data.
+                    actual = public_web_tools(result_retainer=OwnedToolResults(self.application.paths, run).retain)
                 # One session can serve many model tool calls. Serialize MCP dispatch
                 # through acknowledgement so an in-flight call is never mistaken
                 # for a recovered unknown outcome, and elicitation belongs to one call.

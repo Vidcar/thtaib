@@ -1846,6 +1846,73 @@
         "title": "AgentSetupDuplicateRequest",
         "type": "object"
       },
+      "AgentSetupTemplate": {
+        "properties": {
+          "configuration": {
+            "$ref": "#/components/schemas/SetupConfiguration"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "recommended_skills": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Recommended Skills",
+            "type": "array"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "suggested_chat_access": {
+            "default": "ask",
+            "enum": [
+              "ask",
+              "full_access"
+            ],
+            "title": "Suggested Chat Access",
+            "type": "string"
+          },
+          "suggested_chat_mode": {
+            "default": "work",
+            "enum": [
+              "work",
+              "plan"
+            ],
+            "title": "Suggested Chat Mode",
+            "type": "string"
+          },
+          "suggested_desktop_access": {
+            "default": "off",
+            "enum": [
+              "off",
+              "selected"
+            ],
+            "title": "Suggested Desktop Access",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "role",
+          "configuration",
+          "recommended_skills",
+          "note"
+        ],
+        "title": "AgentSetupTemplate",
+        "type": "object"
+      },
       "AgentSetupUpdateRequest": {
         "additionalProperties": false,
         "properties": {
@@ -3103,6 +3170,96 @@
         ],
         "title": "BundleSourceKind",
         "type": "string"
+      },
+      "BundledSkill": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "required_connections": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Connections",
+            "type": "array"
+          },
+          "required_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Tools",
+            "type": "array"
+          },
+          "requires_project": {
+            "title": "Requires Project",
+            "type": "boolean"
+          },
+          "resources": {
+            "items": {
+              "$ref": "#/components/schemas/SkillResource"
+            },
+            "title": "Resources",
+            "type": "array"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "content",
+          "sha256",
+          "resources",
+          "required_tools",
+          "required_connections",
+          "requires_project"
+        ],
+        "title": "BundledSkill",
+        "type": "object"
+      },
+      "BundledSkillInstallRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "scope": {
+            "default": "user",
+            "enum": [
+              "user",
+              "agent",
+              "project"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "scope_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Id"
+          }
+        },
+        "title": "BundledSkillInstallRequest",
+        "type": "object"
       },
       "CapabilityEvidence": {
         "properties": {
@@ -11746,7 +11903,7 @@
         "type": "string"
       },
       "MatchedPermissionGrant": {
-        "description": "The exact grant used for a tool call, retained even after revocation.",
+        "description": "The particular grant used for a tool call, retained even after revocation.",
         "properties": {
           "action": {
             "title": "Action",
@@ -11765,9 +11922,47 @@
             "title": "Display Name",
             "type": "string"
           },
+          "excluded_paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Excluded Paths",
+            "type": "array"
+          },
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "kind": {
+            "default": "exact_action",
+            "enum": [
+              "exact_action",
+              "project_files"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "operations": {
+            "items": {
+              "enum": [
+                "write_file",
+                "edit_file"
+              ],
+              "type": "string"
+            },
+            "title": "Operations",
+            "type": "array"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
           },
           "project_path": {
             "anyOf": [
@@ -16484,6 +16679,11 @@
             "title": "Execution Available",
             "type": "boolean"
           },
+          "execution_supported": {
+            "default": false,
+            "title": "Execution Supported",
+            "type": "boolean"
+          },
           "path": {
             "title": "Path",
             "type": "string"
@@ -17182,6 +17382,7 @@
         "properties": {
           "answer_type": {
             "default": "text",
+            "description": "Requested task-answer type; answering never grants tool access.",
             "enum": [
               "text",
               "choice",
@@ -17192,6 +17393,7 @@
             "type": "string"
           },
           "choices": {
+            "description": "Required nonempty options when answer_type is choice.",
             "items": {
               "type": "string"
             },
@@ -17807,6 +18009,28 @@
           }
         },
         "summary": "Decide Agent Run Interrupt"
+      }
+    },
+    "/v1/agent-setup-templates": {
+      "get": {
+        "operationId": "agent_setup_templates_v1_agent_setup_templates_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AgentSetupTemplate"
+                  },
+                  "title": "Response Agent Setup Templates V1 Agent Setup Templates Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Agent Setup Templates"
       }
     },
     "/v1/agent-setups": {
@@ -22961,6 +23185,77 @@
           }
         },
         "summary": "Knowledge Scopes"
+      }
+    },
+    "/v1/knowledge/skills/bundled": {
+      "get": {
+        "operationId": "list_bundled_skills_v1_knowledge_skills_bundled_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BundledSkill"
+                  },
+                  "title": "Response List Bundled Skills V1 Knowledge Skills Bundled Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Bundled Skills"
+      }
+    },
+    "/v1/knowledge/skills/bundled/{skill_id}/install": {
+      "post": {
+        "operationId": "add_bundled_skill_v1_knowledge_skills_bundled__skill_id__install_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "skill_id",
+            "required": true,
+            "schema": {
+              "title": "Skill Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BundledSkillInstallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeEntryView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Bundled Skill"
       }
     },
     "/v1/knowledge/skills/import": {

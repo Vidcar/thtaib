@@ -20,6 +20,18 @@ from workbench_backend.state.dependencies import dependency_preview_for_app
 
 router = APIRouter(prefix="/v1/knowledge")
 
+from workbench_backend.knowledge.bundled_skills import BundledSkill, BundledSkillInstallRequest, bundled_skills, install_bundled_skill
+
+
+@router.get("/skills/bundled", response_model=list[BundledSkill])
+def list_bundled_skills():
+    return bundled_skills()
+
+
+@router.post("/skills/bundled/{skill_id}/install", response_model=KnowledgeEntryView)
+def add_bundled_skill(request: Request, skill_id: str, body: BundledSkillInstallRequest):
+    return install_bundled_skill(get_knowledge(request), skill_id, body)
+
 
 @router.post("/skills/preview", response_model=SkillPreview)
 def preview_skill(request: Request, body: SkillPreviewRequest):

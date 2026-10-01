@@ -158,6 +158,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/agent-setup-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Agent Setup Templates */
+        get: operations["agent_setup_templates_v1_agent_setup_templates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/agent-setups": {
         parameters: {
             query?: never;
@@ -1879,6 +1896,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/knowledge/skills/bundled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Bundled Skills */
+        get: operations["list_bundled_skills_v1_knowledge_skills_bundled_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/knowledge/skills/bundled/{skill_id}/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add Bundled Skill */
+        post: operations["add_bundled_skill_v1_knowledge_skills_bundled__skill_id__install_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/knowledge/skills/import": {
         parameters: {
             query?: never;
@@ -3213,6 +3264,38 @@ export interface components {
             /** Name */
             name?: string | null;
         };
+        /** AgentSetupTemplate */
+        AgentSetupTemplate: {
+            configuration: components["schemas"]["SetupConfiguration"];
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Note */
+            note: string;
+            /** Recommended Skills */
+            recommended_skills: string[];
+            /** Role */
+            role: string;
+            /**
+             * Suggested Chat Access
+             * @default ask
+             * @enum {string}
+             */
+            suggested_chat_access: "ask" | "full_access";
+            /**
+             * Suggested Chat Mode
+             * @default work
+             * @enum {string}
+             */
+            suggested_chat_mode: "work" | "plan";
+            /**
+             * Suggested Desktop Access
+             * @default off
+             * @enum {string}
+             */
+            suggested_desktop_access: "off" | "selected";
+        };
         /** AgentSetupUpdateRequest */
         AgentSetupUpdateRequest: {
             /** Base Version */
@@ -3607,6 +3690,38 @@ export interface components {
          * @enum {string}
          */
         BundleSourceKind: "huggingface" | "local";
+        /** BundledSkill */
+        BundledSkill: {
+            /** Content */
+            content: string;
+            /** Description */
+            description: string;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Required Connections */
+            required_connections: string[];
+            /** Required Tools */
+            required_tools: string[];
+            /** Requires Project */
+            requires_project: boolean;
+            /** Resources */
+            resources: components["schemas"]["SkillResource"][];
+            /** Sha256 */
+            sha256: string;
+        };
+        /** BundledSkillInstallRequest */
+        BundledSkillInstallRequest: {
+            /**
+             * Scope
+             * @default user
+             * @enum {string}
+             */
+            scope: "user" | "agent" | "project";
+            /** Scope Id */
+            scope_id?: string | null;
+        };
         /** CapabilityEvidence */
         CapabilityEvidence: {
             /**
@@ -6475,7 +6590,7 @@ export interface components {
         ManagementScope: "managed" | "connected";
         /**
          * MatchedPermissionGrant
-         * @description The exact grant used for a tool call, retained even after revocation.
+         * @description The particular grant used for a tool call, retained even after revocation.
          */
         MatchedPermissionGrant: {
             /** Action */
@@ -6488,8 +6603,20 @@ export interface components {
             created_at: string;
             /** Display Name */
             display_name: string;
+            /** Excluded Paths */
+            excluded_paths?: string[];
             /** Id */
             id: string;
+            /**
+             * Kind
+             * @default exact_action
+             * @enum {string}
+             */
+            kind: "exact_action" | "project_files";
+            /** Operations */
+            operations?: ("write_file" | "edit_file")[];
+            /** Project Id */
+            project_id?: string | null;
             /** Project Path */
             project_path?: string | null;
             /**
@@ -8203,6 +8330,11 @@ export interface components {
              * @constant
              */
             execution_available: false;
+            /**
+             * Execution Supported
+             * @default false
+             */
+            execution_supported: boolean;
             /** Path */
             path: string;
             /** Sha256 */
@@ -8496,11 +8628,15 @@ export interface components {
         UserQuestion: {
             /**
              * Answer Type
+             * @description Requested task-answer type; answering never grants tool access.
              * @default text
              * @enum {string}
              */
             answer_type: "text" | "choice" | "file" | "folder";
-            /** Choices */
+            /**
+             * Choices
+             * @description Required nonempty options when answer_type is choice.
+             */
             choices?: string[];
             /** Prompt */
             prompt: string;
@@ -8549,6 +8685,7 @@ export type SchemaAgentRun = components['schemas']['AgentRun'];
 export type SchemaAgentRunOperational = components['schemas']['AgentRunOperational'];
 export type SchemaAgentSetupCreateRequest = components['schemas']['AgentSetupCreateRequest'];
 export type SchemaAgentSetupDuplicateRequest = components['schemas']['AgentSetupDuplicateRequest'];
+export type SchemaAgentSetupTemplate = components['schemas']['AgentSetupTemplate'];
 export type SchemaAgentSetupUpdateRequest = components['schemas']['AgentSetupUpdateRequest'];
 export type SchemaAgentSetupVersion = components['schemas']['AgentSetupVersion'];
 export type SchemaAgentSetupView = components['schemas']['AgentSetupView'];
@@ -8571,6 +8708,8 @@ export type SchemaBundleFile = components['schemas']['BundleFile'];
 export type SchemaBundleProjectors = components['schemas']['BundleProjectors'];
 export type SchemaBundleSource = components['schemas']['BundleSource'];
 export type SchemaBundleSourceKind = components['schemas']['BundleSourceKind'];
+export type SchemaBundledSkill = components['schemas']['BundledSkill'];
+export type SchemaBundledSkillInstallRequest = components['schemas']['BundledSkillInstallRequest'];
 export type SchemaCapabilityEvidence = components['schemas']['CapabilityEvidence'];
 export type SchemaCapabilityProbeReport = components['schemas']['CapabilityProbeReport'];
 export type SchemaCapabilityProbeRequest = components['schemas']['CapabilityProbeRequest'];
@@ -9122,6 +9261,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    agent_setup_templates_v1_agent_setup_templates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSetupTemplate"][];
                 };
             };
         };
@@ -12944,6 +13103,61 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["KnowledgeScopeOption"][];
+                };
+            };
+        };
+    };
+    list_bundled_skills_v1_knowledge_skills_bundled_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BundledSkill"][];
+                };
+            };
+        };
+    };
+    add_bundled_skill_v1_knowledge_skills_bundled__skill_id__install_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                skill_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BundledSkillInstallRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeEntryView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

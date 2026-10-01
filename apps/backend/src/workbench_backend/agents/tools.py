@@ -3,7 +3,8 @@
 Visibility tools are application-owned. Filesystem tools are Deep Agents
 built-ins, bound to project storage. ``execute`` is the host-shell tool from
 ``LocalShellBackend`` and is enabled only when a project (cwd) is bound.
-``task`` and ``delete`` stay out of the enabled catalogue.
+Named ``task`` remains selected-helper-only; destructive file extensions and
+host operations require explicit selection.
 """
 
 from __future__ import annotations
@@ -12,16 +13,21 @@ from functools import lru_cache
 from typing import Any, Literal
 from langchain_core.tools import BaseTool, ToolException, tool
 from workbench_backend.inference.ids import utc_now
+from workbench_backend.agents.schemas import UserQuestion
+from workbench_backend.agents.tool_catalogue import model_description
 
 VISIBILITY_TOOL_NAMES = ("echo", "time_now")
-FILESYSTEM_TOOL_NAMES = ("ls", "read_file", "write_file", "edit_file", "glob", "grep")
+FILESYSTEM_TOOL_NAMES = ("ls", "read_file", "write_file", "edit_file", "glob", "grep", "delete", "apply_edits")
 KNOWLEDGE_ROUTE_READ_TOOLS = ("ls", "read_file")
-SHELL_TOOL_NAMES = ("execute",)
+SHELL_TOOL_NAMES = ("execute", "execute_skill_script", "start_command", "command_status", "stop_command")
 PLANNING_TOOL_NAMES = ("write_todos",)
 INPUT_TOOL_NAMES = ("ask_user",)
 MEMORY_TOOL_NAMES = ("propose_memory",)
 ATTACHMENT_TOOL_NAMES = ("read_attachment",)
-ENABLED_TOOL_NAMES = (*VISIBILITY_TOOL_NAMES, *FILESYSTEM_TOOL_NAMES, *SHELL_TOOL_NAMES, *PLANNING_TOOL_NAMES, *INPUT_TOOL_NAMES, *MEMORY_TOOL_NAMES, *ATTACHMENT_TOOL_NAMES)
+RESULT_TOOL_NAMES = ("read_tool_result",)
+RESOURCE_TOOL_NAMES = ("list_connection_resources", "read_connection_resource")
+OPT_IN_TOOL_NAMES = frozenset(("echo", *SHELL_TOOL_NAMES, "delete", "apply_edits", *RESOURCE_TOOL_NAMES))
+ENABLED_TOOL_NAMES = (*VISIBILITY_TOOL_NAMES, *FILESYSTEM_TOOL_NAMES, *SHELL_TOOL_NAMES, *PLANNING_TOOL_NAMES, *INPUT_TOOL_NAMES, *MEMORY_TOOL_NAMES, *ATTACHMENT_TOOL_NAMES, *RESULT_TOOL_NAMES, *RESOURCE_TOOL_NAMES)
 
 
 @lru_cache(maxsize=1)
@@ -39,24 +45,23 @@ def _optional_visual_tool_groups() -> tuple[tuple[str, ...], tuple[str, ...], tu
     return BROWSER_TOOL_NAMES, PREVIEW_TOOL_NAMES, DESKTOP_TOOL_NAMES
 
 
-@tool("echo")
+@tool("echo", description=model_description("echo", ""))
 def echo_tool(text: str) -> str:
     """Echo the given text back unchanged. Harmless visibility tool."""
 
     return text
 
 
-@tool("time_now")
+@tool("time_now", description=model_description("time_now", ""))
 def time_now_tool() -> str:
     """Return the current UTC time as ISO-8601. Harmless clock tool."""
 
     return utc_now()
 
 
-@tool("ask_user")
-def ask_user_tool(prompt: str, answer_type: str = "text", choices: list[str] | None = None) -> str:
+@tool("ask_user", args_schema=UserQuestion, description=model_description("ask_user", ""))
+def ask_user_tool(prompt: str, answer_type: Literal["text", "choice", "file", "folder"] = "text", choices: list[str] | None = None) -> str:
     """Ask the user for text, a choice, or an explicitly selected file/folder. Never request credentials. A path answer does not grant tools new access."""
-    from workbench_backend.agents.schemas import UserQuestion
     question = UserQuestion(prompt=prompt, answer_type=answer_type, choices=choices or [])
     if question.answer_type == "choice" and not question.choices:
         return "A choice question requires choices."
@@ -78,58 +83,9 @@ def enabled_catalogue() -> list[str]:
 
 
 def tool_descriptions() -> list[dict[str, str]]:
-    descriptions = {
-        "echo": ("Echo", "Return supplied text unchanged for a connection check."),
-        "time_now": ("Current time", "Read the current time."),
-        "ls": ("List files", "List files in the authorized project or selected knowledge."),
-        "read_file": ("Read files", "Read authorized text files with line ranges. Images are included only after screenshot reading has passed for this model."),
-        "write_file": ("Create files", "Write a project file; Access determines approval."),
-        "edit_file": ("Edit files", "Replace matching text in an authorized project file."),
-        "glob": ("Find files", "Find file paths matching a pattern."),
-        "grep": ("Search files", "Find matching text inside authorized files."),
-        "execute": ("Run commands", "Execute a command on this computer in the bound project folder."),
-        "write_todos": ("Checklist", "Maintain the visible task checklist."),
-        "ask_user": ("Ask questions", "Pause for your answer to a task question."),
-        "propose_memory": ("Suggest memory", "Propose a durable memory change for separate review."),
-        "read_attachment": ("Read attachments", "Read the retained files attached to this conversation."),
-        "browser_navigate": ("Open page", "Open a page and return its address, title, headings and links."),
-        "browser_navigate_back": ("Go back", "Go back in the isolated test browser."),
-        "browser_tabs": ("Browser tabs", "List, create, close, or select test browser tabs."),
-        "browser_snapshot": ("Page structure", "Read the page text to cite: headings, links and visible lines."),
-        "browser_find": ("Find on page", "Find one element on a large page without loading the whole page."),
-        "browser_click": ("Click on page", "Click an element in the test browser."),
-        "browser_hover": ("Hover on page", "Hover over an element in the test browser."),
-        "browser_press_key": ("Press browser key", "Send a key to the test browser."),
-        "browser_type": ("Type on page", "Type into the test browser."),
-        "browser_select_option": ("Select page option", "Choose an option in a page control."),
-        "browser_fill_form": ("Fill page form", "Fill controls in a page form."),
-        "browser_resize": ("Resize browser", "Set the test browser viewport size."),
-        "browser_console_messages": ("Page console", "Inspect page console messages."),
-        "browser_network_requests": ("Page requests", "Inspect requests made by the page."),
-        "browser_take_screenshot": ("Page screenshot", "Show the page. Read headlines from the page structure, not from the picture."),
-        "browser_wait_for": ("Wait for page", "Wait for a page element or condition."),
-        "browser_handle_dialog": ("Handle page dialog", "Respond to a page dialog."),
-        "browser_drag": ("Drag on page", "Drag between page controls."),
-        "browser_file_upload": ("Upload browser files", "Upload permitted project files or selected conversation attachments."),
-        "browser_mouse_move_xy": ("Move pointer", "Move within the actual browser viewport; requires screenshot reading."),
-        "browser_mouse_click_xy": ("Click coordinates", "Click viewport coordinates; requires screenshot reading."),
-        "browser_mouse_drag_xy": ("Drag coordinates", "Drag within the viewport; requires screenshot reading."),
-        "browser_mouse_down": ("Hold browser button", "Hold a mouse button in the browser; requires screenshot reading."),
-        "browser_mouse_up": ("Release browser button", "Release a mouse button in the browser; requires screenshot reading."),
-        "browser_mouse_wheel": ("Scroll browser", "Scroll the current page."),
-        "start_preview": ("Start project preview", "Start an owned local server for the bound project."),
-        "stop_preview": ("Stop project preview", "Stop the owned local project server."),
-        "preview_status": ("Project preview status", "Read the preview state, localhost health and recent bounded server log."),
-        "desktop_list_windows": ("List windows", "List windows allowed by this conversation's desktop access."),
-        "desktop_inspect": ("Inspect window", "Inspect accessible controls in the selected window."),
-        "desktop_search": ("Find window control", "Find an accessible control in the selected window."),
-        "desktop_wait": ("Wait for window", "Wait for a window or control state."),
-        "desktop_invoke": ("Invoke window control", "Invoke an accessible control in the selected window."),
-        "desktop_set_value": ("Set window value", "Set the value of an accessible control."),
-        "desktop_send_keys": ("Send window keys", "Send keys to the selected window."),
-        "desktop_screenshot": ("Window screenshot", "Save a screenshot of an authorized window or element."),
-    }
-    return [{"id": name, "name": descriptions[name][0], "description": descriptions[name][1]} for name in enabled_catalogue()]
+    from workbench_backend.agents.tool_catalogue import TOOL_PRESENTATIONS
+    return [{"id": name, "name": TOOL_PRESENTATIONS[name].label,
+        "description": TOOL_PRESENTATIONS[name].description} for name in enabled_catalogue()]
 
 
 def enabled_for_project(
@@ -148,7 +104,7 @@ def enabled_for_project(
 
     if project_bound:
         return [name for name in ENABLED_TOOL_NAMES if name not in ATTACHMENT_TOOL_NAMES or attachment_available]
-    enabled = [*VISIBILITY_TOOL_NAMES, *PLANNING_TOOL_NAMES, *INPUT_TOOL_NAMES, *MEMORY_TOOL_NAMES]
+    enabled = [*VISIBILITY_TOOL_NAMES, *PLANNING_TOOL_NAMES, *INPUT_TOOL_NAMES, *MEMORY_TOOL_NAMES, *RESULT_TOOL_NAMES, *RESOURCE_TOOL_NAMES]
     if knowledge_routes or capture_routes:
         enabled.extend(KNOWLEDGE_ROUTE_READ_TOOLS)
     if attachment_available:
@@ -183,7 +139,7 @@ def resolve_presented_tools(
     if requested is None:
         # Project files are a useful default context. Host commands require
         # an explicit per-conversation capability choice from Chat.
-        return [name for name in enabled if name not in SHELL_TOOL_NAMES], [], [], []
+        return [name for name in enabled if name not in OPT_IN_TOOL_NAMES], [], [], []
     presented: list[str] = []
     denied: list[str] = []
     filesystem_blocked: list[str] = []

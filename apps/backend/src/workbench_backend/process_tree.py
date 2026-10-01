@@ -16,6 +16,37 @@ import psutil
 from workbench_backend.errors import HarnessError
 
 
+def stop_process_tree(process: subprocess.Popen, job: "WindowsJob | None" = None) -> bool:
+    """Confirm an owned process tree has settled without targeting a historical PID."""
+    if job is not None:
+        stopped = job.stop()
+        if process.poll() is None and not stopped:
+            process.terminate()
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            return False
+        return stopped
+    try:
+        parent = psutil.Process(process.pid)
+        descendants = parent.children(recursive=True)
+        for child in reversed(descendants):
+            child.terminate()
+        parent.terminate()
+        _, alive = psutil.wait_procs([*descendants, parent], timeout=3)
+        for child in alive:
+            child.kill()
+        _, alive = psutil.wait_procs(alive, timeout=3)
+        if not alive:
+            process.wait(timeout=3)
+        return not alive
+    except psutil.NoSuchProcess:
+        process.poll()
+        return True
+    except (psutil.AccessDenied, OSError):
+        return False
+
+
 class WindowsJob:
     """Own a Windows process tree even if its launcher exits first."""
 

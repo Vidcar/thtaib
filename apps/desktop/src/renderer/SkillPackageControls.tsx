@@ -8,7 +8,39 @@ import type { KnowledgeEntry } from "./types";
 import type { SchemaSkillResource, SchemaSkillResourceView } from "../generated/shared-contracts/openapi";
 
 type SkillResource = SchemaSkillResource;
-type ResourceView = SchemaSkillResourceView;
+type ResourceView = SchemaSkillResourceView & { execution_supported?: boolean };
+
+interface BundledSkill {
+  id: string; name: string; description: string; content: string; sha256: string;
+  resources: Array<{ path: string; sha256: string; size_bytes: number }>;
+  required_tools: string[]; required_connections: string[]; requires_project: boolean;
+}
+
+export function BundledRuntimeSkills({ onImported }: { onImported: (entry: KnowledgeEntry) => Promise<void> }) {
+  const [skills, setSkills] = useState<BundledSkill[]>([]);
+  const [skillId, setSkillId] = useState("");
+  const [scopes, setScopes] = useState<KnowledgeScopeOption[]>([]);
+  const [destination, setDestination] = useState("user:");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const pending = useRef(false);
+  useEffect(() => { let cancelled = false; void Promise.all([request<BundledSkill[]>("/v1/knowledge/skills/bundled"), knowledgeApi.scopes()]).then(([next, options]) => { if (!cancelled) { setSkills(next); setScopes(options); } }).catch(failure => { if (!cancelled) setError(errorMessage(failure)); }); return () => { cancelled = true; }; }, []);
+  const skill = skills.find(item => item.id === skillId);
+  function install() {
+    const scope = scopes.find(item => `${item.scope}:${item.scope_id ?? ""}` === destination);
+    if (pending.current || !skill || !scope) return;
+    pending.current = true; setBusy(true); setError("");
+    void request<KnowledgeEntry>(`/v1/knowledge/skills/bundled/${encodeURIComponent(skill.id)}/install`, { method: "POST", body: JSON.stringify({ scope: scope.scope, scope_id: scope.scope_id }) })
+      .then(onImported).catch(failure => setError(errorMessage(failure))).finally(() => { pending.current = false; setBusy(false); });
+  }
+  return <details className="card"><summary>Bundled runtime skills · {skills.length || "Loading"}</summary><div className="workspace-editor">
+    <p className="hint">Add a conditional workflow to Knowledge, then select it in an agent or chat. Installation grants no tools, access or automatic memory saving.</p>
+    <label>Workflow<select value={skillId} disabled={busy} onChange={event => setSkillId(event.target.value)}><option value="">Choose a skill</option>{skills.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+    {skill ? <><p>{skill.description}</p><p className="hint">{[skill.requires_project ? "Project required" : "", skill.required_tools.length ? `Required selected tools: ${skill.required_tools.join(", ")}` : "Use applicable selected sources"].filter(Boolean).join(" · ")}</p><details><summary>Review instructions and supporting files</summary><pre className="wrapped-text">{skill.content}</pre><ul>{skill.resources.map(resource => <li key={resource.path}>{resource.path} · {resource.size_bytes} bytes</li>)}</ul><p className="hint">Inert references under virtual /skills/ paths. These paths cannot be passed directly to a host command.</p></details></> : null}
+    <label>Use in<select disabled={busy} value={destination} onChange={event => setDestination(event.target.value)}>{scopes.filter(item => item.active).map(item => <option key={`${item.scope}:${item.scope_id ?? ""}`} value={`${item.scope}:${item.scope_id ?? ""}`}>{item.label}</option>)}</select></label>
+    <button type="button" onClick={install} disabled={busy || !skill}>{busy ? "Adding…" : "Add to Knowledge"}</button>{error ? <Notice tone="error">{error}</Notice> : null}
+  </div></details>;
+}
 
 export function SkillPackageImport({ entry, onImported }: { entry?: KnowledgeEntry; onImported: (entry: KnowledgeEntry) => Promise<void> }) {
   const [source, setSource] = useState("");
@@ -41,7 +73,7 @@ export function SkillResources({ versionId, resources = [] }: { versionId: strin
       .catch(failure => { if (!cancelled) setPreview({ ...owner, resource: null, error: errorMessage(failure), loading: false }); });
     return () => { cancelled = true; };
   }, [versionId, path]);
-  return <details><summary>Supporting files · {resources.length}</summary>{resources.length ? <div className="setup-selection-options">{resources.map(item => <button key={item.path} type="button" onClick={() => setSelection({ versionId, path: item.path })} aria-pressed={path === item.path}>{item.path} <span className="hint">{Math.ceil(item.size_bytes / 1024)} KB</span></button>)}</div> : <p className="hint">This version has no supporting files.</p>}{current?.loading ? <p role="status">Loading file…</p> : null}{current?.error ? <Notice tone="error">{current.error}</Notice> : null}{current?.resource ? <section><h4>{current.resource.path}</h4>{current.resource.binary ? <p className="hint">Binary file retained with the skill; text preview is unavailable.</p> : <pre className="wrapped-text">{current.resource.content}</pre>}<p className="hint">Read-only supporting content. Execution is unavailable.</p></section> : null}</details>;
+  return <details><summary>Supporting files · {resources.length}</summary>{resources.length ? <div className="setup-selection-options">{resources.map(item => <button key={item.path} type="button" onClick={() => setSelection({ versionId, path: item.path })} aria-pressed={path === item.path}>{item.path} <span className="hint">{Math.ceil(item.size_bytes / 1024)} KB</span></button>)}</div> : <p className="hint">This version has no supporting files.</p>}{current?.loading ? <p role="status">Loading file…</p> : null}{current?.error ? <Notice tone="error">{current.error}</Notice> : null}{current?.resource ? <section><h4>{current.resource.path}</h4>{current.resource.binary ? <p className="hint">Binary file retained with the skill; text preview is unavailable.</p> : <pre className="wrapped-text">{current.resource.content}</pre>}<p className="hint">{current.resource.execution_supported ? "Python skill scripts can run in a project Work chat with Run skill scripts and Run commands selected, subject to approval. Knowledge only previews this frozen resource; it never executes it." : "Read-only supporting content. Importing and reading a package never executes it."}</p></section> : null}</details>;
 }
 
 export function SkillResourceEditor({ versionId, resources = [], changes, onChange, disabled = false, onPendingChange }: { versionId?: string; resources?: SkillResource[]; changes: SkillResourceChange[]; onChange: (changes: SkillResourceChange[]) => void; disabled?: boolean; onPendingChange?: (pending: boolean) => void }) {

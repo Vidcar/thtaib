@@ -287,9 +287,9 @@ def _read_allowlisted_project_file(root: Path, raw: str) -> tuple[Document | Non
 
 
 class DocumentSearch(BaseModel):
-    query: str = Field(min_length=1, max_length=200)
-    cursor: str | None = Field(default=None, max_length=1024)
-    limit: int = Field(default=SEARCH_RESULT_K, ge=1, le=20)
+    query: str = Field(min_length=1, max_length=200, description="Without embeddings every literal query word must occur on the same line.")
+    cursor: str | None = Field(default=None, max_length=1024, description="Returned next_cursor for the same query and unchanged selected sources.")
+    limit: int = Field(default=SEARCH_RESULT_K, ge=1, le=20, description="Maximum number of evidence hits in this page.")
 
 
 def _fingerprint(documents: list[Document]) -> str:
@@ -411,7 +411,10 @@ def make_document_search_tool(
                 facts = {**doc.metadata, "path": path}
                 text = f"# Source: {doc.metadata.get('source', 'unknown')}\n\n{TREAT_AS_DATA}\n\nSource facts: {json.dumps(facts, ensure_ascii=False)}\n\n{doc.page_content}"
                 uploads.append((path, text.encode("utf-8")))
-                results.append(facts)
+                # Keep source coordinates and the complete retained chunk. The
+                # short inline excerpt lets the model triage without a reread.
+                results.append({**facts, "excerpt": doc.page_content[:600],
+                    "inline_excerpt_truncated": len(doc.page_content) > 600})
                 sources.append(f"{doc.metadata.get('source', 'unknown')}:{path}")
             if uploads:
                 responses = backend.upload_files(uploads)

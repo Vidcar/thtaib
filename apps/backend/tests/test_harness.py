@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import http.server
 import json
 import os
@@ -167,6 +168,7 @@ class HarnessApiTests(unittest.TestCase):
         payload = {
             "deployment_id": self.deployment_id,
             "task": "Echo the text harness-ok using the echo tool.",
+            "presented_tools": ["echo"],
             **extra,
         }
         response = self.client.post("/v1/agent-runs", json=payload)
@@ -460,7 +462,7 @@ class HarnessApiTests(unittest.TestCase):
             AIMessage(content="", tool_calls=[{"name": "write_todos", "args": {"todos": [{"content": "Check integration", "status": "in_progress"}]}, "id": "plan-1"}]),
             AIMessage(content="Planning recorded."),
         ])
-        started = self._start(input_policy={"tool_loading": "always"})
+        started = self._start(presented_tools=["write_todos"], input_policy={"tool_loading": "always"})
         body = wait_for_run(self.client, started["id"])
         self.assertEqual(body["status"], "completed", body.get("error"))
         self.assertIn("write_todos", body["model_requests"][0]["presented_tools"])
@@ -480,11 +482,20 @@ class HarnessApiTests(unittest.TestCase):
                 "edit_file",
                 "glob",
                 "grep",
+                "delete",
+                "apply_edits",
                 "execute",
+                "execute_skill_script",
+                "start_command",
+                "command_status",
+                "stop_command",
                 "write_todos",
                 "ask_user",
                 "propose_memory",
                 "read_attachment",
+                "read_tool_result",
+                "list_connection_resources",
+                "read_connection_resource",
             ],
         )
         self.assertTrue(set(ENABLED_TOOL_NAMES) < set(catalogue))
@@ -493,9 +504,9 @@ class HarnessApiTests(unittest.TestCase):
         self.assertIn("desktop_screenshot", catalogue)
         started = self._start(presented_tools=["echo"], input_policy={"tool_loading": "always"})
         body = wait_for_run(self.client, started["id"])
-        self.assertEqual(body["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory", "read_file"])
+        self.assertEqual(body["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory", "read_tool_result", "list_connection_resources", "read_connection_resource", "read_file"])
         self.assertEqual(body["presented_tools"], ["echo"])
-        self.assertEqual(body["model_requests"][0]["available_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory", "read_file"])
+        self.assertEqual(body["model_requests"][0]["available_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory", "read_tool_result", "list_connection_resources", "read_connection_resource", "read_file"])
         self.assertCountEqual(body["model_requests"][0]["presented_tools"], ["echo", "read_file"])
         self.assertEqual(body["framework_read_paths"], ["/large_tool_results/", "/conversation_history/"])
         project = self.root / "agt-005-project"
@@ -549,7 +560,7 @@ class HarnessApiTests(unittest.TestCase):
         self.assertEqual(with_file, ["read_attachment"])
         self.assertEqual(still_denied, [])
         defaults, denied, filesystem, shell = resolve_presented_tools(None, project_bound=True)
-        self.assertEqual(defaults, [name for name in ENABLED_TOOL_NAMES if name not in {"read_attachment", "execute"}])
+        self.assertEqual(defaults, ["time_now", "ls", "read_file", "write_file", "edit_file", "glob", "grep", "write_todos", "ask_user", "propose_memory", "read_tool_result"])
         self.assertEqual((denied, filesystem, shell), ([], [], []))
         visual, denied, filesystem, shell = resolve_presented_tools(
             ["browser_snapshot", "desktop_screenshot", "start_preview"], project_bound=True,
@@ -564,7 +575,7 @@ class HarnessApiTests(unittest.TestCase):
         from workbench_backend.agents.tools import ENABLED_TOOLS
         self.assertFalse(set(ENABLED_TOOLS) & {"ls", "read_file", "write_file", "edit_file", "glob", "grep", "delete", "task"})
 
-    def test_ordinary_chat_does_not_offer_task_or_recursive_delete(self) -> None:
+    def test_native_profile_supports_delete_while_ordinary_chat_requires_selection(self) -> None:
         from deepagents import create_deep_agent
         from deepagents.backends import FilesystemBackend
         from workbench_backend.agents.harness_profile import ensure_ordinary_chat_profile
@@ -603,13 +614,13 @@ class HarnessApiTests(unittest.TestCase):
         child_offers = [names for names in _RecordingModel.offered if "task" not in names]
         self.assertTrue(child_offers, "a compiled child should be offered tools without the task tool")
         for names in child_offers:
-            self.assertNotIn("delete", names)
+            self.assertIn("delete", names)
             self.assertNotIn("task", names)
             self.assertIn("read_file", names)
 
         _RecordingModel.offered.clear()
         self.scripted = _RecordingModel([AIMessage(content="ordinary chat")])
-        started = self._start(project_path=str(project), task="Say hello.")
+        started = self._start(project_path=str(project), task="Say hello.", presented_tools=None)
         body = wait_for_run(self.client, started["id"])
         self.assertEqual(body["status"], "completed", body.get("error"))
         self.assertTrue(_RecordingModel.offered)
@@ -620,6 +631,70 @@ class HarnessApiTests(unittest.TestCase):
         self.assertIn("read_file", offered)
         self.assertNotIn("delete_file", offered)
         self.assertNotIn("task", [item["name"] for item in body["tool_invocations"]])
+
+    def test_selected_native_delete_executes_and_plan_excludes_effectful_extensions(self) -> None:
+        project = self.root / "selected-delete"
+        project.mkdir()
+        disposable = project / "disposable.txt"
+        disposable.write_text("delete this isolated test file", encoding="utf-8")
+        _RecordingModel.offered.clear()
+        self.scripted = _RecordingModel([
+            AIMessage(content="", tool_calls=[{"name": "delete", "args": {"file_path": "/disposable.txt"}, "id": "delete-selected"}]),
+            AIMessage(content="Selected file removed."),
+        ])
+        started = self._start(task="Remove the selected test file.", project_path=str(project),
+            presented_tools=["delete"], approval_mode="full_access", input_policy={"tool_loading": "always"})
+        body = wait_for_run(self.client, started["id"])
+        self.assertEqual(body["status"], "completed", body.get("error"))
+        self.assertFalse(disposable.exists())
+        self.assertIn("delete", set().union(*_RecordingModel.offered))
+        self.assertEqual(body["tool_outcomes"]["delete-selected"]["outcome"], "succeeded")
+
+        _RecordingModel.offered.clear()
+        self.scripted = _RecordingModel([AIMessage(content="A plan without project changes.")])
+        effectful = ["delete", "apply_edits", "execute", "execute_skill_script", "start_command", "stop_command"]
+        planned = self._start(task="Plan the changes.", project_path=str(project), work_mode="plan",
+            presented_tools=effectful, approval_mode="full_access", input_policy={"tool_loading": "always"})
+        plan = wait_for_run(self.client, planned["id"])
+        self.assertEqual(plan["status"], "completed", plan.get("error"))
+        self.assertFalse(set(effectful).intersection(plan["presented_tools"]))
+        self.assertFalse(set(effectful).intersection(set().union(*_RecordingModel.offered)))
+        self.assertEqual(plan["tool_invocations"], [])
+
+    def test_compiled_native_and_structured_edits_cannot_compete_in_one_batch(self) -> None:
+        project = self.root / "competing-edits"
+        project.mkdir()
+        target = project / "note.txt"
+        original = b"first\n"
+        target.write_bytes(original)
+        digest = hashlib.sha256(original).hexdigest()
+        edits = [{"old_string": "first", "new_string": "structured", "replace_all": False}]
+        self.scripted = ScriptedChatModel([
+            AIMessage(content="", tool_calls=[
+                {"name": "write_file", "args": {"file_path": "/note.txt", "content": "native"}, "id": "native-conflict"},
+                {"name": "apply_edits", "args": {"file_path": "/note.txt", "edits": edits, "base_sha256": digest}, "id": "structured-conflict"},
+            ]),
+            AIMessage(content="Competing changes were rejected."),
+        ])
+        started = self._start(task="Check the shared mutation boundary.", project_path=str(project),
+            presented_tools=["write_file", "apply_edits"], approval_mode="full_access", input_policy={"tool_loading": "always"})
+        body = wait_for_run(self.client, started["id"])
+        self.assertEqual(body["status"], "completed", body.get("error"))
+        self.assertEqual(target.read_bytes(), original)
+        for call_id in ("native-conflict", "structured-conflict"):
+            self.assertEqual(body["tool_outcomes"][call_id]["outcome"], "failed")
+            self.assertIn("one tool-call batch", body["tool_outcomes"][call_id]["detail"])
+
+        self.scripted = ScriptedChatModel([
+            AIMessage(content="", tool_calls=[{"name": "apply_edits", "args": {"file_path": "/note.txt", "edits": edits, "base_sha256": digest}, "id": "structured-sequential"}]),
+            AIMessage(content="The independent edit was applied."),
+        ])
+        repaired = self._start(task="Apply the separate validated edit.", project_path=str(project),
+            presented_tools=["apply_edits"], approval_mode="full_access", input_policy={"tool_loading": "always"})
+        completed = wait_for_run(self.client, repaired["id"])
+        self.assertEqual(completed["status"], "completed", completed.get("error"))
+        self.assertEqual(completed["tool_outcomes"]["structured-sequential"]["outcome"], "succeeded")
+        self.assertEqual(target.read_text(encoding="utf-8"), "structured\n")
 
     def test_completion_evidence_is_not_judgement(self) -> None:
         started = self._start(

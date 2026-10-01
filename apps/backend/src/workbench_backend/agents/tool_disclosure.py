@@ -6,9 +6,12 @@ module only chooses which of those schemas a model step receives.
 from __future__ import annotations
 
 import copy
+import base64
+import hashlib
+import json
+import binascii
 import asyncio
 import re
-import sys
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
 
@@ -18,36 +21,30 @@ from langchain.agents.middleware.types import PrivateStateAttr
 from langchain.tools import ToolRuntime
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool, StructuredTool
+from pydantic import BaseModel, ConfigDict, Field
+from workbench_backend.agents.tool_catalogue import TOOL_PRESENTATIONS, CHECKLIST_DESCRIPTION, model_description_overrides, presentation
+from workbench_backend.agents.tool_schema import model_tool_schema
 from langgraph.types import Command, Overwrite
 from typing_extensions import NotRequired
 
-from workbench_backend.agents.execution_policy import PLAN_TOOLS
-from workbench_backend.agents.tools import tool_descriptions, tool_name
+from workbench_backend.agents.execution_policy import plan_tool_names
+from workbench_backend.agents.tools import tool_name
 from workbench_backend.errors import HarnessError
 
 FIND_TOOLS = "find_tools"
 DISCLOSED_TOOLS = "disclosed_tools"
 DISCOVERY_LIMIT = 5
-CHECKLIST_DESCRIPTION = (
-    "Replace the checklist for complex work with pending, in_progress or completed items. "
-    "Call once per response. Mark only finished work completed; deliver the requested result "
-    "in a final message after the last checklist update."
-)
-COMPACT_DESCRIPTIONS = {
-    "ls": "List a project directory. / is the bound project root; supplied framework paths use their own routes.",
-    "read_file": "Read an authorized project or supplied framework file with zero-based line pagination. Use supplied virtual paths for framework files. Images require verified model support.",
-    "write_file": "Replace a project file with UTF-8 content, creating parents. Use edit_file for targeted changes. Never mutate one file twice in a response.",
-    "edit_file": "Replace exact text in a project file after reading it. replace_all changes every match. Never mutate one file twice in a response.",
-    "glob": "Find project filenames by glob, optionally below path. * matches basenames; **/ searches recursively. Read truncation notices.",
-    "grep": "Search project text for a literal string, optionally within path and glob. This is not regular-expression matching. Read truncation notices.",
-    "execute": ("Run a cmd.exe command on this Windows host in the bound project. Use Windows syntax; invoke PowerShell explicitly when needed. " if sys.platform == "win32" else "Run a host shell command in the bound project. ")
-        + "Access controls approval. Execution is not sandboxed. Use start_preview for owned long-running previews.",
-    "write_todos": CHECKLIST_DESCRIPTION,
-    "ask_user": "Ask for a missing task choice, text or selected file/folder. Never request credentials. The answer grants no tool access.",
-    "read_attachment": "Read or search a selected conversation document by asset_id. Follow next_read for more results. Copy source_url exactly in citations.",
-    "search_knowledge": "Search this input's selected sources. Use cursor to continue; cite the returned source labels and paths.",
-    "read_reference": "Read the full original of a selected frozen reference by entry_id. Declared dependencies do not grant access.",
-}
+COMPACT_DESCRIPTIONS = model_description_overrides()
+
+
+class FindTools(BaseModel):
+    # Native ToolNode supplies ToolRuntime alongside this public input model.
+    # BaseTool preserves injected keys after validating the model fields.
+    model_config = ConfigDict(extra="ignore")
+    query: str = Field(min_length=1, max_length=1000, description="Task wording, alias, or exact tool/connection operation name.")
+    group: str | None = Field(default=None, max_length=120, description="Optional project, shell, browser, windows, preview, knowledge, planning, input, diagnostics, connections, or selected connection name/id.")
+    cursor: str | None = Field(default=None, max_length=2048, description="Returned next_cursor with the same query/group. Omit to prefer undisclosed matches.")
+
 
 
 def has_input_policy(run: Any) -> bool:
@@ -69,7 +66,7 @@ def authorized_tool_names(run: Any) -> set[str]:
     if policy is not None:
         allowed.difference_update(source.removeprefix("tool:") for source in policy.excluded_sources if source.startswith("tool:"))
     if run.work_mode == "plan":
-        allowed.intersection_update(PLAN_TOOLS)
+        allowed.intersection_update(plan_tool_names(run.connection_snapshots))
     return allowed
 
 
@@ -113,7 +110,7 @@ def discovery_context(run: Any) -> str:
     if not deferred_tools(run) or FIND_TOOLS not in authorized_tool_names(run):
         return ""
     connections = ", ".join(item.name for item in run.connection_snapshots)
-    text = "Find selected tools with find_tools(query). It loads at most five matches. Pinned tools are already available; discovery grants no access."
+    text = "Find selected tools with find_tools(query, group?, cursor?). Each batch loads at most five matches. Follow next_cursor with the same query/group; repeating without cursor prefers undisclosed matches. Pinned tools are already available; discovery grants no access."
     if connections:
         text += " Selected connections: " + connections + "."
     return text
@@ -151,7 +148,8 @@ def compact_tool(tool: Any, *, framework_read_paths: list[str] | None = None) ->
         return tool
     schema = tool.tool_call_schema
     schema = copy.deepcopy(schema if isinstance(schema, dict) else schema.model_json_schema())
-    _remove_schema_titles(schema)
+    # Schema annotations and literal data are retained. Removing every title
+    # key also removes a legitimate argument named title and corrupts defaults.
     properties = schema.get("properties", {})
     if tool.name in {"ls", "read_file", "write_file", "edit_file", "glob", "grep"}:
         for name in ("path", "file_path"):
@@ -170,42 +168,44 @@ def compact_tool(tool: Any, *, framework_read_paths: list[str] | None = None) ->
 
 def input_tool_schemas(names: list[str], *, extra_tools: Any = ()) -> dict[str, dict[str, Any]]:
     """Cold built-in schema inspection; never builds a graph or invokes a tool."""
-    from deepagents.middleware.filesystem import LsSchema, ReadFileSchema, WriteFileSchema, EditFileSchema, GlobSchema, GrepSchema, ExecuteSchema
+    from deepagents.middleware.filesystem import LsSchema, ReadFileSchema, WriteFileSchema, EditFileSchema, DeleteSchema, GlobSchema, GrepSchema, ExecuteSchema
     from langchain.agents.middleware.todo import WriteTodosInput
     from deepagents.middleware.subagents import TaskToolSchema
     from workbench_backend.assets.tools import AttachmentRead
     from workbench_backend.agents.retrieval import DocumentSearch
     from workbench_backend.agents.memory_skills import ReferenceRead
-    from langchain_core.utils.function_calling import convert_to_openai_tool
+    from workbench_backend.agents.tool_results import ResultReadInput
+    from workbench_backend.agents.file_operations import ApplyEditsInput
+    from workbench_backend.agents.skill_scripts import SkillScriptInput
+    from workbench_backend.connections.resources import ResourceListInput, ResourceReadInput
+    from workbench_backend.agents.managed_commands import ManagedCommandService, COMMAND_TOOL_NAMES
+    from types import SimpleNamespace
     from workbench_backend.agents.tools import ENABLED_TOOLS, memory_proposal_tool
     schema_types = {"ls": LsSchema, "read_file": ReadFileSchema, "write_file": WriteFileSchema,
-        "edit_file": EditFileSchema, "glob": GlobSchema, "grep": GrepSchema, "execute": ExecuteSchema,
+        "edit_file": EditFileSchema, "delete": DeleteSchema, "apply_edits": ApplyEditsInput,
+        "glob": GlobSchema, "grep": GrepSchema, "execute": ExecuteSchema, "execute_skill_script": SkillScriptInput,
         "write_todos": WriteTodosInput, "read_attachment": AttachmentRead, "search_knowledge": DocumentSearch,
-        "task": TaskToolSchema, "read_reference": ReferenceRead}
+        "task": TaskToolSchema, "read_reference": ReferenceRead, "read_tool_result": ResultReadInput,
+        "list_connection_resources": ResourceListInput, "read_connection_resource": ResourceReadInput}
     definitions = dict(ENABLED_TOOLS)
+    # The owning service constructs its typed tool definitions without starting
+    # a process. Inspection shares exactly the executor's argument schemas.
+    if set(names).intersection(COMMAND_TOOL_NAMES):
+        cold_run = SimpleNamespace(project_path="schema-only", work_mode="work", tool_mode=None, presented_tools=list(COMMAND_TOOL_NAMES))
+        definitions.update({tool.name: tool for tool in ManagedCommandService(None).tools_for_run(cold_run)})
     for name, schema in schema_types.items():
         definitions[name] = StructuredTool(name=name, description=COMPACT_DESCRIPTIONS.get(name,
             "Delegate a self-contained task to a selected helper. The helper shares this input's access bounds."), args_schema=schema)
     definitions["propose_memory"] = memory_proposal_tool("", None)
     definitions[FIND_TOOLS] = StructuredTool(name=FIND_TOOLS,
         description="Find selected tools for a task or tool name. Matching tools become available with their schemas. Discovery grants no access.",
-        args_schema={"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]})
+        args_schema=FindTools)
     for item in extra_tools:
         if isinstance(item, BaseTool):
             definitions[item.name] = item
         elif hasattr(item, "input_schema"):
             definitions[item.name] = StructuredTool(name=item.name, description=item.description, args_schema=item.input_schema)
-    return {name: convert_to_openai_tool(compact_tool(definitions[name])) for name in names if name in definitions}
-
-
-def _remove_schema_titles(value: Any) -> None:
-    if isinstance(value, dict):
-        value.pop("title", None)
-        for child in value.values():
-            _remove_schema_titles(child)
-    elif isinstance(value, list):
-        for child in value:
-            _remove_schema_titles(child)
+    return {name: model_tool_schema(compact_tool(definitions[name])) for name in names if name in definitions}
 
 
 def _merge_disclosed(left: list[str], right: list[str]) -> list[str]:
@@ -227,13 +227,17 @@ class ToolDisclosureMiddleware(AgentMiddleware):
         self.ensure_approval = ensure_approval
         self.reference_requirements: dict[str, Any] = {}
         self._definitions: dict[str, BaseTool] = {}
-        self._metadata = {row["id"]: row["description"] for row in tool_descriptions()}
+        self._metadata = {name: row.description + " " + " ".join(row.aliases) for name, row in TOOL_PRESENTATIONS.items()}
+        self._groups = {name: row.group for name, row in TOOL_PRESENTATIONS.items()}
+        self._remote_names = {}
         for connection in run.connection_snapshots:
             for item in connection.tools:
                 self._metadata[item.name] = f"{connection.name}: {item.remote_name}. {item.description}"
+                self._groups[item.name] = connection.id
+                self._remote_names[item.name] = item.remote_name
         self.tools = [StructuredTool.from_function(name=FIND_TOOLS,
             description="Find selected tools for a task or tool name. Matching tools become available with their schemas. Discovery grants no access.",
-            coroutine=self._find_tools)] if FIND_TOOLS in authorized_tool_names(run) else []
+            coroutine=self._find_tools, args_schema=FindTools)] if FIND_TOOLS in authorized_tool_names(run) else []
 
     def before_agent(self, state, runtime, config):
         # A fresh turn runs this hook; an interrupt resume restarts its saved
@@ -266,7 +270,7 @@ class ToolDisclosureMiddleware(AgentMiddleware):
     async def awrap_model_call(self, request, handler):
         return await handler(self.prepare_request(request))
 
-    async def _find_tools(self, query: str, runtime: ToolRuntime) -> Command:
+    async def _find_tools(self, query: str, runtime: ToolRuntime, group: str | None = None, cursor: str | None = None) -> Command:
         """Activate bounded name/description matches inside the accepted envelope."""
         if self.on_setup is not None and not await self.on_setup(FIND_TOOLS, None, runtime):
             return Command(update={"messages": [ToolMessage(content="Setup was skipped; no additional tools were disclosed.",
@@ -285,16 +289,54 @@ class ToolDisclosureMiddleware(AgentMiddleware):
                 await self.on_setup("connection:" + connection.id, error, runtime)
             return Command(update={"messages": [ToolMessage(content=str(error),
                 name=FIND_TOOLS, tool_call_id=runtime.tool_call_id)]})
+        group_key = group.strip().casefold() if group else None
+        connection_groups = {item.id for item in self.run.connection_snapshots
+            if group_key in {item.id.casefold(), item.name.casefold()}}
         scores = []
         for name in allowed:
+            family = self._groups.get(name, presentation(name).group if presentation(name) else "other")
+            if group_key and not (family == group_key or family in connection_groups
+                or group_key == "connections" and name in self._remote_names):
+                continue
             description = self._metadata.get(name, getattr(self._definitions.get(name), "description", ""))
             score = _discovery_score(query, name, description)
+            if remote_name := self._remote_names.get(name):
+                score = max(score, _discovery_score(query, remote_name, description))
             if score:
                 priority = {"read_file": 0, "edit_file": 1, "write_file": 2, "glob": 3, "grep": 4, "ls": 5}.get(name, 10)
                 scores.append((-score, priority, name, description))
-        matches = sorted(scores)[:DISCOVERY_LIMIT]
         activated = list(runtime.state.get(DISCLOSED_TOOLS) or [])
+        scores.sort()
+        # The cursor binds ordering and accepted capabilities, including frozen
+        # connection versions/manifests. Disclosure state may grow between pages.
+        identity = hashlib.sha256(json.dumps({"query": query, "group": group_key,
+            "allowed": sorted(allowed), "mode": self.run.work_mode,
+            "connections": [item.model_dump(mode="json") for item in self.run.connection_snapshots],
+            "matches": [row[:3] for row in scores]}, sort_keys=True).encode()).hexdigest()
+        offset = 0
+        ordered = [row[2] for row in scores]
+        if cursor:
+            try:
+                page = json.loads(base64.urlsafe_b64decode(cursor))
+                if page["identity"] != identity or type(page["offset"]) is not int or not 0 <= page["offset"] <= len(scores):
+                    raise ValueError()
+                offset = page["offset"]
+            except (ValueError, KeyError, TypeError, binascii.Error, UnicodeDecodeError):
+                return Command(update={"messages": [ToolMessage(content="This discovery cursor no longer matches the query, group or selected capabilities. Search again without cursor.",
+                    name=FIND_TOOLS, tool_call_id=runtime.tool_call_id, status="error")]})
+        exact = query.strip().casefold()
+        loaded = set(activated) | bootstrap_tool_names(self.run)
+        # A page cursor follows stable ranking. A fresh broad search skips loaded
+        # names, while an exact lookup always remains reachable.
+        indices = [index for index, name in enumerate(ordered) if index >= offset and
+            (cursor or name not in loaded or exact in {name.casefold(), name.replace("_", " ").casefold(), self._remote_names.get(name, "").casefold()})][:DISCOVERY_LIMIT]
+        lookup = {row[2]: row for row in scores}
+        matches = [lookup[ordered[index]] for index in indices]
+        next_offset = indices[-1] + 1 if indices else len(ordered)
+        has_more = next_offset < len(ordered)
+        next_cursor = base64.urlsafe_b64encode(json.dumps({"identity": identity, "offset": next_offset}).encode()).decode() if has_more else None
         lines = []
+        results = []
         for _, _, name, description in matches:
             known = name in self._definitions or name in getattr(self.loader, "definitions", {})
             if not known:
@@ -323,10 +365,16 @@ class ToolDisclosureMiddleware(AgentMiddleware):
             else:
                 description = COMPACT_DESCRIPTIONS.get(name, description)
             lines.append(f"{name}: {description}")
+            row = presentation(name)
+            results.append({"name": name, "label": row.label if row else self._remote_names.get(name, name),
+                "group": self._groups.get(name, row.group if row else "other"),
+                "already_disclosed": name in set(runtime.state.get(DISCLOSED_TOOLS) or []) | bootstrap_tool_names(self.run),
+                "description": description})
         if not matches:
             lines = ["No selected tools match. Try a specific task, tool name or group. Discovery cannot enable unselected tools."]
         return Command(update={DISCLOSED_TOOLS: activated, "messages": [ToolMessage(
-            content="\n".join(lines), name=FIND_TOOLS, tool_call_id=runtime.tool_call_id)]})
+            content=json.dumps({"query": query, "group": group, "results": results, "notice": "\n".join(lines),
+                "has_more": has_more, "next_cursor": next_cursor}, ensure_ascii=False), name=FIND_TOOLS, tool_call_id=runtime.tool_call_id)]})
 
     async def _load(self, name: str, runtime: ToolRuntime) -> bool:
         while True:

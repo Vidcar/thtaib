@@ -6,6 +6,11 @@ export type ProjectRecord = SchemaProjectRecord;
 export type ProjectFiles = SchemaProjectFiles;
 export type AgentSetup = SchemaAgentSetupView;
 export type AgentSetupVersion = SchemaAgentSetupVersion;
+export interface AgentSetupTemplate {
+  id: string; name: string; role: string; configuration: SetupConfiguration; recommended_skills: string[];
+  suggested_chat_mode: "work" | "plan"; suggested_chat_access: "ask" | "full_access";
+  suggested_desktop_access: "off" | "selected"; note: string;
+}
 export type SetupConfiguration = Omit<SchemaSetupConfiguration, "input_policy" | "inherited_model_configuration"> & {
   input_policy?: AgentInputPolicy | null;
   desktop_access?: "off" | "selected" | "all" | null;
@@ -39,6 +44,7 @@ export const workspaceApi = {
   removeProject: (id: string) => request<ProjectRecord>(`/v1/projects/${id}`, { method: "DELETE" }),
   projectFiles: (id: string, path = "") => request<ProjectFiles>(`/v1/projects/${id}/files?path=${encodeURIComponent(path)}`),
   agentSetups: (includeInactive = false) => request<AgentSetup[]>(`/v1/agent-setups${includeInactive ? "?include_inactive=true" : ""}`),
+  agentSetupTemplates: () => request<AgentSetupTemplate[]>("/v1/agent-setup-templates"),
   createAgentSetup: (payload: { name: string; role?: string | null; configuration: SetupConfiguration }) => request<AgentSetup>("/v1/agent-setups", { method: "POST", body: JSON.stringify(payload) }),
   updateAgentSetup: (id: string, payload: { name: string; role?: string | null; configuration: SetupConfiguration; base_version: string }) => request<AgentSetup>(`/v1/agent-setups/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   duplicateAgentSetup: (id: string) => request<AgentSetup>(`/v1/agent-setups/${id}/duplicate`, { method: "POST", body: "{}" }),

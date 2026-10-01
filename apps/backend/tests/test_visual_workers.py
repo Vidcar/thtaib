@@ -22,6 +22,7 @@ from PIL import Image
 import psutil
 
 from workbench_backend.agents.execution_policy import CURRENT_TOOL_CALL
+from workbench_backend.agents.tool_results import OwnedToolResults, PREVIEW_BYTES
 from workbench_backend.browser.runtime import BrowserRuntime, MCP_VERSION, NODE_SHA256, PACKAGE_MANIFEST
 from workbench_backend.browser.service import BrowserSessionService, present_page
 from workbench_backend.inference.image_validation import CANNOT_READ_IMAGE
@@ -119,7 +120,13 @@ class BrowserWorkerTests(unittest.IsolatedAsyncioTestCase):
                 CURRENT_TOOL_CALL.reset(token)
             self.assertIn("/captures/asset_red.png", capture)
             self.assertIn("heading: Example", capture)
-            self.assertNotIn("read_file", capture)
+            self.assertEqual(capture.rsplit("Saved screenshot: ", 1)[1], "/captures/asset_red.png")
+            retained = json.loads(capture.split("Retained result: ", 1)[1].split("\nSaved screenshot:", 1)[0])
+            page_text = OwnedToolResults(self.paths, self.run).read(retained["path"])
+            self.assertIn("heading: Example", page_text["content"])
+            self.assertEqual(page_text["result"]["source"]["tool"], "browser_take_screenshot")
+            self.assertNotIn("capture-1.png", capture)
+            self.assertLessEqual(len(capture.encode("utf-8")), PREVIEW_BYTES)
             self.assertEqual(self.published[0][2]["target"], "http://127.0.0.1:8080/")
             self.assertEqual(self.published[0][2]["source_tool_call_id"], "call_capture_1")
             await by_name["browser_click"].coroutine(target="http://127.0.0.1:8080/after-click")
@@ -234,7 +241,7 @@ class BrowserWorkerTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PageObservationTests(unittest.TestCase):
-    def test_snapshot_file_is_inlined_and_bounded_to_citable_lines(self):
+    def test_snapshot_file_is_inlined_with_bounded_preview_and_complete_continuation(self):
         with tempfile.TemporaryDirectory() as root:
             folder = Path(root)
             snapshot = folder / "page.yml"
@@ -242,15 +249,25 @@ class PageObservationTests(unittest.TestCase):
                 ["- heading \"City news\" [level=1]"]
                 + [f"- link \"Result {index}\" [ref=e{index}]" for index in range(800)]
             ), encoding="utf-8")
+            paths = WorkbenchPaths(folder / "data")
+            run = SimpleNamespace(id="run_snapshot", thread_id="thread_snapshot", parent_run_id=None)
+            reader = OwnedToolResults(paths, run)
             observed = present_page(
                 f"Page URL: https://news.example/uk\nPage Title: UK news\n- [Snapshot]({snapshot})",
-                folder,
+                folder, result_retainer=reader.retain,
+                source={"tool":"browser_snapshot", "page_id":"observed-page", "revision":4},
             )
             self.assertIn("heading \"City news\"", observed)
             self.assertIn("link \"Result 0\"", observed)
             self.assertNotIn(str(snapshot), observed)
-            self.assertIn("browser_find", observed)
-            self.assertLess(len(observed), 13_000)
+            self.assertLessEqual(len(observed.encode("utf-8")), PREVIEW_BYTES)
+            retained = json.loads(observed.split("Retained result: ", 1)[1])
+            late = reader.read(retained["path"], query='Result 799')
+            self.assertEqual(late["match_count"], 1)
+            self.assertIn('[ref=e799]', late["matches"][0]["content"])
+            self.assertEqual(late["result"]["source"]["url"], "https://news.example/uk")
+            self.assertEqual(late["result"]["source"]["page_id"], "observed-page")
+            self.assertEqual(late["result"]["source"]["revision"], 4)
 
     def test_consent_dialog_is_named_and_not_accepted(self):
         text = "\n".join([
@@ -399,16 +416,23 @@ class PreviewWorkerTests(unittest.TestCase):
             service = PreviewService(WorkbenchPaths(Path(root) / "data"), idle_seconds=60)
             with self.assertRaises(HarnessError):
                 service.start("thread_preview", str(project),
-                    [sys.executable, "-c", "print('preview-failure-sentinel',flush=True)"], self._port())
+                    [sys.executable, "-c", "print('earlier-launch-context '+ 'x'*15000,flush=True);print('preview-failure-sentinel',flush=True)"], self._port())
             inspection = service.inspect("thread_preview")
             self.assertEqual(inspection["state"], "closed")
             self.assertIn("preview-failure-sentinel", inspection["recent_log"])
             self.assertLessEqual(len(inspection["recent_log"]), 4_000)
-            run = SimpleNamespace(thread_id="thread_preview", project_path=str(project),
+            run = SimpleNamespace(id="run_preview", thread_id="thread_preview", parent_run_id=None, project_path=str(project),
                 work_mode="work", tool_mode="live-tool", presented_tools=["preview_status"])
             status_tool = service.tools_for_run(run)[0]
             agent_view = json.loads(asyncio.run(status_tool.coroutine()))
             self.assertIn("preview-failure-sentinel", agent_view["recent_log"])
+            self.assertLessEqual(len(json.dumps(agent_view, ensure_ascii=False).encode("utf-8")), PREVIEW_BYTES)
+            retained = agent_view["retained_log"]
+            reader = OwnedToolResults(service.paths, run)
+            self.assertEqual(reader.read(retained["path"], query="earlier-launch-context")["match_count"], 1)
+            self.assertEqual(reader.read(retained["path"], query="preview-failure-sentinel")["match_count"], 1)
+            self.assertEqual(retained["source"]["launch_id"], agent_view["launch_id"])
+            self.assertTrue(retained["complete"])
 
     def test_idle_expiry_stops_owned_server(self):
         with tempfile.TemporaryDirectory() as root:

@@ -233,7 +233,16 @@ class SetupService:
         self._record_presented_tool_issues(configuration, issues, available_tools, selected_versions)
         return self._record_always_included_skill_issues(
             configuration, issues, selected_versions, connection_tool_names, selected_connections,
-            frozen=frozen, project_bound=project_bound)
+            frozen=frozen, project_bound=project_bound, connection_snapshots=connection_snapshots)
+
+    def _plan_tools(self, selected_connections, connection_snapshots=None):
+        from workbench_backend.agents.execution_policy import plan_tool_names
+        if connection_snapshots is None:
+            from workbench_backend.connections.store import ConnectionStore
+            connection_store = ConnectionStore(self.store)
+            connection_snapshots = [record for ident in selected_connections or []
+                if (record := connection_store.get(ident)) is not None and record.enabled]
+        return plan_tool_names(connection_snapshots)
 
     def _record_missing_model_issues(self, configuration: SetupConfiguration, issues: list[SetupDependencyIssue]) -> None:
         if configuration.bundle_id and not configuration.deployment_id and not configuration.model_configuration_id:
@@ -318,14 +327,13 @@ class SetupService:
 
     def _record_always_included_skill_issues(self, configuration: SetupConfiguration, issues: list[SetupDependencyIssue],
         selected_versions: list, connection_tool_names: dict[str, list[str]], selected_connections: list[str] | None, *,
-        frozen: bool, project_bound: bool) -> list[SetupDependencyIssue]:
+        frozen: bool, project_bound: bool, connection_snapshots=None) -> list[SetupDependencyIssue]:
         policy = configuration.input_policy
         always_skills = [version for version in selected_versions if version.kind == "skill"
             and reference_source_mode(policy, version.entry_id, "skill") == "always"]
         if not always_skills:
             return issues
         from workbench_backend.agents.tools import resolve_presented_tools
-        from workbench_backend.agents.execution_policy import PLAN_TOOLS
         allowed, _, _, _ = resolve_presented_tools(configuration.presented_tools, project_bound=project_bound,
             knowledge_routes=bool(configuration.memory_version_refs or configuration.skill_version_refs),
             external_names=[name for names in connection_tool_names.values() for name in names])
@@ -339,7 +347,8 @@ class SetupService:
         if policy is not None:
             allowed = [name for name in allowed if f"tool:{name}" not in policy.excluded_sources]
         if configuration.work_mode == "plan":
-            allowed = [name for name in allowed if name in PLAN_TOOLS]
+            eligible = self._plan_tools(selected_connections, connection_snapshots if frozen else None)
+            allowed = [name for name in allowed if name in eligible]
         allowed_connections = (selected_connections or []) if configuration.presented_tools != [] else []
         for version in always_skills:
             error = skill_selection_error(version, tool_names=allowed, connection_ids=allowed_connections,
@@ -665,6 +674,9 @@ class SetupService:
         if self.connection_tool_definitions is not None:
             for connection_id in configuration.connection_ids or []:
                 optional.extend(self.connection_tool_definitions(connection_id))
+        if configuration.work_mode == "plan":
+            eligible = self._plan_tools(configuration.connection_ids)
+            preview_tools = [name for name in preview_tools if name in eligible]
         input_sources = build_input_sources(policy=input_policy, instruction_layers=instructions,
             knowledge_versions=preview_versions, profile=profile, deployment=deployment,
             presented_tools=preview_tools, tool_metadata=tool_descriptions(),

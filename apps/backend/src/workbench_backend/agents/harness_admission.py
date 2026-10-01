@@ -159,7 +159,10 @@ def _resolve_frozen_admission(service, admitted, request, *, instruction_snapsho
     input_policy = (selection.configuration.input_policy if execution_snapshot is not None
         else selection.configuration.input_policy or AgentInputPolicy())
     request = request.model_copy(update={"input_policy": input_policy})
-    selected = selection.configuration.model_dump(exclude_none=True, exclude={"instructions", "requires_project", "requires_host_shell", "bundle_id"})
+    # The canonical policy above is already typed. model_copy does not validate
+    # updates, so including its serialized dictionary here would erase that
+    # type before desktop pinned-capability readiness is checked.
+    selected = selection.configuration.model_dump(exclude_none=True, exclude={"instructions", "requires_project", "requires_host_shell", "bundle_id", "input_policy"})
     if execution_snapshot is not None:
         # A queued turn cannot broaden live-desktop access beyond its frozen setup.
         selected["desktop_access"] = selection.configuration.desktop_access or "off"
@@ -268,7 +271,7 @@ def _resolve_admitted_presentation(service, admitted, execution_snapshot):
         request, knowledge_plan, presented, retrieval_presented, capture_routes, recorded,
     )
     presented = apply_disclosure_and_plan_filter(
-        request, input_policy, helpers, knowledge_plan, presented,
+        request, input_policy, helpers, knowledge_plan, presented, connection_snapshots,
     )
     required_tools = validate_required_presentation(
         service, request, input_policy, knowledge_plan, project_path,

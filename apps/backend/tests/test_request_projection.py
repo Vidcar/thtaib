@@ -28,6 +28,7 @@ from workbench_backend.agents.context import (
 )
 from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
 from workbench_backend.agents.schemas import AgentRun
+from workbench_backend.agents.tool_schema import model_tool_schema
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.adapter import WorkbenchChatOpenAI, _raise_for_invalid_completed_tool_calls
 from workbench_backend.inference.configuration_options import bundle_configuration_options, validate_model_reasoning
@@ -105,7 +106,7 @@ class RequestProjectionTests(unittest.TestCase):
             request_message_projection=workbench.browser_messages_for_count,
             extra_tools=[] if provider else [OutputToolBinding.from_schema_spec(spec).tool
                 for spec in strategy.schema_specs],
-            tools_projection=(lambda selected: [convert_to_openai_tool(item, strict=True)
+            tools_projection=(lambda selected: [model_tool_schema(item, strict=True)
                 for item in selected]) if provider else None,
             request_settings=None if provider else {"tool_choice": "required"})
         summarization = create_summarization_middleware(value, StateBackend(), token_counter=counter)
@@ -235,6 +236,45 @@ class RequestProjectionTests(unittest.TestCase):
                          {"name": "unknown", "arguments": "{}"})
         with self.assertRaises(HarnessError):
             validate_retained_messages(deployment(), [ToolMessage(content="orphan", tool_call_id="missing")], allow_recovery=True)
+
+    def test_string_template_preserves_sdk_text_and_mirrored_tool_call_history(self):
+        call = {"type": "tool_call", "id": "write-1", "name": "write_file",
+                "args": {"file_path": "/hello.txt", "content": "hello 漢字😀"}}
+        messages = [HumanMessage(content="Write the greeting."),
+            AIMessage(content=[call], tool_calls=[call]),
+            ToolMessage(content="Updated file /hello.txt", tool_call_id="write-1"),
+            AIMessage(content=[{"type": "text", "text": "Written 漢字😀", "index": 0}])]
+        original = [item.model_dump() for item in messages]
+        setup = deployment(chat_template_caps={"supports_typed_content": False,
+            "supports_string_content": True, "supports_tools": True, "supports_tool_calls": True})
+        validate_retained_messages(setup, messages)
+        projected = project_context_payload(messages)["messages"]
+        self.assertIsNone(projected[1]["content"])
+        self.assertEqual(projected[1]["tool_calls"][0]["function"]["arguments"],
+                         json.dumps(call["args"], ensure_ascii=False))
+        self.assertEqual(projected[-1]["content"], [{"type": "text", "text": "Written 漢字😀"}])
+        self.assertEqual([item.model_dump() for item in messages], original)
+        with self.assertRaises(HarnessError) as caught:
+            validate_retained_messages(setup, messages[:2])
+        self.assertEqual(caught.exception.code, "context_tool_pair_invalid")
+
+    def test_string_template_still_denies_nontext_malformed_and_unmirrored_blocks(self):
+        setup = deployment(chat_template_caps={"supports_typed_content": False})
+        for block in ({"type": "text", "text": 123}, {"type": "audio", "data": "unsupported"},
+                      {"type": "image_url", "image_url": {"url": "unsupported"}},
+                      {"type": "unknown", "text": "must not disappear"},
+                      {"type": "tool_call", "id": "missing", "name": "write_file", "args": {}}):
+            message = AIMessage(content=[block])
+            original = message.model_dump()
+            with self.subTest(block=block), self.assertRaises(HarnessError) as caught:
+                validate_retained_messages(setup, [message])
+            self.assertEqual(caught.exception.code, "context_content_unsupported")
+            self.assertEqual(message.model_dump(), original)
+        call = {"type": "tool_call", "id": "same", "name": "write_file", "args": {"content": "x"}}
+        conflicting = AIMessage(content=[{**call, "args": {"content": "different"}}], tool_calls=[call])
+        with self.assertRaises(HarnessError) as caught:
+            validate_retained_messages(setup, [conflicting, ToolMessage(content="done", tool_call_id="same")])
+        self.assertEqual(caught.exception.code, "context_content_unsupported")
 
     def test_estimated_input_is_observation_and_cannot_establish_a_fit(self):
         base = ContextObservation(capacity_tokens=100)

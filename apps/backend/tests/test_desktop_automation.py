@@ -108,6 +108,16 @@ class DesktopAutomationTests(unittest.TestCase):
         with self.assertRaisesRegex(DesktopAutomationError, "access is off"):
             self.service.invoke("thread-one", "Close", hwnd=202)
 
+    def test_wait_uses_native_property_and_empty_value_without_silent_option_precedence(self):
+        self.service.set_scope("thread-one", "selected", hwnd=101)
+        self.service.wait("thread-one", "field-id", value="", property_name="Value", timeout_ms=100)
+        self.assertEqual(self.commands[-1][0], ["ui", "wait-for", "field-id", "--timeout", "100", "--value", "", "--property", "Value", "-w", "101", "--json"])
+        for options in [{"gone":True,"value":"x"}, {"property_name":"Value"}, {"property_name":"value","value":"x"}]:
+            before = len(self.commands)
+            with self.assertRaises(DesktopAutomationError):
+                self.service.wait("thread-one", "field-id", **options)
+            self.assertEqual(len(self.commands), before)
+
     def test_reused_hwnd_or_pid_is_rejected_before_action(self):
         self.service.set_scope("thread-one", "selected", hwnd=101)
         self.identities[101] = WindowIdentity(101, 10, 3000.0)

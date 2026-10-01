@@ -10,9 +10,26 @@ from typing import Any
 from workbench_backend.errors import HarnessError
 
 
-PLAN_TOOLS = frozenset({"ls", "read_file", "glob", "grep", "read_attachment", "read_reference", "find_tools", "search_knowledge", "web_search", "write_todos", "ask_user", "echo", "time_now", "task"})
+PLAN_TOOLS = frozenset({"ls", "read_file", "glob", "grep", "read_attachment", "read_reference", "read_tool_result", "find_tools", "search_knowledge", "write_todos", "ask_user", "echo", "time_now", "task"})
 PLAN_INSTRUCTIONS = "Plan mode: investigate and produce a plan. Read-only tools, questions and the checklist are available. Do not modify files, run shell commands, save memory or perform external actions. Switching Access does not permit implementation in Plan mode."
 CURRENT_TOOL_CALL: ContextVar[str] = ContextVar("workbench_current_tool_call", default="")
+
+
+def plan_tool_names(connection_snapshots=()) -> set[str]:
+    """Permit only locally owned public readers, never remote effect annotations.
+
+    Callers must still intersect this eligibility with the accepted selection.
+    Dispatch keeps the connection's frozen schema/version and live checks.
+    """
+    from workbench_backend.connections.service import namespaced
+    allowed = set(PLAN_TOOLS)
+    for connection in connection_snapshots:
+        if connection.kind != "public_web" or connection.transport != "builtin":
+            continue
+        for tool in connection.tools:
+            if tool.remote_name in {"search_web", "read_web_page"} and tool.name == namespaced(connection.id, tool.remote_name):
+                allowed.add(tool.name)
+    return allowed
 
 
 def require_setup_capabilities(configuration, *, project_bound: bool, presented_tools: list[str] | None) -> None:

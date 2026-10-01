@@ -30,7 +30,7 @@ from deepagents.middleware.memory import MemoryMiddleware
 from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware._utils import append_to_system_message
 from langchain.tools import ToolRuntime
-from langchain_core.tools import StructuredTool
+from langchain_core.tools import StructuredTool, ToolException
 
 from workbench_backend.errors import HarnessError, KnowledgeError
 from workbench_backend.knowledge.schemas import KnowledgeKind, KnowledgeVersion
@@ -87,7 +87,9 @@ class SelectedReference(BaseModel):
 
 
 class ReferenceRead(BaseModel):
-    entry_id: str
+    entry_id: str = Field(description="ID of the selected frozen memory or skill.")
+    offset: int = Field(default=0, ge=0, description="Zero-based character offset for returned continuation.")
+    limit: int = Field(default=12000, ge=1, le=12000, description="Maximum characters; short entry points remain complete.")
 
 
 @dataclass(frozen=True)
@@ -443,7 +445,7 @@ def reference_context(plan: KnowledgeMaterializePlan) -> str:
     rows = [json.dumps({"name": reference.name, "description": reference.description,
         "entry_id": reference.entry_id, "version_id": reference.version_id, "path": reference.path},
         ensure_ascii=False) for reference in selected]
-    return "## Selected references\n" + "\n".join(rows) + "\nUse read_reference(entry_id) to read a needed full frozen original."
+    return "## Selected references\n" + "\n".join(rows) + "\nUse read_reference(entry_id) to read a needed frozen original; follow next_read when it is paged."
 
 
 def reference_tool_for_plan(backend: Any, plan: KnowledgeMaterializePlan, *, allowed_tools=None,
@@ -477,7 +479,19 @@ def reference_tool_for_plan(backend: Any, plan: KnowledgeMaterializePlan, *, all
             raise HarnessError("The selected frozen reference changed unexpectedly.", code="reference_version_changed", status_code=409)
         return content.decode("utf-8")
 
-    def read_reference(entry_id: str, runtime: ToolRuntime) -> str:
+    def ranged(reference, text, offset, limit):
+        if offset > len(text):
+            raise ToolException(f"reference_range_invalid: Offset {offset} is beyond this {len(text)}-character original. Read from offset 0 or follow next_read.")
+        if offset == 0 and len(text) <= limit:
+            return text
+        end = min(len(text), offset + limit)
+        return json.dumps({"entry_id": reference.entry_id, "version_id": reference.version_id,
+            "path": reference.path, "sha256": expected[reference.path].hex(),
+            "offset": offset, "end": end, "total_characters": len(text), "text": text[offset:end],
+            "has_more": end < len(text), "next_read": {"entry_id": reference.entry_id, "offset": end, "limit": limit} if end < len(text) else None,
+            "notice": "Selected frozen reference. Supplied paths are virtual; follow next_read for the remainder."}, ensure_ascii=False)
+
+    def read_reference(entry_id: str, runtime: ToolRuntime, offset: int = 0, limit: int = 12000) -> str:
         """Read the full original text of a selected frozen memory or skill by entry ID."""
         reference = reference_for(entry_id)
         blocked = unavailable(reference)
@@ -489,9 +503,9 @@ def reference_tool_for_plan(backend: Any, plan: KnowledgeMaterializePlan, *, all
                 readiness = asyncio.run(readiness)
             if readiness:
                 return str(readiness)
-        return original(reference, backend.download_files([reference.path]))
+        return ranged(reference, original(reference, backend.download_files([reference.path])), offset, limit)
 
-    async def aread_reference(entry_id: str, runtime: ToolRuntime) -> str:
+    async def aread_reference(entry_id: str, runtime: ToolRuntime, offset: int = 0, limit: int = 12000) -> str:
         reference = reference_for(entry_id)
         blocked = unavailable(reference)
         if blocked:
@@ -502,10 +516,11 @@ def reference_tool_for_plan(backend: Any, plan: KnowledgeMaterializePlan, *, all
                 readiness = await readiness
             if readiness:
                 return str(readiness)
-        return original(reference, await backend.adownload_files([reference.path]))
+        return ranged(reference, original(reference, await backend.adownload_files([reference.path])), offset, limit)
 
     return StructuredTool.from_function(read_reference, coroutine=aread_reference,
-        name="read_reference", description="Read the full original of a selected frozen reference by entry ID.", args_schema=ReferenceRead)
+        name="read_reference", description="Read a selected frozen memory or skill by entry ID. Short originals are complete; follow next_read for large originals with zero-based character offset and limit.", args_schema=ReferenceRead,
+        handle_tool_error=True)
 
 
 def is_knowledge_route_path(virtual_path: str) -> bool:

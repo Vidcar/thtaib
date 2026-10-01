@@ -20,22 +20,41 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
-from typing import Any
+from typing import Any, Annotated
 from urllib.parse import quote
 
-import psutil
 from langchain_core.tools import BaseTool, ToolException, tool
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from workbench_backend.agents.harness_backend import canonical_root, sanitize_thread_id
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.paths import WorkbenchPaths
-from workbench_backend.process_tree import WindowsJob as _WindowsJob
+from workbench_backend.process_tree import WindowsJob as _WindowsJob, stop_process_tree as _kill_tree
+from workbench_backend.agents.tool_results import OwnedToolResults, read_bounded_log, bounded_content_payload
 
 PREVIEW_TOOL_NAMES = ("start_preview", "stop_preview", "preview_status")
 PREVIEW_IDLE_SECONDS = 30 * 60
 _MAX_LOG_CHARS = 4_000
 _THREAD_ID = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
+
+
+class PreviewStartInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"oneOf": [
+        {"required": ["entry_path"], "not": {"anyOf": [{"required": ["command"]}, {"required": ["port"]}]}},
+        {"required": ["command", "port"], "not": {"required": ["entry_path"]}}]})
+    command: list[Annotated[str, Field(min_length=1, max_length=4096, pattern=r"^[^\x00]+$")]] | None = Field(default=None, min_length=1, max_length=40, description="Executable plus argv, no shell syntax. Host execution has no sandbox; intentionally bind the server to loopback.")
+    port: int | None = Field(default=None, ge=1024, le=65535)
+    entry_path: str | None = Field(default=None, min_length=1, max_length=2048, description="Existing relative project HTML file. Choose this or command+port.")
+
+    @model_validator(mode="after")
+    def one_mode(self):
+        if self.entry_path is not None:
+            if self.command is not None or self.port is not None:
+                raise ValueError("Provide entry_path, or command and port, not both.")
+        elif self.command is None or self.port is None:
+            raise ValueError("Provide entry_path, or command and port.")
+        return self
 
 
 def _key(thread_id: str | None) -> str:
@@ -56,37 +75,6 @@ def _localhost_health(port: int, token: str | None = None) -> bool:
         return False
     finally:
         connection.close()
-
-
-def _kill_tree(process: subprocess.Popen, job: _WindowsJob | None = None) -> bool:
-    """Stop descendants before their parent so a package runner cannot orphan a server."""
-    if job is not None:
-        stopped = job.stop()
-        if process.poll() is None and not stopped:
-            process.terminate()
-        try:
-            process.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            return False
-        return stopped
-    try:
-        parent = psutil.Process(process.pid)
-        descendants = parent.children(recursive=True)
-        for child in reversed(descendants):
-            child.terminate()
-        parent.terminate()
-        _, alive = psutil.wait_procs([*descendants, parent], timeout=3)
-        for child in alive:
-            child.kill()
-        _, alive = psutil.wait_procs(alive, timeout=3)
-        if not alive:
-            process.wait(timeout=3)
-        return not alive
-    except psutil.NoSuchProcess:
-        process.poll()
-        return True
-    except (psutil.AccessDenied, OSError):
-        return False
 
 
 @dataclass
@@ -140,9 +128,19 @@ class PreviewService:
             "entry_path": preview.entry_path if alive and preview else None,
             "port": preview.port if alive and preview else None,
             "pid": preview.process.pid if alive and preview else None,
+            "launch_id": preview.launch_id if preview else self._last_log_launch(key),
         }
 
-    def inspect(self, thread_id: str) -> dict[str, Any]:
+    def _last_log_launch(self, key: str) -> str | None:
+        try:
+            with (self._log_root / f"{key}.log").open("rb") as handle:
+                first = handle.read(200).decode("utf-8", errors="replace")
+            matched = re.match(r"Workbench preview launch ([a-f0-9]{32})", first)
+            return matched.group(1) if matched else None
+        except OSError:
+            return None
+
+    def inspect(self, thread_id: str, *, run=None) -> dict[str, Any]:
         """Read current ownership, HTTP health, and a bounded local log tail."""
         key = _key(thread_id)
         status = self.status(key)
@@ -160,7 +158,15 @@ class PreviewService:
                 owner = self._owned.get(key)
                 token = owner.health_token if owner else None
             healthy = _localhost_health(status["port"], token)
-        return {**status, "healthy": healthy, "recent_log": log_tail}
+        log_result = None
+        if run is not None and log_path.is_file():
+            text, coverage = read_bounded_log(log_path)
+            log_result = OwnedToolResults(self.paths, run).retain(text,
+                source={"tool": "preview_status", "launch_id": status.get("launch_id"),
+                    "thread_id": key, **coverage})
+        return {**status, "healthy": healthy, "readiness": "http_responsive" if healthy else ("http_unresponsive" if healthy is False else "not_running"),
+            "recent_log": log_tail, **({"retained_log": log_result} if log_result else {}),
+            "notice": "HTTP responsiveness does not establish that the intended UI works. A command's loopback health probe does not enforce its listen address."}
 
     def _refresh_idle(self, preview: _Preview) -> None:
         if preview.timer:
@@ -235,7 +241,12 @@ class PreviewService:
             self._state_root.mkdir(parents=True, exist_ok=True)
             self._log_root.mkdir(parents=True, exist_ok=True)
             log_path = self._log_root / f"{key}.log"
-            log_file = log_path.open("ab", buffering=0)
+            launch_id = uuid.uuid4().hex
+            if log_path.is_file():
+                previous = self._last_log_launch(key) or uuid.uuid4().hex
+                log_path.replace(self._log_root / f"{key}-{previous}.log")
+            log_file = log_path.open("wb", buffering=0)
+            log_file.write(f"Workbench preview launch {launch_id}\n".encode("utf-8"))
             flags = (subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW | 0x00000004) if sys.platform == "win32" else 0
             process = None
             job = None
@@ -253,10 +264,10 @@ class PreviewService:
                 log_file.close()
                 raise
             preview = _Preview(key, project, tuple(argv), port, process, log_file,
-                job=job, launch_id=uuid.uuid4().hex, kind=kind, entry_path=entry_path, health_token=health_token)
+                job=job, launch_id=launch_id, kind=kind, entry_path=entry_path, health_token=health_token)
             marker = self._marker(key)
             try:
-                marker.write_text(json.dumps({"pid": process.pid, "port": port, "started_at": utc_now()}), encoding="utf-8")
+                marker.write_text(json.dumps({"pid": process.pid, "port": port, "launch_id": launch_id, "started_at": utc_now()}), encoding="utf-8")
             except BaseException:
                 _kill_tree(process, job)
                 log_file.close()
@@ -319,7 +330,7 @@ class PreviewService:
         selected = set(run.presented_tools)
         result: list[BaseTool] = []
 
-        @tool("start_preview")
+        @tool("start_preview", args_schema=PreviewStartInput)
         async def start_preview(command: list[str] | None = None, port: int | None = None, entry_path: str | None = None) -> str:
             """Preview project HTML with entry_path='relative/page.html'; the returned exact HTTP URL supports relative assets. Or provide command (executable plus argv) and port for a development server, with the project as cwd. Choose one mode. Workbench owns and stops the process. No shell syntax."""
             if entry_path is not None:
@@ -332,7 +343,9 @@ class PreviewService:
                 launch = asyncio.create_task(asyncio.to_thread(self.start, run.thread_id, run.project_path, command, port))
             try:
                 info = await asyncio.shield(launch)
-                return f"Project preview is ready at {info['url']}. Use browser_navigate to test it."
+                return json.dumps({"state": "active", "launch_id": info.get("launch_id") or info.get("_launch_id"),
+                    "url": info["url"], "kind": info.get("kind"), "readiness": "http_responsive",
+                    "notice": "Project preview is ready at " + info["url"] + ". Use browser_navigate to test it. HTTP responsiveness is not UI validation."})
             except asyncio.CancelledError:
                 async def finish_and_stop() -> None:
                     try:
@@ -352,7 +365,8 @@ class PreviewService:
             except HarnessError as exc:
                 if exc.code == "preview_stop_unconfirmed":
                     raise
-                raise ToolException(f"{exc.code}: {exc.message}") from exc
+                observed = await asyncio.to_thread(self.inspect, run.thread_id, run=run)
+                raise ToolException(f"{exc.code}: {exc.message}\nPreview evidence: " + json.dumps(bounded_content_payload(observed, "recent_log", limit=11_500, tail=True), ensure_ascii=False)) from exc
 
         @tool("stop_preview")
         async def stop_preview() -> str:
@@ -364,8 +378,8 @@ class PreviewService:
         @tool("preview_status")
         async def preview_status() -> str:
             """Inspect the owned project's preview state, localhost health, and recent bounded log output."""
-            return json.dumps(await asyncio.to_thread(self.inspect, run.thread_id),
-                ensure_ascii=False)
+            observed = await asyncio.to_thread(self.inspect, run.thread_id, run=run)
+            return json.dumps(bounded_content_payload(observed, "recent_log", tail=True), ensure_ascii=False)
 
         if "start_preview" in selected:
             result.append(start_preview)

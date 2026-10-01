@@ -78,6 +78,41 @@ class KnowledgeScopeProposalTests(unittest.TestCase):
         with self.assertRaisesRegex(Exception, 'not bound'):
             self.knowledge.propose_memory(run_id=forged_run.id, content='no', scope='project', scope_id=self.project['id'])
 
+    def test_identical_pending_proposals_reuse_identity_and_keep_destinations_separate(self):
+        from concurrent.futures import ThreadPoolExecutor
+        args = {'run_id': self.run.id, 'content': 'same finding', 'scope': 'project', 'scope_id': self.project['id'], 'display_name': 'Finding'}
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            proposals = list(workers.map(lambda _: self.knowledge.propose_memory(**args), range(2)))
+        self.assertEqual(proposals[0].id, proposals[1].id)
+        self.assertEqual(len(self.knowledge.list_proposals(run_id=self.run.id)), 1)
+        self.assertEqual(proposals[0].status, 'pending')
+        self.assertEqual(self.knowledge.list_entries(), [])
+        other = self.knowledge.propose_memory(run_id=self.run.id, content='same finding', display_name='Finding')
+        self.assertNotEqual(other.id, proposals[0].id)
+        self.knowledge.review_proposal(proposals[0].id, 'reject')
+        retry = self.knowledge.propose_memory(**args)
+        self.assertNotEqual(retry.id, proposals[0].id)
+        self.assertEqual(retry.status, 'pending')
+
+    def test_pending_reuse_never_bypasses_stale_base_or_saved_origin_validation(self):
+        entry = self.create()
+        args = {'run_id': self.run.id, 'content': 'same update', 'entry_id': entry['id'], 'base_version': entry['current_version_id']}
+        pending = self.knowledge.propose_memory(**args)
+        self.assertEqual(self.knowledge.propose_memory(**args).id, pending.id)
+        changed = self.client.post(f'/v1/knowledge/entries/{entry["id"]}/edit', json={'content': 'newer', 'base_version': entry['current_version_id']})
+        self.assertEqual(changed.status_code, 200, changed.text)
+        with self.assertRaisesRegex(Exception, 'Knowledge conflict'):
+            self.knowledge.propose_memory(**args)
+        new_run = self.run.model_copy(update={'id': 'another-origin'})
+        self.app.state.app_store.put_run(new_run)
+        first = self.knowledge.propose_memory(run_id=self.run.id, content='origin finding')
+        separate = self.knowledge.propose_memory(run_id=new_run.id, content='origin finding')
+        self.assertNotEqual(first.id, separate.id)
+        self.knowledge.review_proposal(first.id, 'accept')
+        again = self.knowledge.propose_memory(run_id=self.run.id, content='origin finding')
+        self.assertNotEqual(first.id, again.id)
+        self.assertEqual(again.status, 'pending')
+
     def test_stale_proposal_conflict_and_revert_append_new_version(self):
         entry = self.create()
         proposal = self.knowledge.propose_memory(run_id=self.run.id, content='agent update', entry_id=entry['id'], base_version=entry['current_version_id'])

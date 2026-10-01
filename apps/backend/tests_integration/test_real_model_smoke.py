@@ -15,10 +15,11 @@ module unless ``WORKBENCH_REAL_MODEL_SMOKE`` is set to a truthy value
 (``required``, ``1``, ``true``, ``yes``, ``on``), which fails instead (CI).
 ``0``/``false``/``no``/``off``/``skip`` keep the skip.
 
-The write task asks for exactly ``/hello.txt`` and presents only
-``write_file`` so the tiny model is not steered by the Deep Agents ``grep``
-description that mentions ``/large_tool_results/``. Assertions require that
-file in the project and no reserved harness directories there.
+The write task asks for exactly ``/hello.txt`` and explicitly presents
+``write_file`` eagerly. The tiny model proves the selected tool round-trip;
+deferred discovery behavior is validated separately. Assertions require that
+file in the project and no reserved harness directories there. Connected
+startup declarations must match the externally owned fixture's actual launch.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 from workbench_backend.app import create_app
+from workbench_backend.inference.adapter import CAPTURE_TEXT_LIMIT
 
 from tests.support import close_workbench_sqlite, workbench_client
 from tests_integration.assets import SmokeAssets, SmokeAssetsUnavailable, resolve_assets
@@ -111,6 +113,8 @@ class RealLlamaServer:
                 str(self.port),
                 "-c",
                 "8192",
+                "-np",
+                "1",
                 "--jinja",
             ],
             cwd=str(assets.llama_server.parent),
@@ -156,6 +160,9 @@ def wait_for_chat(client: TestClient, conversation_id: str, *, timeout: float = 
         body = client.get(f"/v1/chat/conversations/{conversation_id}").json()
         run = body.get("current_run") or {}
         if run.get("status") in {"completed", "cancelled", "failed"}:
+            diagnostic = client.get(f"/v1/agent-runs/{run['id']}?view=diagnostic")
+            diagnostic.raise_for_status()
+            body["current_run"] = diagnostic.json()
             return body
         time.sleep(0.2)
     raise TimeoutError(f"chat {conversation_id} did not finish: {body}")
@@ -165,7 +172,7 @@ def wait_for_run(client: TestClient, run_id: str, *, timeout: float = RUN_TIMEOU
     deadline = time.time() + timeout
     body: dict[str, Any] = {}
     while time.time() < deadline:
-        body = client.get(f"/v1/agent-runs/{run_id}").json()
+        body = client.get(f"/v1/agent-runs/{run_id}?view=diagnostic").json()
         if body.get("status") in {"completed", "cancelled", "failed"}:
             return body
         time.sleep(0.2)
@@ -219,10 +226,10 @@ class RealModelSmokeTests(unittest.TestCase):
         close_workbench_sqlite(self.app, self.client)
         self.tmp.cleanup()
 
-    def _attach(self) -> dict[str, Any]:
+    def _attach(self, *, startup: dict[str, Any] | None = None) -> dict[str, Any]:
         response = self.client.post(
             "/v1/deployments/connected",
-            json={"endpoint": self.server.endpoint, "display_name": "real-model-smoke"},
+            json={"endpoint": self.server.endpoint, "display_name": "real-model-smoke", "startup": startup or {}},
         )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
@@ -257,6 +264,16 @@ class RealModelSmokeTests(unittest.TestCase):
         self.assertTrue(payload["url"].startswith(self.server.endpoint), payload["url"])
         return payload["body"]
 
+    def _assert_echo_and_owned_reader(self, run: dict[str, Any], body: dict[str, Any]) -> None:
+        tools = {tool["function"]["name"]: tool["function"] for tool in body.get("tools", [])}
+        self.assertEqual(set(tools), {"echo", "read_file"})
+        self.assertEqual(run["presented_tools"], ["echo"])
+        self.assertEqual(run["framework_read_paths"], ["/large_tool_results/", "/conversation_history/"])
+        description = tools["read_file"]["description"]
+        for path in run["framework_read_paths"]:
+            self.assertIn(path, description)
+        self.assertIn("Project and knowledge files are not authorized", description)
+
     def test_attach_connected_deployment_reports_healthy(self) -> None:
         deployment = self._attach()
         self.assertEqual(deployment["scope"], "connected")
@@ -277,7 +294,8 @@ class RealModelSmokeTests(unittest.TestCase):
         profile_id = self._profile({"temperature": 0.0, "seed": 7, "max_tokens": 128})
         created = self.client.post(
             "/v1/chat/conversations",
-            json={"deployment_id": deployment["id"], "profile_id": profile_id, "project_path": str(self.project)},
+            json={"deployment_id": deployment["id"], "profile_id": profile_id, "project_path": str(self.project),
+                "approval_mode": "full_access", "input_policy": {"tool_loading": "always"}},
         )
         self.assertEqual(created.status_code, 200, created.text)
         conversation = created.json()
@@ -311,7 +329,10 @@ class RealModelSmokeTests(unittest.TestCase):
         tool_names = {tool["function"]["name"] for tool in body.get("tools", [])}
         self.assertIn("write_file", tool_names)
         self.assertEqual(body["messages"][-1]["role"], "user")
-        self.assertEqual(body["messages"][-1]["content"], WRITE_TASK)
+        # Recorded outbound user bodies are bounded previews. These fixture
+        # prompts fit entirely within that bound, so equality remains exact.
+        self.assertLessEqual(len(WRITE_TASK), CAPTURE_TEXT_LIMIT)
+        self.assertEqual(body["messages"][-1]["content_preview"], WRITE_TASK)
         first_run_id = run["id"]
 
         self._start_chat(conversation["id"], FOLLOW_UP_TASK)
@@ -327,7 +348,8 @@ class RealModelSmokeTests(unittest.TestCase):
         wire = self._first_http_body(follow_up)["messages"]
         roles = [message["role"] for message in wire]
         self.assertEqual(roles[-1], "user")
-        self.assertEqual(wire[-1]["content"], FOLLOW_UP_TASK)
+        self.assertLessEqual(len(FOLLOW_UP_TASK), CAPTURE_TEXT_LIMIT)
+        self.assertEqual(wire[-1]["content_preview"], FOLLOW_UP_TASK)
         self.assertIn("tool", roles, f"prior tool result missing from resumed thread: {roles}")
         prior_calls = {
             call["function"]["name"]
@@ -336,7 +358,7 @@ class RealModelSmokeTests(unittest.TestCase):
             for call in message.get("tool_calls") or []
         }
         self.assertIn("write_file", prior_calls, f"prior write_file call missing at the wire: {roles}")
-        self.assertTrue(any(message["role"] == "user" and message["content"] == WRITE_TASK for message in wire))
+        self.assertTrue(any(message["role"] == "user" and message["content_preview"] == WRITE_TASK for message in wire))
         self.assertIn("assistant_message", [event["kind"] for event in follow_up["events"]])
         self.assertGreaterEqual(len(follow_up["checkpoint_ids"]), 1)
 
@@ -353,14 +375,28 @@ class RealModelSmokeTests(unittest.TestCase):
             },
             startup={"ctx_size": 8192},
         )
+        request = {
+            "deployment_id": deployment["id"],
+            "profile_id": profile_id,
+            "task": "Reply with the single word PONG.",
+            "presented_tools": ["echo"],
+            "input_policy": {"tool_loading": "always"},
+        }
+        blocked = self.client.post("/v1/agent-runs", json=request)
+        self.assertEqual(blocked.status_code, 409, blocked.text)
+        self.assertEqual(blocked.json()["code"], "model_reload_required")
+        # This fixture owns an external Popen server launched with -c 8192.
+        # Connected endpoints cannot use the managed Apply API. Declare that
+        # actual startup through its public attachment API; do not bypass the
+        # canonical readiness check or alter the external runtime's state.
+        deployment = self._attach(startup={"ctx_size": 8192})
+        self.assertEqual(deployment["applied_startup"]["ctx_size"], 8192)
+        self.assertEqual(deployment["server_props"]["n_ctx"], 8192)
+        self.assertEqual(deployment["server_props"]["total_slots"], 1)
+        request["deployment_id"] = deployment["id"]
         started = self.client.post(
             "/v1/agent-runs",
-            json={
-                "deployment_id": deployment["id"],
-                "profile_id": profile_id,
-                "task": "Reply with the single word PONG.",
-                "presented_tools": ["echo"],
-            },
+            json=request,
         )
         self.assertEqual(started.status_code, 200, started.text)
         run = wait_for_run(self.client, started.json()["id"])
@@ -371,15 +407,17 @@ class RealModelSmokeTests(unittest.TestCase):
         self.assertEqual(body["top_k"], PROFILE_TOP_K)
         self.assertAlmostEqual(body["min_p"], PROFILE_MIN_P)
         self.assertEqual(body["seed"], PROFILE_SEED)
-        self.assertEqual(body["max_completion_tokens"], PROFILE_MAX_TOKENS)
+        self.assertEqual(body["max_tokens"], PROFILE_MAX_TOKENS)
+        self.assertNotIn("max_completion_tokens", body)
         self.assertNotIn("bogus_setting", body)
-        self.assertEqual({tool["function"]["name"] for tool in body.get("tools", [])}, {"echo"})
+        self._assert_echo_and_owned_reader(run, body)
 
         setup = run["effective_setup"]
         self.assertEqual(setup["selected_profile_id"], profile_id)
         self.assertAlmostEqual(setup["bags"]["per_request"]["applied"]["temperature"], PROFILE_TEMPERATURE)
         self.assertIn("bogus_setting", setup["unsupported"]["per_request"])
-        self.assertIn("ctx_size", [item["key"] for item in setup["startup_mismatches"]])
+        self.assertEqual(setup["startup_mismatches"], [])
+        self.assertEqual(setup["bags"]["startup"]["applied"]["ctx_size"], 8192)
         capture = run["model_requests"][0]
         self.assertEqual(capture["selected_profile_id"], profile_id)
         self.assertAlmostEqual(capture["applied_per_request"]["temperature"], PROFILE_TEMPERATURE)
@@ -390,7 +428,8 @@ class RealModelSmokeTests(unittest.TestCase):
         profile_id = self._profile({"temperature": 0.0, "seed": 7, "max_tokens": 64})
         created = self.client.post(
             "/v1/chat/conversations",
-            json={"deployment_id": deployment["id"], "profile_id": profile_id},
+            json={"deployment_id": deployment["id"], "profile_id": profile_id,
+                "input_policy": {"tool_loading": "always"}},
         )
         self.assertEqual(created.status_code, 200, created.text)
         conversation = created.json()
@@ -402,7 +441,13 @@ class RealModelSmokeTests(unittest.TestCase):
         interaction_thread_id = registered.json()["thread_id"]
         self.assertIsNone(conversation["project_path"])
         self.assertFalse(conversation["filesystem_tools_available"])
-        self.assertEqual(conversation["enabled_tools"], ["echo", "time_now", "write_todos"])
+        project_operations = {"ls", "read_file", "write_file", "edit_file", "glob", "grep", "execute", "delete",
+            "apply_edits", "start_command", "command_status", "stop_command", "execute_skill_script",
+            "start_preview", "stop_preview", "preview_status"}
+        expected_projectless = {"echo", "time_now", "write_todos", "ask_user", "propose_memory", "read_tool_result",
+            "list_connection_resources", "read_connection_resource"}
+        self.assertEqual(set(conversation["enabled_tools"]), expected_projectless)
+        self.assertFalse(project_operations.intersection(conversation["enabled_tools"]))
 
         self._start_chat(conversation["id"], PROJECTLESS_TASK, presented_tools=["echo"])
         interaction = wait_for_interaction_state(self.client, interaction_thread_id)
@@ -411,9 +456,13 @@ class RealModelSmokeTests(unittest.TestCase):
         body = wait_for_chat(self.client, conversation["id"])
         run = body["current_run"]
         self.assertEqual(run["status"], "completed", f"{run.get('error')}\n{self.server.log_tail()}")
-        self.assertEqual(run["enabled_tools"], ["echo", "time_now", "write_todos"])
+        # The harness adds a reader restricted to its two owned virtual routes;
+        # this grants no host-project file access.
+        self.assertEqual(set(run["enabled_tools"]), expected_projectless | {"read_file"})
+        self.assertFalse((project_operations - {"read_file"}).intersection(run["enabled_tools"]))
         self.assertEqual(run["presented_tools"], ["echo"])
         self.assertNotIn("write_file", run["presented_tools"])
+        self._assert_echo_and_owned_reader(run, self._first_http_body(run))
         self.assertFalse(any(self.project.rglob("large_tool_results")))
         self.assertFalse(any(self.project.rglob("conversation_history")))
         self.assertIn("assistant_message", [event["kind"] for event in run["events"]])

@@ -231,6 +231,10 @@ function matchedPermissionGrant(value: unknown): MatchedPermissionGrant | undefi
     source_run_id: grant.source_run_id,
     thread_id: grant.thread_id,
     project_path: grant.project_path,
+    kind: grant.kind === "project_files" ? "project_files" : "exact_action",
+    project_id: typeof grant.project_id === "string" ? grant.project_id : null,
+    operations: Array.isArray(grant.operations) ? grant.operations.filter((item): item is "write_file" | "edit_file" => item === "write_file" || item === "edit_file") : [],
+    excluded_paths: Array.isArray(grant.excluded_paths) ? grant.excluded_paths.filter((item): item is string => typeof item === "string") : [],
   };
 }
 
@@ -241,13 +245,14 @@ function SavedPermissionDetails({ grant }: { grant: MatchedPermissionGrant }) {
       <div><dt>Permission</dt><dd>{grant.id}</dd></div>
       <div><dt>Scope</dt><dd>{grant.scope === "always" ? "Always allow" : "This session"}</dd></div>
       <div><dt>Action</dt><dd>{grant.action}</dd></div>
+      {grant.kind === "project_files" ? <><div><dt>Operations</dt><dd>{grant.operations?.join(", ")}</dd></div><div><dt>Excluded paths</dt><dd>{grant.excluded_paths?.join(", ")}</dd></div></> : null}
       <div><dt>Project</dt><dd>{grant.project_path ?? "No project"}</dd></div>
       <div><dt>Session</dt><dd>{grant.thread_id ?? (grant.scope === "always" ? "Any session" : "Not recorded")}</dd></div>
       <div><dt>Saved</dt><dd>{grant.created_at}</dd></div>
-      <div><dt>Originating run</dt><dd>{grant.source_run_id}</dd></div>
+      <div><dt>Origin</dt><dd>{grant.source_run_id === "settings" ? "Settings · explicit project grant" : grant.source_run_id}</dd></div>
     </dl>
-    <span className="tool-detail-label">Matching arguments</span>
-    <CodeBlock text={stringifyValue(grant.arguments)} label="Copy permission arguments"><code>{stringifyValue(grant.arguments)}</code></CodeBlock>
+    <span className="tool-detail-label">{grant.kind === "project_files" ? "Matching scope" : "Matching arguments"}</span>
+    <CodeBlock text={stringifyValue(grant.kind === "project_files" ? { operations: grant.operations, excluded_paths: grant.excluded_paths } : grant.arguments)} label="Copy permission scope"><code>{stringifyValue(grant.kind === "project_files" ? { operations: grant.operations, excluded_paths: grant.excluded_paths } : grant.arguments)}</code></CodeBlock>
     <p className="hint">Recorded when this call was allowed. Review or revoke current grants in Settings → Permissions.</p>
   </section>;
 }

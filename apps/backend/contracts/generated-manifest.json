@@ -5,9 +5,9 @@
     "apps/backend/contracts/jsonschema/LocalSessionTrustContract.schema.json": "f21be3564de6f5776d28f4ba94361b88b715f4a08c479f54a0ca0f09c3bfa04e",
     "apps/backend/contracts/jsonschema/RunLifecycleContract.schema.json": "85787e25ad06d84230607ac29a57ff8c9aa8cba9dcd0a9675f4393a7be0fbedb",
     "apps/backend/contracts/jsonschema/RunLifecycleStatus.schema.json": "55d5ca8e611457efc4c3ac67d884b5255902c564208d5cf388466436271f2119",
-    "apps/backend/contracts/jsonschema/WorkbenchInteractionMetadata.schema.json": "ce15cb6b6335df01735af30f651d460506202f627b3b0813956972e893f8a834",
-    "apps/backend/contracts/openapi.json": "897a003cfec5109a84c40062f8f338d0a46b72b28a8338b9761486fb7294f16e",
-    "apps/desktop/src/generated/shared-contracts/openapi.d.ts": "ab5a66fc05884b76f633c3f634003dff7979eb28a3ec5c50f6477dfcc60b06bd"
+    "apps/backend/contracts/jsonschema/WorkbenchInteractionMetadata.schema.json": "e0f8ecda7a85347c4a7aca6491403d31233e82166016b3b743569e4cec636ab4",
+    "apps/backend/contracts/openapi.json": "16dcb85c8275750769fde1a4ab7abf3b636ec4f650cb39dead145799891c0569",
+    "apps/desktop/src/generated/shared-contracts/openapi.d.ts": "a5381bb3aba37a0ffcf5a3a4b289ec76093141b6e3b35de2f4ded22bf319d505"
   },
   "generator": {
     "openapi_typescript": "7.13.0",

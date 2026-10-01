@@ -9,12 +9,12 @@ from workbench_backend.assets.sources import source_url
 
 
 class AttachmentRead(BaseModel):
-    asset_id: str
-    start_line: int = Field(default=1, ge=1)
-    line_count: int = Field(default=20, ge=1, le=160)
-    start_char: int = Field(default=0, ge=0)
-    query: str | None = Field(default=None, min_length=1, max_length=200)
-    match_offset: int = Field(default=0, ge=0)
+    asset_id: str = Field(description="ID of a document selected for this input; not a host file path.")
+    start_line: int = Field(default=1, ge=1, description="One-based document_line across extracted sections; extracted_line is section-local.")
+    line_count: int = Field(default=20, ge=1, le=160, description="Maximum extracted lines or matching lines requested; follow next_read when clipped.")
+    start_char: int = Field(default=0, ge=0, description="Zero-based character offset within the first returned extracted line, used by next_read.")
+    query: str | None = Field(default=None, min_length=1, max_length=200, description="Case-insensitive literal text, not a regular expression.")
+    match_offset: int = Field(default=0, ge=0, description="Zero-based matching-line offset for the same literal query; use next_read.")
 
 
 def retained_session_id(store, thread_id):

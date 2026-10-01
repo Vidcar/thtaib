@@ -16,11 +16,12 @@ import uuid
 from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Annotated, Literal, get_args
 
 import psutil
 from langchain_core.tools import BaseTool, ToolException, tool
 from PIL import Image, UnidentifiedImageError
+from pydantic import Field
 
 from workbench_backend.agents.execution_policy import CURRENT_TOOL_CALL
 from workbench_backend.agents.harness_backend import harness_scratch_root
@@ -29,6 +30,7 @@ from workbench_backend.assets.extraction import MAX_IMAGE_BYTES
 from workbench_backend.desktop_automation.runtime import WinAppCliRuntime, WinAppRuntimeError
 from workbench_backend.paths import WorkbenchPaths
 from workbench_backend.errors import HarnessError
+from workbench_backend.agents.tool_results import OwnedToolResults, bounded_content_payload, PREVIEW_BYTES
 
 _MAX_IMAGE_PIXELS = 32_000_000
 _MAX_UI_OUTPUT_BYTES = 192_000
@@ -37,6 +39,10 @@ DESKTOP_TOOL_NAMES = (
     "desktop_list_windows", "desktop_inspect", "desktop_search", "desktop_wait",
     "desktop_invoke", "desktop_set_value", "desktop_send_keys", "desktop_screenshot",
 )
+WindowArgument = Annotated[int | None, Field(default=None, gt=0, description="Current HWND from desktop_list_windows. Required in All mode; Selected mode uses its granted identity.")]
+SelectorArgument = Annotated[str, Field(min_length=1, max_length=160, pattern=r"^[^\x00]+$", description="WinApp semantic slug, for example btn-minimize-d1a0, or observed name/automationId text. This is not CSS.")]
+OptionalSelectorArgument = Annotated[str | None, Field(default=None, min_length=1, max_length=160, pattern=r"^[^\x00]+$", description="Observed WinApp semantic slug or name/automationId text; omit for the granted window.")]
+PropertyName = Literal["Name", "AutomationId", "ControlType", "ClassName", "IsEnabled", "IsOffscreen", "BoundingRectangle", "Value", "HasKeyboardFocus", "IsKeyboardFocusable", "AcceleratorKey", "AccessKey", "HelpText", "IsPassword", "ToggleState", "IsReadOnly", "IsSelected", "ExpandCollapseState", "ScrollHorizontalPercent", "ScrollVerticalPercent", "HorizontallyScrollable", "VerticallyScrollable", "FontWeight", "FontName", "FontSize", "ForegroundColor", "IsItalic", "StrikethroughStyle"]
 
 
 class DesktopAccessScope(str, Enum):
@@ -257,12 +263,21 @@ class DesktopAutomationService:
 
     def wait(self, thread_id: str, selector: str, *, hwnd: int | None = None,
              timeout_ms: int = 5_000, value: str | None = None, gone: bool = False,
+             property_name: PropertyName | None = None,
              _bound: _ScopeState | None = None) -> dict[str, Any]:
         if not 100 <= timeout_ms <= 10_000:
             raise DesktopAutomationError("Wait duration must be 100 to 10000 ms.", code="desktop_invalid_arguments")
+        if (gone and (value is not None or property_name is not None)) or (property_name is not None and value is None):
+            raise DesktopAutomationError("Use disappearance alone, or an expected value with an optional property.", code="desktop_invalid_arguments")
+        if property_name is not None and property_name not in get_args(PropertyName):
+            raise DesktopAutomationError("Choose a supported case-sensitive WinApp property.", code="desktop_invalid_arguments")
         args = ["wait-for", _bounded_string(selector, limit=160, label="Selector"), "--timeout", str(timeout_ms)]
         if value is not None:
-            args.extend(["--value", _bounded_string(value, limit=2_000, label="Expected value")])
+            if len(value) > 2000 or "\x00" in value:
+                raise DesktopAutomationError("Expected value exceeds 2000 characters or contains NUL.", code="desktop_invalid_arguments")
+            args.extend(["--value", value])
+        if property_name is not None:
+            args.extend(["--property", _bounded_string(property_name, limit=40, label="Property name")])
         if gone:
             args.append("--gone")
         return self._target_call(thread_id, hwnd, args, timeout=timeout_ms // 1_000 + 10,
@@ -363,7 +378,13 @@ class DesktopAutomationService:
 
         def result_of(action: Callable[[], Any], *, effectful: bool = False) -> str:
             try:
-                return json.dumps(action(), ensure_ascii=False, separators=(",", ":"))
+                value = action()
+                text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+                if len(text.encode("utf-8")) > PREVIEW_BYTES:
+                    retained = OwnedToolResults(self.paths, run).retain(text, source={"family": "desktop", "scope": bound.scope.value,
+                        "window": asdict(bound.selected) if bound.selected else None, "acquisition_limit_utf8_bytes": _MAX_UI_OUTPUT_BYTES})
+                    return json.dumps(bounded_content_payload({"preview": text, "retained_result": retained}, "preview"), ensure_ascii=False)
+                return text
             except (DesktopAutomationError, WinAppRuntimeError) as exc:
                 code = exc.code if isinstance(exc, DesktopAutomationError) else "desktop_unavailable"
                 if effectful and code == "desktop_effect_uncertain":
@@ -371,52 +392,62 @@ class DesktopAutomationService:
                 raise ToolException(f"{code}: {exc}") from exc
 
         @tool("desktop_list_windows")
-        def desktop_list_windows() -> str:
+        def desktop_list_windows(query: Annotated[str | None, Field(default=None, min_length=1, max_length=160)] = None,
+                                 offset: Annotated[int, Field(ge=0)] = 0,
+                                 page_size: Annotated[int, Field(ge=1, le=50)] = 20) -> str:
             """List authorized Windows app windows; Selected mode returns only the chosen window."""
-            return result_of(lambda: {
-                "scope": service._effective_scope(thread_id, bound)[0].value,
-                "windows": [window.public_dict() for window in service.list_windows(thread_id, _bound=bound)],
-            })
+            def listing():
+                windows = [window.public_dict() for window in service.list_windows(thread_id, _bound=bound)]
+                if query:
+                    windows = [window for window in windows if query.casefold() in (window["title"] + " " + window["process_name"]).casefold()]
+                return {"scope": service._effective_scope(thread_id, bound)[0].value, "windows": windows[offset:offset + page_size],
+                    "total": len(windows), "next_offset": offset + page_size if offset + page_size < len(windows) else None}
+            return result_of(listing)
 
         @tool("desktop_inspect")
-        def desktop_inspect(hwnd: int | None = None, depth: int = 3,
-                            interactive: bool = False, selector: str | None = None) -> str:
+        def desktop_inspect(hwnd: WindowArgument = None, depth: Annotated[int, Field(ge=1, le=6)] = 3,
+                            interactive: bool = False, selector: OptionalSelectorArgument = None) -> str:
             """Read the target window's accessibility tree. In All windows mode, supply an HWND."""
             return result_of(lambda: service.inspect(thread_id, hwnd=hwnd, depth=depth,
                 interactive=interactive, selector=selector, _bound=bound))
 
         @tool("desktop_search")
-        def desktop_search(selector: str, hwnd: int | None = None, max_results: int = 20) -> str:
+        def desktop_search(selector: SelectorArgument, hwnd: WindowArgument = None, max_results: Annotated[int, Field(ge=1, le=50)] = 20) -> str:
             """Find an accessibility element in an authorized window."""
             return result_of(lambda: service.search(thread_id, selector, hwnd=hwnd,
                 max_results=max_results, _bound=bound))
 
         @tool("desktop_wait")
-        def desktop_wait(selector: str, hwnd: int | None = None, timeout_ms: int = 5_000,
-                         value: str | None = None, gone: bool = False) -> str:
+        def desktop_wait(selector: SelectorArgument, hwnd: WindowArgument = None,
+                         timeout_ms: Annotated[int, Field(ge=100, le=10_000, description="Milliseconds per call, 100–10000; timeout only means condition was not observed.")] = 5_000,
+                         value: Annotated[str | None, Field(default=None, max_length=2000, pattern=r"^[^\x00]*$", description="Expected value; empty string verifies clearing.")] = None, gone: bool = False,
+                         property_name: Annotated[PropertyName | None, Field(default=None, description="Optional installed WinApp property, e.g. Value for a field or Name; requires value. Omitted uses worker TextPattern/ValuePattern/Name fallback; that can differ from a control's value.")] = None) -> str:
             """Wait for an accessibility element or value in an authorized window."""
             return result_of(lambda: service.wait(thread_id, selector, hwnd=hwnd,
-                timeout_ms=timeout_ms, value=value, gone=gone, _bound=bound))
+                timeout_ms=timeout_ms, value=value, gone=gone, property_name=property_name, _bound=bound))
 
         @tool("desktop_invoke")
-        def desktop_invoke(selector: str, hwnd: int | None = None) -> str:
+        def desktop_invoke(selector: SelectorArgument, hwnd: WindowArgument = None) -> str:
             """Invoke an accessibility control in an authorized window; Access may require approval."""
             return result_of(lambda: service.invoke(thread_id, selector, hwnd=hwnd, _bound=bound), effectful=True)
 
         @tool("desktop_set_value")
-        def desktop_set_value(selector: str, value: str, hwnd: int | None = None) -> str:
+        def desktop_set_value(selector: SelectorArgument,
+                              value: Annotated[str, Field(max_length=4000, pattern=r"^[^\x00]*$", description="Replace the field value; empty string clears it where supported. Verify the result.")],
+                              hwnd: WindowArgument = None) -> str:
             """Set an accessible field's value in an authorized window; Access may require approval."""
             return result_of(lambda: service.set_value(thread_id, selector, value,
                 hwnd=hwnd, _bound=bound), effectful=True)
 
         @tool("desktop_send_keys")
-        def desktop_send_keys(keys: str, hwnd: int | None = None, target: str | None = None) -> str:
+        def desktop_send_keys(keys: Annotated[str, Field(min_length=1, max_length=500, pattern=r"^[^\x00]+$", description="Whitespace-separated WinApp keys: enter, tab, ctrl+shift+t; text=enter types literal enter. Uses window-targeted post-message transport; no global input.")],
+                              hwnd: WindowArgument = None, target: OptionalSelectorArgument = None) -> str:
             """Send target-window keys without global system-key input; Access may require approval."""
             return result_of(lambda: service.send_keys(thread_id, keys, hwnd=hwnd,
                 target=target, _bound=bound), effectful=True)
 
         @tool("desktop_screenshot")
-        def desktop_screenshot(hwnd: int | None = None, selector: str | None = None) -> str:
+        def desktop_screenshot(hwnd: WindowArgument = None, selector: OptionalSelectorArgument = None) -> str:
             """Capture an authorized window as a retained PNG; returns a read_file path, not image bytes."""
             def capture() -> dict[str, Any]:
                 if service.capture_sink is None:
