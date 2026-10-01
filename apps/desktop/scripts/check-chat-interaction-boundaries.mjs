@@ -921,9 +921,9 @@ function thinkingEffortControl(renderer, value = "high") {
 }
 
 async function openModelPicker(renderer) {
-  const trigger = buttonByAriaLabel(renderer, "Tune model");
-  assert.ok(trigger, "Chat model tuning is available");
-  await act(async () => trigger.props.onClick());
+  const trigger = renderer.root.findAll(node => node.type === "button" && String(node.props["aria-label"] ?? "").startsWith("Chat model:"))[0];
+  assert.ok(trigger, "Chat model menu is available");
+  if (!trigger.props["aria-expanded"]) await act(async () => trigger.props.onClick());
 }
 
 async function applyModelChanges(renderer) {

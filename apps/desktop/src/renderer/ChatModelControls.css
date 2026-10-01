@@ -11,7 +11,6 @@
 .chat-model-choice .chat-model-choice-name {display: block; min-width: 0; flex: 1;}
 .chat-model-choice-name small {display: block; color: var(--muted); font-size: var(--text-small); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--weight-regular);}
 .chat-model-controls-model small {color: var(--muted); font-weight: var(--weight-regular);}
-.chat-tuning-panel label > small {color: var(--muted); font-size: var(--text-small); font-weight: var(--weight-regular);}
 .chat-model-choice strong {display: block; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: var(--weight-medium);}
 .chat-model-quantization {flex: 0 0 auto; padding: 2px 6px; border-radius: var(--radius-control); background: var(--hover); color: var(--muted); font-size: var(--text-small); font-weight: var(--weight-regular); white-space: nowrap;}
 .chat-model-variant strong {font-size: var(--text-small); font-weight: var(--weight-regular);}
@@ -25,7 +24,9 @@
 .chat-model-controls-panel .setting-row:first-child {padding-top: 0;}
 .chat-model-controls-panel .setting-rows > :last-child {padding-bottom: 0;}
 .chat-model-controls-panel .setting-reset-actions {display: flex; flex-wrap: wrap; gap: var(--space-compact);}
-.chat-model-controls-actions {display: flex; justify-content: flex-end; flex-wrap: wrap; gap: var(--space-compact); margin: 0; padding-top: var(--pad-compact); border-top: var(--line-hairline) solid var(--border);}
+.chat-model-settings {display: grid; gap: var(--space-compact); min-width: 0; padding-top: var(--pad-compact); border-top: var(--line-hairline) solid var(--border);}
+.chat-context-line {display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-compact); min-width: 0;}
+.chat-context-memory {color: var(--muted); font-size: var(--text-small); font-variant-numeric: tabular-nums; white-space: nowrap;}
 
 .chat-model-primary {display: flex; align-items: center; min-width: 0;}
 .chat-model-primary .chat-model-choice {flex: 1;}
@@ -36,19 +37,3 @@
 .model-state-dot.is-ready {background: var(--ok);}
 .model-state-dot.is-loading {background: var(--warn);}
 .model-state-dot.is-attention {background: var(--danger);}
-.chat-tuning .menu-popover-trigger {padding-inline: var(--pad-tight); color: var(--muted);}
-.menu-popover-panel.chat-tuning-panel {display: flex; flex-direction: column; width: min(440px, calc(100vw - 24px)); overflow: hidden;}
-.chat-tuning-body {display: grid; gap: var(--space-compact); flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable;}
-.chat-tuning-heading {display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-tight) var(--space-compact);}
-.chat-tuning-heading > strong {font-weight: var(--weight-medium); color: var(--text);}
-.chat-tuning-heading > .hint {margin-left: auto; font-size: var(--text-small);}
-.chat-capacity-settings {border-top: var(--line-hairline) solid var(--border); padding-top: var(--pad-compact); min-width: 0;}
-.chat-capacity-settings .setting-row {grid-template-columns: minmax(0, 1fr); gap: var(--space-compact);}
-.chat-capacity-settings .model-context-control {display: grid; width: 100%; gap: var(--space-compact);}
-.chat-capacity-state {display: flex; flex-wrap: wrap; gap: var(--space-compact); margin: var(--space-compact) 0; padding-block: var(--pad-compact); border-block: var(--line-hairline) solid var(--border);}
-.chat-capacity-state > div {display: grid; gap: var(--space-tight); flex: 1; min-width: calc(var(--control-height) * 2);}
-.chat-capacity-state dt {color: var(--muted); font-size: var(--text-small);}
-.chat-capacity-state dd {margin: 0; color: var(--text); font-size: var(--text-small); font-variant-numeric: tabular-nums;}
-.chat-capacity-state > div[data-pending] dd {color: var(--accent);}
-.chat-capacity-settings p.hint {margin: var(--space-tight) 0; font-size: var(--text-small);}
-.chat-tuning-panel .chat-model-controls-actions {flex: 0 0 auto; background: var(--bg-panel);}

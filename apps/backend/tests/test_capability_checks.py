@@ -145,12 +145,38 @@ class CapabilityCheckTests(unittest.TestCase):
             lambda d: d.inference_identity["bundle_files"][0].update(sha256="new-weights"),
             lambda d: d.inference_identity["bundle_files"][1].update(sha256="new-projector"),
             lambda d: setattr(d.server_props, "chat_template", "different-template"),
-            lambda d: d.settings.per_request.applied.update(temperature=0.8),
-            lambda d: d.settings.per_request.applied.update(reasoning_preserve=False),
         ):
             changed = copy.deepcopy(self.manager.get_deployment(original.id))
             mutation(changed)
             self.assertEqual(capability_support(changed, "text_stream"), "untested")
+
+    def test_sampling_keeps_every_check_and_saved_thinking_drops_only_thinking(self):
+        original = self.manager.get_deployment(self.deployment.id)
+        names = (
+            "text_stream", "tools", "structured_native", "structured_tools",
+            "structured_with_tools", "structured_tools_with_tools", "reasoning",
+            "reasoning_replay", "image", "tool_image",
+        )
+        for name in names:
+            self.record(original, name)
+        current = self.manager.get_deployment(original.id)
+        sampling = copy.deepcopy(current)
+        sampling.settings.per_request.applied.update(
+            temperature=0.8, top_k=10, top_p=0.9, min_p=0.05, repeat_penalty=1.1,
+            presence_penalty=0.1, frequency_penalty=0.1, max_tokens=256,
+        )
+        for name in names:
+            self.assertEqual(capability_support(sampling, name), "passed", name)
+        thinking = copy.deepcopy(current)
+        thinking.settings.per_request.applied.update(reasoning="on", reasoning_effort="low")
+        for name in names:
+            expected = "untested" if name in {"reasoning", "reasoning_replay"} else "passed"
+            self.assertEqual(capability_support(thinking, name), expected, name)
+        history = copy.deepcopy(current)
+        history.settings.per_request.applied.update(reasoning_preserve=False)
+        for name in names:
+            expected = "untested" if name == "reasoning_replay" else "passed"
+            self.assertEqual(capability_support(history, name), expected, name)
 
     def test_external_template_bytes_invalidate_without_rehashing_weights(self):
         template = Path(self.temporary.name) / "template.jinja"
