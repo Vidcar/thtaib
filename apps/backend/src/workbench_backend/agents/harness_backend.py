@@ -1,11 +1,13 @@
 """Deep Agents filesystem / host-shell backend for one harness run (STATE-002).
 
 Live runs attach ``CompositeBackend`` so framework internals stay out of the
-user's project. A bound project uses ``LocalShellBackend`` as the default only
-when ``execute`` is presented (Windows host shell with approvals). Otherwise
-the default is ``FilesystemBackend`` so Deep Agents does not put a live
-``execute`` tool on the node. Recorded-tool mode attaches no live project,
-host-shell, or retrieval backend; knowledge routes may use scratch so
+user's project. ``LocalShellBackend`` is the default only when ``execute`` is
+presented. A project command starts in that folder. A project-free command
+starts in the resolved user profile, and its filesystem root is empty scratch
+rather than that profile. Otherwise the default is ``FilesystemBackend``
+so Deep Agents does not put a live ``execute`` tool on the node. Recorded-tool
+mode attaches no live project, host-shell, or retrieval backend; knowledge
+routes may use scratch so
 official ``memory=`` / ``skills=`` can ``download_files`` (LAB-003).
 """
 
@@ -200,14 +202,15 @@ def build_run_backend(
 ) -> BackendProtocol | None:
     """Attach a CompositeBackend, or none for recorded-tool without knowledge.
 
-    Default backend is the bound project (virtual ``/``) when one exists,
-    otherwise ``StateBackend`` so a file write cannot land in a surprise
-    directory. The project default is ``LocalShellBackend`` only when
-    ``execute`` is presented; otherwise ``FilesystemBackend``. Reserved
-    prefixes including ``/retrieved/``, ``/memories/`` and ``/skills/``
-    always route to product-data scratch. Recorded-tool still attaches no
-    live project, host-shell, or retrieval backend; knowledge routes may
-    use scratch so official ``memory=`` / ``skills=`` can ``download_files``.
+    Default backend is the bound project (virtual ``/``) when one exists.
+    A presented ``execute`` without a project still uses ``LocalShellBackend``.
+    Its command starts in the resolved user profile, and its filesystem root
+    is empty scratch so ``ls /`` cannot list that profile. Without ``execute``,
+    a projectless default is ``StateBackend``. Reserved prefixes including
+    ``/retrieved/``, ``/memories/`` and ``/skills/`` always route to
+    product-data scratch. Recorded-tool still attaches no live project,
+    host-shell, or retrieval backend; knowledge routes may use scratch so
+    official ``memory=`` / ``skills=`` can ``download_files``.
     """
 
     knowledge_routes = knowledge_routes_selected(
@@ -224,8 +227,14 @@ def build_run_backend(
     retrieved = scratch / "retrieved"
     memories = scratch / "memories"
     skills = scratch / "skills"
+    # Empty filesystem root for a project-free shell. Not the user profile.
+    shell_root = scratch / "projectless-shell-root"
+    projectless_shell = host_shell_requested(run) and not run.project_path
     if prepare_storage:
-        for directory in (large, history, retrieved, memories, skills):
+        directories = [large, history, retrieved, memories, skills]
+        if projectless_shell:
+            directories.append(shell_root)
+        for directory in directories:
             directory.mkdir(parents=True, exist_ok=True)
     routes: dict[str, BackendProtocol] = {
         "/large_tool_results/": FilesystemBackend(root_dir=large, virtual_mode=True),
@@ -241,11 +250,14 @@ def build_run_backend(
         default = StateBackend()
     elif host_shell_requested(run):
         from workbench_backend.agents.tool_results import OwnedToolResults
-        # Host shell cwd is the user-chosen project. inherit_env so PATH and
-        # the Windows host environment are the real machine, not an empty env.
+        # Commands start in the project, or in the resolved user profile when
+        # there is none. The filesystem root stays the project. Without a
+        # project it is empty scratch, so an already-allowed ls / cannot list
+        # the profile. inherit_env keeps the real Windows environment.
         # virtual_mode does not restrict execute() (LocalShellBackend docs).
         default = BoundedImageLocalShellBackend(
-            root_dir=run.project_path,
+            root_dir=run.project_path or shell_root,
+            command_cwd=None if run.project_path else Path.home().resolve(),
             virtual_mode=True,
             inherit_env=True,
             image_inputs_allowed=image_inputs_allowed,
@@ -268,7 +280,5 @@ def host_shell_requested(run: AgentRun) -> bool:
     """
 
     if run.tool_mode is ToolMode.recorded_tool:
-        return False
-    if not run.project_path:
         return False
     return "execute" in run.presented_tools

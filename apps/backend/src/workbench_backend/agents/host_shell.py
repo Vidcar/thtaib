@@ -60,8 +60,9 @@ VISUAL_ACTION_TOOLS = frozenset({
 
 HOST_SHELL_NOTE = (
     "Host shell has no isolation. Commands run through Deep Agents "
-    "LocalShellBackend with the bound project as cwd and inherit the backend "
-    "process environment. permissions= apply only to routed filesystem "
+    "LocalShellBackend. A project command starts in that project. A command "
+    "without a project starts in the resolved user profile. Commands inherit "
+    "the backend process environment. permissions= apply only to routed filesystem "
     "prefixes while the default backend is a sandbox. Access or an explicit "
     "saved permission controls execution; the application persists native interrupts and "
     "surfaces them through shared Chat."
@@ -100,7 +101,8 @@ def filesystem_permissions_for_run(run: AgentRun) -> list[FilesystemPermission] 
 def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | dict[str, Any]] | None:
     """HITL config for protected tools. The run's approval mode chooses which pauses remain.
 
-    Ask pauses selected side-effecting tools. Full access permits them.
+    Ask pauses selected side-effecting tools. Full access permits them when a project is bound.
+    A host command without a project still pauses on this gate before it runs.
     A typed question always pauses in either mode.
     """
 
@@ -121,7 +123,9 @@ def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | 
     def requires_approval(request: ToolCallRequest) -> bool:
         call = request.tool_call
         args = call.get("args", {}) if isinstance(call, dict) else getattr(call, "args", {})
-        if auto_external:
+        # Full access permits a command that starts in a bound project.
+        # A project-free command still pauses on this gate.
+        if auto_external and run.project_path:
             return False
         if saved_permission("execute", args, request):
             return False
@@ -133,7 +137,7 @@ def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | 
             "when": requires_approval,
             "description": (
                 "Host shell command (no isolation). Approve to run on this machine "
-                "in the bound project working directory."
+                + ("starting in the project." if run.project_path else "starting in the resolved user profile.")
             ),
         }
     } if host_shell_requested(run) else {}
@@ -208,12 +212,16 @@ def approval_mode_instructions(mode: str, *, compact: bool = False) -> str:
     """Explain the same per-turn policy enforced by the tool approval gates."""
 
     if compact:
-        policy = "Full access. Selected actions proceed." if mode == "full_access" else "Ask. Selected actions pause unless a saved matching permission allows them."
+        policy = (
+            "Full access. Selected actions proceed. A host command without a project still pauses."
+            if mode == "full_access"
+            else "Ask. Selected actions pause unless a saved matching permission allows them."
+        )
         return f"Access for this turn: {policy} The application handles access decisions. Task questions still need an answer. Access cannot enable unselected tools or automatic memory saving."
     if mode == "full_access":
         policy = (
-            "Access for this turn: Full access. Selected file mutations, shell commands, "
-            "and external tools proceed under this mode without a permission card. "
+            "Access for this turn: Full access. Selected file mutations and external tools "
+            "proceed under this mode without a permission card. A host command without a project still pauses before it runs. "
         )
     else:
         policy = (

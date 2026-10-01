@@ -194,7 +194,8 @@ def compact_tool(
             if name in properties:
                 properties[name]["description"] = "Project-relative path, or an explicitly supplied framework virtual path. / is the project root."
     if tool.name == "execute" and "command" in properties:
-        properties["command"]["description"] = "Host shell command in the bound project; cmd.exe syntax on Windows."
+        folder = "the project" if project_bound else "the resolved user profile"
+        properties["command"]["description"] = f"Host shell command starting in {folder}; cmd.exe syntax on Windows."
     description = COMPACT_DESCRIPTIONS.get(tool.name, tool.description)
     if framework_reader:
         paths = ", ".join(framework_read_paths or [])
@@ -444,8 +445,9 @@ class ToolDisclosureMiddleware(AgentMiddleware):
         return True
 
     async def _local_ready(self, name: str, runtime: ToolRuntime) -> bool:
-        from workbench_backend.agents.tools import FILESYSTEM_TOOL_NAMES, SHELL_TOOL_NAMES
-        if self.run.project_path or name not in {*FILESYSTEM_TOOL_NAMES, *SHELL_TOOL_NAMES, "start_preview", "stop_preview", "preview_status"}:
+        from workbench_backend.agents.tools import FILESYSTEM_TOOL_NAMES, PROJECT_FREE_HOST_COMMANDS, SHELL_TOOL_NAMES
+        project_tools = {*FILESYSTEM_TOOL_NAMES, *SHELL_TOOL_NAMES, "start_preview", "stop_preview", "preview_status"} - PROJECT_FREE_HOST_COMMANDS
+        if self.run.project_path or name not in project_tools:
             return True
         if name in {"ls", "read_file"} and (self.run.framework_read_paths or self.run.memory_version_refs or self.run.skill_version_refs or self.run.capture_routes_enabled):
             return True

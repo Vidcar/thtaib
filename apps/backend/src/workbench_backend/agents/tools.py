@@ -23,6 +23,9 @@ FILESYSTEM_TOOL_NAMES = ("ls", "read_file", "write_file", "edit_file", "glob", "
 OPTIONAL_PROJECT_READS = frozenset({"ls", "read_file", "glob", "grep"})
 KNOWLEDGE_ROUTE_READ_TOOLS = ("ls", "read_file")
 SHELL_TOOL_NAMES = ("execute", "execute_skill_script", "start_command", "command_status", "stop_command")
+# Presented This-computer commands do not need a project. Their cwd is the
+# resolved user profile. Skill scripts and preview stay project-bound.
+PROJECT_FREE_HOST_COMMANDS = frozenset({"execute", "start_command", "command_status", "stop_command"})
 PLANNING_TOOL_NAMES = ("write_todos",)
 INPUT_TOOL_NAMES = ("ask_user",)
 MEMORY_TOOL_NAMES = ("propose_memory",)
@@ -211,8 +214,9 @@ def resolve_presented_tools(
     and desktop tools are presented only when explicitly requested. Project filesystem names
     requested without a project are ``filesystem_requires_project``.
     ``ls`` / ``read_file`` are allowed without a project only when knowledge
-    or retained capture routes are attached. ``execute`` without a project is
-    ``shell_requires_project``. Project preview uses the same project requirement.
+    or retained capture routes are attached. Presented ``execute`` and the
+    owned job tools do not need a project. ``execute_skill_script`` and
+    project preview without a project are ``shell_requires_project``.
     """
 
     external = list(dict.fromkeys(external_names or []))
@@ -250,7 +254,10 @@ def resolve_presented_tools(
             else:
                 filesystem_blocked.append(name)
         elif name in SHELL_TOOL_NAMES and not project_bound:
-            shell_blocked.append(name)
+            if name in PROJECT_FREE_HOST_COMMANDS:
+                presented.append(name)
+            else:
+                shell_blocked.append(name)
         elif name in ATTACHMENT_TOOL_NAMES and not attachment_available:
             continue
         elif name in enabled:

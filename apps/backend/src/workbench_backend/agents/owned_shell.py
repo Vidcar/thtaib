@@ -5,6 +5,7 @@ import sys
 import hashlib
 import copy
 from collections.abc import Callable
+from pathlib import Path
 
 from deepagents.backends import LocalShellBackend
 from deepagents.backends.protocol import ExecuteResponse
@@ -15,17 +16,26 @@ from workbench_backend.agents.tool_results import bounded_preview, preview_with_
 
 
 class OwnedLocalShellBackend(LocalShellBackend):
-    def __init__(self, *args, cancel_requested: Callable[[], bool] | None = None, result_retainer=None, **kwargs):
+    def __init__(self, *args, cancel_requested: Callable[[], bool] | None = None, result_retainer=None,
+                 command_cwd: str | Path | None = None, **kwargs):
         self._cancel_requested = cancel_requested
         self._result_retainer = result_retainer
+        # Process start can differ from the filesystem root. ls follows cwd.
+        self._command_cwd = Path(command_cwd).resolve() if command_cwd else None
         super().__init__(*args, **kwargs)
 
+    @property
+    def command_cwd(self) -> Path:
+        return self._command_cwd or self.cwd
+
     def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
+        start = self.command_cwd
         if sys.platform != "win32":
             # Keep the pinned native non-Windows process semantics. Its
             # preview truncation must not run before application retention.
             acquisition = copy.copy(self)
             acquisition._max_output_bytes = sys.maxsize
+            acquisition.cwd = start
             result = LocalShellBackend.execute(acquisition, command, timeout=timeout)
             return self._present(command, result.output, result.exit_code,
                 timeout if timeout is not None else self._default_timeout)
@@ -35,7 +45,7 @@ class OwnedLocalShellBackend(LocalShellBackend):
         if effective_timeout <= 0:
             raise ValueError(f"timeout must be positive, got {effective_timeout}")
         try:
-            result = run_windows_command(command, cwd=self.cwd, env=self._env, timeout=effective_timeout,
+            result = run_windows_command(command, cwd=start, env=self._env, timeout=effective_timeout,
                 cancel_requested=self._cancel_requested)
         except HarnessError:
             # Unconfirmed effects retain the project reservation; never turn

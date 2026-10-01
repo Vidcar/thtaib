@@ -139,7 +139,8 @@ SourceSurface = Literal["agent-run", "chat", "lab"]
 
 HOST_SHELL_NOTE = (
     "Host shell has no isolation. Commands run through Deep Agents "
-    "LocalShellBackend with the bound project as cwd. permissions= apply to "
+    "LocalShellBackend. A project command starts in that project. A command "
+    "without a project starts in the resolved user profile. permissions= apply to "
     "routed filesystem prefixes only while the default backend is a sandbox. "
     "interrupt_on pauses dangerous execute calls; the application persists "
     "native interrupts and surfaces them through shared Chat."

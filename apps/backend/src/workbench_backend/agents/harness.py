@@ -872,8 +872,12 @@ class HarnessService:
                     publish=lambda: self._publish_control_update(run))
                 required_tools, required_connections = (always_skill_dependencies(run, self._knowledge_plan_for_run(run))
                     if run.skill_version_refs and "always" in run.input_policy.reference_loading.values() else (set(), set()))
-                from workbench_backend.agents.tools import FILESYSTEM_TOOL_NAMES, SHELL_TOOL_NAMES
-                if not run.project_path and required_tools.intersection({*FILESYSTEM_TOOL_NAMES, *SHELL_TOOL_NAMES, "start_preview", "stop_preview", "preview_status"}) - {"read_file", "ls"}:
+                from workbench_backend.agents.tools import FILESYSTEM_TOOL_NAMES, PROJECT_FREE_HOST_COMMANDS, SHELL_TOOL_NAMES
+                project_required = {
+                    *FILESYSTEM_TOOL_NAMES, *SHELL_TOOL_NAMES,
+                    "start_preview", "stop_preview", "preview_status",
+                } - {"read_file", "ls", *PROJECT_FREE_HOST_COMMANDS}
+                if not run.project_path and required_tools.intersection(project_required):
                     raise HarnessError("Required file and shell tools need a project folder.", code="filesystem_requires_project", status_code=409)
                 for name in sorted(required_tools):
                     if loader.owns(name):

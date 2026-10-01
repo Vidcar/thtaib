@@ -44,6 +44,7 @@ from workbench_backend.inference.request_projection import TOOL_CONTEXT_MARKER
 from workbench_backend.agents.tools import (
     FILESYSTEM_TOOL_NAMES,
     KNOWLEDGE_ROUTE_READ_TOOLS,
+    PROJECT_FREE_HOST_COMMANDS,
     SHELL_TOOL_NAMES,
     tool_name,
 )
@@ -744,7 +745,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 tool_call_id=call_id,
                 status="error",
             )
-        if name in SHELL_TOOL_NAMES and not self.run.project_path:
+        if name in SHELL_TOOL_NAMES and name not in PROJECT_FREE_HOST_COMMANDS and not self.run.project_path:
             return ToolMessage(
                 content=(
                     "The host shell requires a bound project folder as cwd. "

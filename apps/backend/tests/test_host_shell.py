@@ -244,6 +244,16 @@ class HostShellPolicyTests(unittest.TestCase):
         self.assertFalse(pauses("full_access", "docs_search", {"query": "notes"}))
         self.assertFalse(pauses("full_access", "write_file", {"file_path": "a.txt", "content": "text"}))
         self.assertFalse(pauses("full_access", "edit_file", {"file_path": "a.txt", "old_string": "a", "new_string": "b"}))
+        project_free = _run(project_path=None, presented=["execute"])
+        project_free.approval_mode = "full_access"
+        free_gate = interrupt_on_for_run(project_free)
+        assert free_gate is not None
+
+        class _FreeReq:
+            tool_call = {"name": "execute", "args": {"command": "echo no-project"}}
+
+        self.assertTrue(free_gate["execute"]["when"](_FreeReq()))  # type: ignore[index]
+        self.assertIn("resolved user profile", str(free_gate["execute"]["description"]))
 
     def test_pending_interrupt_and_decisions(self) -> None:
         pending = pending_interrupt_from_raw(
@@ -431,7 +441,8 @@ class HostShellHarnessTests(unittest.TestCase):
     def test_catalogue_and_project_gate(self) -> None:
         catalogue = self.client.get("/v1/agent-tools").json()["enabled"]
         self.assertIn("execute", catalogue)
-        blocked = self.client.post(
+        self._install([AIMessage(content="No command.")])
+        started = self.client.post(
             "/v1/agent-runs",
             json={
                 "deployment_id": self.deployment_id,
@@ -440,9 +451,13 @@ class HostShellHarnessTests(unittest.TestCase):
                 "input_policy": {"tool_loading": "always"},
             },
         )
-        self.assertEqual(blocked.status_code, 400, blocked.text)
-        self.assertEqual(blocked.json()["code"], "shell_requires_project")
-        self.assertEqual(blocked.json()["tools"], ["execute"])
+        self.assertEqual(started.status_code, 200, started.text)
+        body = started.json()
+        self.assertTrue(body["host_shell"]["available"])
+        self.assertEqual(body["host_shell"]["cwd"], str(Path.home().resolve()))
+        finished = wait_for_run(self.client, body["id"])
+        self.assertEqual(finished["status"], "completed", finished.get("error"))
+        self.assertFalse((Path.home() / "host-shell-approved.txt").exists())
 
     def test_unpresented_execute_does_not_run_without_hitl(self) -> None:
         """Reviewer scenario: project + echo-only must not run a scripted touch."""
@@ -932,7 +947,8 @@ class HostShellHarnessTests(unittest.TestCase):
         body = wait_for_run(self.client, started.json()["current_run"]["id"])
         self.assertEqual(body["status"], "completed", body.get("error"))
 
-    def test_chat_shell_without_project_is_rejected(self) -> None:
+    def test_chat_shell_without_project_starts_in_the_user_profile(self) -> None:
+        self._install([AIMessage(content="No command.")])
         created = self.client.post(
             "/v1/chat/conversations",
             json={"deployment_id": self.deployment_id},
@@ -943,8 +959,12 @@ class HostShellHarnessTests(unittest.TestCase):
             f"/v1/chat/conversations/{created.json()['id']}/start",
             json={"task": "Run a command.", "presented_tools": ["execute"], "input_policy": {"tool_loading": "always"}},
         )
-        self.assertEqual(response.status_code, 400, response.text)
-        self.assertEqual(response.json()["code"], "shell_requires_project")
+        self.assertEqual(response.status_code, 200, response.text)
+        finished = wait_for_run(self.client, response.json()["current_run"]["id"])
+        self.assertEqual(finished["status"], "completed", finished.get("error"))
+        self.assertTrue(finished["host_shell"]["available"])
+        self.assertEqual(finished["host_shell"]["cwd"], str(Path.home().resolve()))
+        self.assertFalse((Path.home() / "host-shell-approved.txt").exists())
 
 
 if __name__ == "__main__":
