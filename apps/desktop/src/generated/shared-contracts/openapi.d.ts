@@ -4754,6 +4754,8 @@ export interface components {
             last_tested_at?: string | null;
             /** Name */
             name: string;
+            /** Protocol Capabilities */
+            protocol_capabilities?: ("tools" | "resources")[];
             /** Tools */
             tools?: components["schemas"]["ConnectionTool"][];
             /**

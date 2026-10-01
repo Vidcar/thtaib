@@ -251,7 +251,14 @@ export const api = {
   stop: (id: string) => request<Deployment>(`/v1/deployments/${id}/stop`, { method: "POST" }),
   detach: (id: string) => request<Deployment>(`/v1/deployments/${id}/detach`, { method: "POST" }),
   healthOf: (id: string) => request<Deployment>(`/v1/deployments/${id}/health`),
-  agentTools: () => request<{ enabled: string[]; tools?: Array<{ id: string; name: string; description: string; available?: boolean; unavailable_reason?: string | null }> }>("/v1/agent-tools"),
+  agentTools: () => request<{
+    enabled: string[];
+    tools?: Array<{ id: string; name: string; description: string; group?: string; prerequisites?: string[]; opt_in?: boolean; plan_eligible?: boolean; available?: boolean; unavailable_reason?: string | null }>;
+    groups?: Array<{ id: string; label: string }>;
+    defaults?: Record<string, string[]>;
+    plan_tools?: string[];
+    plan_public_web_remote_names?: string[];
+  }>("/v1/agent-tools"),
   browserRuntime: () => request<BrowserRuntimeStatus>("/v1/browser/runtime"),
   installBrowserRuntime: () => request<BrowserRuntimeStatus>("/v1/browser/runtime/install", { method: "POST", body: "{}" }),
   browserSession: (threadId: string) => request<BrowserSessionStatus>(`/v1/browser/sessions/${encodeURIComponent(threadId)}`),

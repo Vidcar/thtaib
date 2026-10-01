@@ -136,10 +136,13 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.service.snapshot([tested.id])), 1)
         executable = Path(self.temp.name) / 'fixture.exe'
         executable.write_bytes(b'fixture; never executed')
+        self.service.store.put(tested.model_copy(update={'tools': []}))
+        self.assertTrue(self.service.available(tested.id), "a tested empty tool manifest stays ready")
+        self.assertIn("tools", self.service.get(tested.id).protocol_capabilities)
         for changed in [
             {'last_error': 'Connection test failed'},
             {'last_tested_at': None},
-            {'tools': []},
+            {'tools': [], 'protocol_capabilities': []},
             {'credential_ref': 'missing-token'},
             {'enabled': False},
             {'transport': 'stdio', 'command': str(executable.with_name('removed.exe'))},

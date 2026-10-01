@@ -10,14 +10,21 @@ import unittest
 from unittest.mock import patch
 
 from fastmcp import Client, FastMCP
+from langchain.mcp import MCPAdapter
+from mcp.server.mcpserver import MCPServer
 from pydantic import ValidationError
+from workbench_backend.agents.harness_presentation import load_connection_snapshots
+from workbench_backend.agents.setup_schemas import AgentInputPolicy
 from workbench_backend.agents.tool_disclosure import compact_tool, input_tool_schemas
 from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.agents.tool_results import OwnedToolResults
 from workbench_backend.connections.resources import connection_resource_tools, MAX_RESOURCE_BYTES, MAX_OUTPUT_BYTES, _encode_cursor
-from workbench_backend.connections.schemas import ConnectionSnapshot
+from workbench_backend.connections.schemas import ConnectionSnapshot, ConnectionWrite
+from workbench_backend.connections.service import ConnectionService
 from workbench_backend.errors import HarnessError
+from workbench_backend.inference.ids import utc_now
 from workbench_backend.paths import WorkbenchPaths
+from workbench_backend.state.store import ApplicationStore
 
 
 class ConnectionResourceTests(unittest.IsolatedAsyncioTestCase):
@@ -187,6 +194,160 @@ class ConnectionResourceTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(HarnessError):
             await operation.ainvoke({"connection_id": self.snapshot.id})
         self.assertEqual(self.opens, 0)
+
+
+class ConnectionCapabilityAdmissionTests(unittest.IsolatedAsyncioTestCase):
+    """Resource readiness follows a real test, not an empty or missing tool list."""
+
+    def setUp(self):
+        self.temp = TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.store = ApplicationStore(WorkbenchPaths(Path(self.temp.name)))
+        self.addCleanup(self.store.close)
+
+    def _service(self, server):
+        @asynccontextmanager
+        async def factory(_record, _unsupported):
+            async with MCPAdapter(Client(server)) as adapter:
+                yield adapter
+        return ConnectionService(self.store, adapter_factory=factory)
+
+    def _create(self, service, name):
+        return service.create(ConnectionWrite(name=name, kind="mcp", transport="http", url="https://example.test/mcp"))
+
+    def _admit(self, service, connection_id, loading):
+        request = SimpleNamespace(
+            connection_ids=[connection_id],
+            presented_tools=["list_connection_resources", "read_connection_resource", "read_tool_result"],
+            input_policy=AgentInputPolicy(tool_loading=loading),
+        )
+        return load_connection_snapshots(SimpleNamespace(connections=service), request, request.input_policy, SimpleNamespace())
+
+    def _run(self, snapshots):
+        return AgentRun(
+            id="resource-admission", deployment_id="fixture", task="Read the selected resource",
+            thread_id="resource-owner", connection_ids=[item.id for item in snapshots], connection_snapshots=snapshots,
+            enabled_tools=["list_connection_resources", "read_connection_resource", "read_tool_result"],
+            presented_tools=["list_connection_resources", "read_connection_resource", "read_tool_result"],
+            work_mode="work", created_at=utc_now(), updated_at=utc_now())
+
+    async def test_resource_only_connection_is_ready_in_both_loading_modes(self):
+        server = FastMCP("resource only")
+        @server.resource("audit://note")
+        def note():
+            return ("n" * 9000) + "LATE_MARKER"
+        service = self._service(server)
+        created = self._create(service, "Resource only")
+        tested = await service.test(created.id)
+        self.assertIsNone(tested.last_error)
+        self.assertEqual(tested.tools, [])
+        self.assertEqual(tested.protocol_capabilities, ["tools", "resources"])
+        reloaded = ConnectionService(self.store, adapter_factory=service.adapter_factory).get(tested.id)
+        self.assertEqual(reloaded.tools, [])
+        self.assertEqual(reloaded.protocol_capabilities, ["tools", "resources"])
+
+        for loading in ("always", "when_needed"):
+            snapshots, external = self._admit(service, tested.id, loading)
+            self.assertEqual(external, [])
+            self.assertEqual([item.id for item in snapshots], [tested.id])
+            self.assertEqual(snapshots[0].tools, [])
+
+        run = self._run(self._admit(service, tested.id, "always")[0])
+        tools = {tool.name: tool for tool in connection_resource_tools(service, run)}
+        listing = json.loads(await tools["list_connection_resources"].ainvoke({"connection_id": tested.id}))
+        self.assertEqual([item["uri"] for item in listing["resources"]], ["audit://note"])
+        read = json.loads(await tools["read_connection_resource"].ainvoke({"connection_id": tested.id, "uri": "audit://note"}))
+        retained_path = read["contents"][0]["result_path"]
+        self.assertNotIn("LATE_MARKER", read["contents"][0]["preview"])
+        found = OwnedToolResults(service.application.paths, run).read(retained_path, query="LATE_MARKER")
+        self.assertGreaterEqual(found["match_count"], 1)
+        self.assertIn("LATE_MARKER", found["matches"][0]["content"])
+        self.assertIn("read_tool_result", found["result"]["notice"])
+
+        current = service.get(tested.id)
+        service.store.put(current.model_copy(update={"version": current.version + 1}), expected_version=current.version)
+        with self.assertRaises(HarnessError) as changed:
+            await tools["list_connection_resources"].ainvoke({"connection_id": tested.id})
+        self.assertEqual(changed.exception.code, "connection_changed")
+        service.disconnect(tested.id)
+        with self.assertRaises(HarnessError) as revoked:
+            await tools["list_connection_resources"].ainvoke({"connection_id": tested.id})
+        self.assertEqual(revoked.exception.code, "connection_disabled")
+
+    async def test_empty_mixed_unsupported_and_failed_manifests_stay_distinct(self):
+        empty = self._service(FastMCP("empty"))
+        empty_record = await empty.test(self._create(empty, "Empty manifest").id)
+        self.assertIsNone(empty_record.last_error)
+        self.assertEqual(empty_record.tools, [])
+        self.assertEqual(empty_record.protocol_capabilities, ["tools", "resources"])
+        self.assertTrue(empty.available(empty_record.id))
+        empty_run = self._run(self._admit(empty, empty_record.id, "when_needed")[0])
+        empty_list = json.loads(await connection_resource_tools(empty, empty_run)[0].ainvoke({"connection_id": empty_record.id}))
+        self.assertEqual(empty_list["resources"], [])
+
+        mixed_server = FastMCP("mixed")
+        @mixed_server.tool
+        def ping() -> str:
+            """Return a fixed ping."""
+            return "pong"
+        @mixed_server.resource("audit://mixed")
+        def mixed_note():
+            return "MIXED_NOTE"
+        mixed = self._service(mixed_server)
+        mixed_record = await mixed.test(self._create(mixed, "Mixed").id)
+        self.assertEqual(mixed_record.protocol_capabilities, ["tools", "resources"])
+        self.assertEqual([tool.remote_name for tool in mixed_record.tools], ["ping"])
+        self.assertNotEqual(mixed_record.tools[0].name, "ping")
+        mixed_run = self._run(self._admit(mixed, mixed_record.id, "always")[0])
+        mixed_tools = {tool.name: tool for tool in connection_resource_tools(mixed, mixed_run)}
+        mixed_read = json.loads(await mixed_tools["read_connection_resource"].ainvoke({"connection_id": mixed_record.id, "uri": "audit://mixed"}))
+        self.assertIn("MIXED_NOTE", mixed_read["contents"][0]["preview"])
+        self.assertEqual(len(mixed.get(mixed_record.id).tools), 1)
+
+        tools_only = MCPServer(name="tools only")
+        @tools_only.tool()
+        def echo_note(text: str) -> str:
+            """Return the note."""
+            return text
+        for method in ("resources/list", "resources/read", "resources/templates/list"):
+            tools_only._lowlevel_server._request_handlers.pop(method, None)
+        unsupported = self._service(tools_only)
+        unsupported_record = await unsupported.test(self._create(unsupported, "Tools only").id)
+        self.assertIsNone(unsupported_record.last_error, unsupported_record.last_error)
+        self.assertEqual(unsupported_record.protocol_capabilities, ["tools"])
+        self.assertEqual([tool.remote_name for tool in unsupported_record.tools], ["echo_note"])
+        with self.assertRaises(HarnessError) as unsupported_error:
+            unsupported.require_resource_capability(unsupported.get(unsupported_record.id))
+        self.assertEqual(unsupported_error.exception.code, "resources_unsupported")
+        unsupported_run = self._run(self._admit(unsupported, unsupported_record.id, "always")[0])
+        with self.assertRaises(HarnessError) as listed:
+            await connection_resource_tools(unsupported, unsupported_run)[0].ainvoke({"connection_id": unsupported_record.id})
+        self.assertEqual(listed.exception.code, "resources_unsupported")
+
+        @asynccontextmanager
+        async def failing(_record, _unsupported):
+            raise RuntimeError("fixture down")
+            yield None
+        failed = ConnectionService(self.store, adapter_factory=failing)
+        failed_record = await failed.test(self._create(failed, "Down").id)
+        self.assertIn("Could not connect", failed_record.last_error)
+        self.assertNotIn("fixture down", failed_record.last_error)
+        self.assertEqual(failed_record.protocol_capabilities, [])
+        self.assertFalse(failed.available(failed_record.id))
+        with self.assertRaises(HarnessError) as readiness:
+            failed.snapshot([failed_record.id])
+        self.assertEqual(readiness.exception.code, "connection_test_required")
+
+        untested = self._create(empty, "Not tested")
+        deferred, _external = self._admit(empty, untested.id, "when_needed")
+        self.assertEqual(deferred[0].tools, [])
+        with self.assertRaises(HarnessError) as eager:
+            self._admit(empty, untested.id, "always")
+        self.assertEqual(eager.exception.code, "connection_test_required")
+        untested_run = self._run(deferred)
+        with self.assertRaises(HarnessError) as not_ready:
+            await connection_resource_tools(empty, untested_run)[0].ainvoke({"connection_id": untested.id})
+        self.assertEqual(not_ready.exception.code, "connection_test_required")
 
 
 if __name__ == "__main__":

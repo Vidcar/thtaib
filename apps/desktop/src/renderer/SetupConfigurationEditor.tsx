@@ -7,14 +7,14 @@ import { HoverHelp } from "./HoverHelp";
 import { Notice } from "./Notice";
 import { Icon } from "./Icon";
 import { useSetupPreview } from "./effectiveSettings";
-import { browserToolNames, desktopToolNames, previewToolNames, defaultNextTurnTools } from "./chatSetup";
+import { standardToolSelection, type ToolCatalogueProjection } from "./chatSetup";
 import type { Deployment, KnowledgeEntry, ModelBundle, RunProfile } from "./types";
 import type { AgentSetup, SetupConfiguration } from "./workspaceApi";
 import type { ReferenceLoading } from "./agentInputPolicy";
 import "./SetupConfigurationEditor.css";
 
-interface SelectionOption { id: string; name: string; description?: string; available?: boolean; unavailable_reason?: string | null }
-export interface SetupCatalogue {
+interface SelectionOption { id: string; name: string; description?: string; available?: boolean; unavailable_reason?: string | null; group?: string; prerequisites?: string[]; opt_in?: boolean; plan_eligible?: boolean }
+export interface SetupCatalogue extends ToolCatalogueProjection {
   deployments: Deployment[]; bundles: ModelBundle[]; profiles: RunProfile[]; knowledge: KnowledgeEntry[];
   tools: SelectionOption[]; connections: SelectionOption[];
   toolCatalogueStatus?: "loading" | "ready" | "error";
@@ -45,6 +45,10 @@ export function useSetupCatalogue(active = true) {
         profiles: profiles.status === "fulfilled" ? profiles.value : [],
         knowledge: knowledge.status === "fulfilled" ? knowledge.value : [],
         tools: tools.status === "fulfilled" ? tools.value.tools ?? [] : [],
+        groups: tools.status === "fulfilled" ? tools.value.groups ?? [] : [],
+        defaults: tools.status === "fulfilled" ? tools.value.defaults : undefined,
+        plan_tools: tools.status === "fulfilled" ? tools.value.plan_tools : undefined,
+        plan_public_web_remote_names: tools.status === "fulfilled" ? tools.value.plan_public_web_remote_names : undefined,
         connections: connections.status === "fulfilled" ? connections.value.map(item => ({ ...item, available: !!(item.enabled && item.last_tested_at && !item.last_error) })) : [],
         toolCatalogueStatus: tools.status === "fulfilled" ? "ready" : "error",
       });
@@ -106,16 +110,28 @@ export function SetupConfigurationEditor({ value, onChange, catalogue, disabled 
   const modelOptions = <>{catalogue.profiles.filter(item => item.bundle_id).map(item => <option key={item.id} value={`configuration:${item.id}`}>{catalogue.bundles.find(bundle => bundle.id === item.bundle_id)?.display_name ?? item.bundle_name ?? "Model"} · {item.display_name}</option>)}{catalogue.deployments.filter(item => item.scope === "connected").map(item => <option key={item.id} value={`deployment:${item.id}`}>{item.display_name} · connected</option>)}</>;
   const visible = (section: NonNullable<typeof sections>[number]) => !sections || sections.includes(section);
   const knowledgeOptions = (kind: KnowledgeEntry["kind"]) => catalogue.knowledge.filter(entry => entry.kind === kind).map(entry => ({ id: entry.id, name: entry.display_name || "Untitled", available: entry.enabled !== false && entry.active !== false && entry.scope_bound !== false, unavailable_reason: entry.scope_bound === false ? "Its project or agent is unavailable." : "Disabled or removed in Knowledge." }));
-  const selectedTools = filtered.presented_tools ?? defaultNextTurnTools(catalogue.tools.map(tool => tool.id), true, true, true);
-  const toolGroups = [
-    { name: "Project files", names: ["ls", "read_file", "glob", "grep", "write_file", "edit_file", "read_attachment", "search_knowledge"] as readonly string[] },
-    { name: "Host shell", names: ["execute", ...previewToolNames] as readonly string[] },
-    { name: "Browser", names: browserToolNames as readonly string[] },
-    { name: "Windows control", names: desktopToolNames as readonly string[] },
+  const projectBound = Boolean(projectId) || filtered.requires_project === true;
+  const catalogueBlocked = catalogue.toolCatalogueStatus === "loading" || catalogue.toolCatalogueStatus === "error";
+  const standardTools = catalogueBlocked ? null : standardToolSelection(catalogue, projectBound, false, false);
+  const selectedTools = filtered.presented_tools ?? standardTools ?? [];
+  const groupLabels: Record<string, string> = { project: "Project files", shell: "Host shell", browser: "Browser", windows: "Windows control", preview: "Preview", diagnostics: "Diagnostics", planning: "Planning", input: "Questions", knowledge: "Knowledge", connections: "Connections" };
+  const groupOrder = [...(catalogue.groups ?? []).map(group => group.id)];
+  for (const tool of catalogue.tools) if (tool.group && !groupOrder.includes(tool.group)) groupOrder.push(tool.group);
+  const labelFor = (id: string) => catalogue.groups?.find(group => group.id === id)?.label ?? groupLabels[id] ?? id;
+  const grouped = [
+    ...groupOrder.map(id => ({ name: labelFor(id), tools: catalogue.tools.filter(tool => tool.group === id) })).filter(group => group.tools.length),
+    ...((() => { const other = catalogue.tools.filter(tool => !tool.group); return other.length ? [{ name: "Other tools", tools: other }] : []; })()),
   ];
-  const groupNames = new Set(toolGroups.flatMap(group => [...group.names]));
-  const grouped = [...toolGroups, { name: "Other tools", names: catalogue.tools.filter(tool => !groupNames.has(tool.id)).map(tool => tool.id) }];
-  const selectTools = (names: string[], enabled: boolean) => patch({ presented_tools: enabled ? [...new Set([...selectedTools, ...names])] : selectedTools.filter(name => !names.includes(name)) });
+  const selectTools = (names: string[], enabled: boolean) => {
+    if (catalogueBlocked) return;
+    const base = filtered.presented_tools ?? standardTools;
+    if (base == null) return;
+    patch({ presented_tools: enabled ? [...new Set([...base, ...names])] : base.filter(name => !names.includes(name)) });
+  };
+  const explicitOptIn = (filtered.presented_tools ?? []).flatMap(name => {
+    const tool = catalogue.tools.find(item => item.id === name);
+    return tool?.opt_in ? [tool.name || name] : [];
+  });
   const knowledgeCount = (filtered.memory_entry_ids?.length ?? 0) + (filtered.skill_entry_ids?.length ?? 0) + (filtered.protected_instruction_entry_ids?.length ?? 0);
   const helperIds = filtered.helper_agent_ids ?? [];
   const helpersToAdd = agentOptions.filter(agent => agent.id !== currentAgentId && agent.active !== false && !helperIds.includes(agent.id) && `${agent.name} ${agent.role ?? ""} ${setupModelLabel(agent.configuration, catalogue)}`.toLowerCase().includes(helperQuery.toLowerCase()));
@@ -134,11 +150,9 @@ export function SetupConfigurationEditor({ value, onChange, catalogue, disabled 
         <SettingRow label="Tool definitions" help="Keep selected tools discoverable and load definitions when needed. Pins always include individual definitions."><select aria-label="Agent tool definition loading" disabled={disabled} value={policy.tool_loading ?? "when_needed"} onChange={event => patchPolicy({ ...policy, tool_loading: event.target.value as "when_needed" | "always" })}><option value="when_needed">When needed</option><option value="always">Always include all</option></select></SettingRow>
         <div className="actions"><button type="button" disabled={disabled} onClick={() => patch({ presented_tools: null })}>Standard tools</button><button type="button" disabled={disabled} onClick={() => patch({ presented_tools: [] })}>Turn all off</button></div>
         {catalogue.toolCatalogueStatus === "loading" ? <p className="hint" role="status">Loading tool choices…</p> : catalogue.toolCatalogueStatus === "error" ? <Notice tone="warn">Tool choices unavailable. Open Settings or retry this screen.</Notice> : null}
-        {grouped.map(group => {
-          const options = catalogue.tools.filter(tool => group.names.includes(tool.id));
-          if (!options.length) return null;
-          return <ToolGroupChoices key={group.name} name={group.name} tools={options} selected={selectedTools} disabled={disabled} onChange={selectTools} pins={policy.pinned_tools ?? []} onPin={(name, pin) => patchPolicy({ ...policy, pinned_tools: pin ? [...new Set([...(policy.pinned_tools ?? []), name])] : (policy.pinned_tools ?? []).filter(tool => tool !== name) })} />;
-        })}
+        {explicitOptIn.length ? <Notice tone="warn">This saved selection includes tools that Standard leaves off ({explicitOptIn.join(", ")}). Review them before use. Saving again keeps this list as you set it.</Notice> : null}
+        {filtered.presented_tools == null && standardTools == null && catalogue.toolCatalogueStatus === "ready" ? <Notice tone="warn">Tool defaults are unavailable, so changing a checkbox will not create a selection.</Notice> : null}
+        {grouped.map(group => <ToolGroupChoices key={group.name} name={group.name} tools={group.tools} selected={selectedTools} disabled={disabled || (filtered.presented_tools == null && standardTools == null)} onChange={selectTools} pins={policy.pinned_tools ?? []} onPin={(name, pin) => patchPolicy({ ...policy, pinned_tools: pin ? [...new Set([...(policy.pinned_tools ?? []), name])] : (policy.pinned_tools ?? []).filter(tool => tool !== name) })} />)}
         {unavailableTools.length ? <details className="setup-unavailable-selections" open><summary>Unavailable tools <small>{unavailableTools.length} selected</small></summary>{unavailableTools.map(name => <CompactSwitch key={name} label={name} checked disabled={disabled} meta="Remove this choice or restore its connection in Settings." onChange={() => selectTools([name], false)} />)}</details> : null}
         <details><summary>Connections <small>{selectedConnections.length ? `${selectedConnections.length} selected` : "None selected"}</small></summary>{connectionOptions.map(connection => <CompactSwitch key={connection.id} label={connection.name} checked={selectedConnections.includes(connection.id)} disabled={disabled} onChange={checked => patch({ connection_ids: checked ? [...new Set([...selectedConnections, connection.id])] : selectedConnections.filter(id => id !== connection.id) })} meta={connection.available === false ? "Needs a successful test in Settings" : undefined} />)}{!connectionOptions.length ? <p className="hint">Add connections in Settings.</p> : null}</details>
       </details> : null}

@@ -319,7 +319,7 @@ async function sameBundleVariantsLoadSeparately(Panel) {
 
 async function agentOwnedSettings(Editor) {
   const edits = [];
-  const catalogue = { bundles: [{ id: "model", display_name: "Local model" }], profiles: [{ id: "fixed-config", bundle_id: "model", display_name: "Precise" }], deployments: [], connections: [], tools: [{ id: "execute", name: "Run shell" }, { id: "browser_navigate", name: "Navigate" }], knowledge: [{ kind: "protected_instruction", id: "instruction", current_version_id: "instruction_v1", display_name: "Editorial rules", enabled: true }] };
+  const catalogue = { bundles: [{ id: "model", display_name: "Local model" }], profiles: [{ id: "fixed-config", bundle_id: "model", display_name: "Precise" }], deployments: [], connections: [], groups: [{ id: "shell", label: "Host shell" }, { id: "browser", label: "Browser" }], tools: [{ id: "execute", name: "Run shell", group: "shell" }, { id: "browser_navigate", name: "Navigate", group: "browser" }], knowledge: [{ kind: "protected_instruction", id: "instruction", current_version_id: "instruction_v1", display_name: "Editorial rules", enabled: true }] };
   globalThis.fetch = async (url, init) => {
     assert.ok(String(url).endsWith("/v1/setup-resolution"));
     assert.equal(JSON.parse(init.body).editing_layer, "agent");
@@ -354,12 +354,19 @@ async function toolGroupSelection(Editor) {
   const edits = [];
   const catalogue = {
     bundles: [], profiles: [], deployments: [], connections: [], knowledge: [], toolCatalogueStatus: "ready",
+    groups: [
+      { id: "project", label: "Project files" },
+      { id: "shell", label: "Host shell" },
+      { id: "browser", label: "Browser" },
+      { id: "diagnostics", label: "Diagnostics" },
+    ],
+    defaults: { "project-noknowledge-noattachments-nocapture": ["ls", "read_file"] },
     tools: [
-      { id: "ls", name: "List files", description: "List authorized project files." },
-      { id: "read_file", name: "Read files", description: "Read authorized project files." },
-      { id: "execute", name: "Run shell" },
-      { id: "browser_navigate", name: "Navigate" },
-      { id: "echo", name: "Echo", available: false, unavailable_reason: "Restore its connection in Settings." },
+      { id: "ls", name: "List files", description: "List authorized project files.", group: "project" },
+      { id: "read_file", name: "Read files", description: "Read authorized project files.", group: "project" },
+      { id: "execute", name: "Run shell", group: "shell", opt_in: true },
+      { id: "browser_navigate", name: "Navigate", group: "browser", opt_in: true },
+      { id: "echo", name: "Echo", group: "diagnostics", opt_in: true, available: false, unavailable_reason: "Restore its connection in Settings." },
     ],
   };
   globalThis.fetch = async (url, init) => {
@@ -370,7 +377,7 @@ async function toolGroupSelection(Editor) {
   function Host(props) {
     const [value, setValue] = React.useState({ instructions: "Keep this draft", presented_tools: ["read_file", "execute", "missing_tool"] });
     current = value;
-    return React.createElement(Editor, { ...props, value, sections: ["tools"], onChange: next => { edits.push(next); setValue(next); } });
+    return React.createElement(Editor, { ...props, value, sections: ["tools"], projectId: "project", onChange: next => { edits.push(next); setValue(next); } });
   }
   const disclosure = name => renderer.root.findAllByType("button").find(node => node.props.className === "setup-tool-group-expand" && text(node).startsWith(name));
   const choice = name => renderer.root.findByProps({ role: "switch", "aria-label": name });

@@ -30,6 +30,8 @@ class ConnectionRecord(ConnectionSnapshot):
     credential_present: bool = False
     last_tested_at: str | None = None
     last_error: str | None = None
+    # Confirmed by the last successful test. Empty means a legacy or untested record.
+    protocol_capabilities: list[Literal["tools", "resources"]] = Field(default_factory=list)
     created_at: str
     updated_at: str
 

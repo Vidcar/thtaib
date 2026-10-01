@@ -88,6 +88,9 @@ def connection_resource_tools(service, run):
         continuation = _decode_cursor(cursor, binding) if cursor else {"page": None, "offset": 0}
         async with locks[connection_id]:
             record = await asyncio.to_thread(service._revalidate, snapshot)
+            require = getattr(service, "require_resource_capability", None)
+            if require is not None:
+                await asyncio.to_thread(require, record)
             unsupported = []
             async with service._adapter(record, unsupported) as adapter:
                 client = getattr(adapter, "client", None)
@@ -129,6 +132,9 @@ def connection_resource_tools(service, run):
         snapshot = selected(connection_id, "read_connection_resource")
         async with locks[connection_id]:
             record = await asyncio.to_thread(service._revalidate, snapshot)
+            require = getattr(service, "require_resource_capability", None)
+            if require is not None:
+                await asyncio.to_thread(require, record)
             unsupported = []
             async with service._adapter(record, unsupported) as adapter:
                 client = getattr(adapter, "client", None)
@@ -144,7 +150,7 @@ def connection_resource_tools(service, run):
                 await asyncio.to_thread(service._revalidate, snapshot)
                 if len(contents) > 100:
                     raise ToolException("resource_contents_limit: The resource returned too many separate contents. Request a smaller resource.")
-                from workbench_backend.agents.tool_results import utf8_prefix
+                from workbench_backend.agents.tool_results import continuation_notice, utf8_prefix
                 total = sum(len(item.text.encode("utf-8")) for item in contents if isinstance(getattr(item, "text", None), str))
                 if total > MAX_RESOURCE_BYTES:
                     raise ToolException(f"resource_size_limit: The resource exceeds the {MAX_RESOURCE_BYTES}-byte text acquisition limit; no complete result is claimed. Request a smaller resource.")
@@ -185,7 +191,7 @@ def connection_resource_tools(service, run):
                         "connection_version": snapshot.version, "uri": uri})
                     return json.dumps({"connection_id": connection_id, "connection_version": snapshot.version,
                         "result_path": metadata["path"], "acquired_text_bytes": acquired,
-                        "notice": "Full resource-result metadata is retained; read_tool_result retrieves it."})
+                        "notice": continuation_notice(run)})
                 return output
 
     return [StructuredTool.from_function(name="list_connection_resources", coroutine=list_resources, args_schema=_selected_schema(ResourceListInput, snapshots),

@@ -6723,6 +6723,17 @@
             "title": "Name",
             "type": "string"
           },
+          "protocol_capabilities": {
+            "items": {
+              "enum": [
+                "tools",
+                "resources"
+              ],
+              "type": "string"
+            },
+            "title": "Protocol Capabilities",
+            "type": "array"
+          },
           "tools": {
             "items": {
               "$ref": "#/components/schemas/ConnectionTool"

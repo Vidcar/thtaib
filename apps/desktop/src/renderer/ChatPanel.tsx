@@ -8,7 +8,7 @@ import { HoverHelp } from "./HoverHelp";
 
 import { api, ApiError, request } from "./api";
 import { workspaceApi, type ProjectRecord, type AgentSetup, type SetupConfiguration, type ResolvedSetupSelection, type ChatReadiness } from "./workspaceApi";
-import { browserToolNames, buildChatConfiguration, creationConfiguration, defaultNextTurnTools, executionConfiguration, setupOverrides, type ChatWorkspaceLaunch } from "./chatSetup";
+import { browserToolNames, buildChatConfiguration, creationConfiguration, executionConfiguration, setupOverrides, standardToolSelection, type ChatWorkspaceLaunch, type ToolCatalogueProjection } from "./chatSetup";
 import { ApprovalModeControl, approvalModeLabel, approvalModeOf, type ApprovalMode } from "./ApprovalModeControl";
 import { Icon } from "./Icon";
 import type { ChatLaunch, ConversationListActions, HistoryNotice } from "./WorkbenchSidebar";
@@ -728,7 +728,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const [deploymentsLoaded, setDeploymentsLoaded] = useState(false);
   const [bundlesLoaded, setBundlesLoaded] = useState(false);
   const [profiles, setProfiles] = useState<RunProfile[]>([]);
-  const [enabledTools, setEnabledTools] = useState<string[]>([]);
+  const [toolCatalogue, setToolCatalogue] = useState<ToolCatalogueProjection | null>(null);
   const [deploymentId, setDeploymentId] = useState("");
   const [embeddingDeploymentId, setEmbeddingDeploymentId] = useState("");
   const [profileId, setProfileId] = useState("");
@@ -1072,7 +1072,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         setProfiles(next);
         setProfileId(current => { const id = next.some(profile => profile.id === current) ? current : ""; profileIdRef.current = id; return id; });
       }),
-      readCatalogue("Tools", api.agentTools, next => setEnabledTools(next.enabled)),
+      readCatalogue("Tools", api.agentTools, setToolCatalogue),
       readCatalogue("Chats", () => api.chatConversations(false, true), next => setConversations(newestConversationFirst(reconcileHistory(next)))),
       readCatalogue("Knowledge", api.knowledgeEntries, setKnowledgeEntries),
       refreshDefaults(),
@@ -1357,8 +1357,11 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }, [conversation?.id, conversation?.deployment_id, conversation?.model_configuration_id, conversation?.startup_overrides,
     selectionLoading, setupResolving, runBusy, sending, pendingSubmit, deploymentId, profileId, startupOverrides]);
   const selectedDocumentIds = documentAssetIds ?? conversation?.document_asset_ids ?? [];
-  const tools = selectedTools ?? applicationDefaults.current?.configuration.presented_tools ?? defaultNextTurnTools(enabledTools, Boolean(projectId || projectPath), Boolean(selectedKnowledgeIds.length), Boolean(attachmentIds.length || selectedDocumentIds.length));
-  const browserEnabled = workMode === "work" && tools.some(name => browserToolNames.some(browserName => browserName === name));
+  const inheritedTools = applicationDefaults.current?.configuration.presented_tools;
+  const standardTools = standardToolSelection(toolCatalogue, Boolean(projectId || projectPath), Boolean(selectedKnowledgeIds.length), Boolean(attachmentIds.length || selectedDocumentIds.length));
+  const tools = selectedTools ?? (Array.isArray(inheritedTools) ? inheritedTools : standardTools ?? []);
+  const browserGroups = new Set((toolCatalogue?.tools ?? []).filter(tool => tool.group === "browser").map(tool => tool.id));
+  const browserEnabled = workMode === "work" && tools.some(name => browserGroups.has(name) || browserToolNames.some(browserName => browserName === name));
   useBrowserRailActivity(conversation?.thread_id ?? null, browserEnabled && (!props.activeTab || props.activeTab === "chat"), setBrowserActive);
   const deployHealthNotice = chatDeployHealthNotice(conversation, selectedDeployment);
   const canObserveInteraction = Boolean(interactionThreadId && conversation);
