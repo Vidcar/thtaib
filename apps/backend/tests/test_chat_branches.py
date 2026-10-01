@@ -21,7 +21,6 @@ from tests.scripted_model import (
 from tests.support import close_workbench_sqlite, offline_workbench_client, wait_for_run
 from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.app import create_app
-from workbench_backend.lab.store import LabStore
 from workbench_backend.state.checkpointer import conversation_state, open_sqlite_checkpointer
 
 
@@ -107,26 +106,30 @@ class ChatBranchTests(unittest.TestCase):
         self.assertNotEqual(original["thread_id"], branch["thread_id"])
         self.assertNotIn(branch["id"], [conversation["id"]])
 
-    def test_branch_fault_cleans_workspace_record_directory_and_checkpoint_thread(self) -> None:
+    def test_branch_fault_cleans_checkpoint_thread_and_does_not_copy_the_project(self) -> None:
         self.install_model([AIMessage(content="answer")])
         conversation = self.create_conversation()
         run = self.start_turn(conversation["id"], "task")
-        real_put_workspace = LabStore.put_workspace
+        app_store = self.app.state.app_store
+        real_put = type(app_store).put_conversation
 
-        def put_then_fail(store, workspace):
-            real_put_workspace(store, workspace)
-            raise RuntimeError("boom after workspace record")
+        def put_then_fail(store, item):
+            if item.id == "chat_fail":
+                raise RuntimeError("boom after branch record")
+            return real_put(store, item)
 
-        with patch("workbench_backend.chat.branches.new_id", side_effect=["chat_fail", "thread_fail", "ws_fail"]):
-            with patch.object(LabStore, "put_workspace", side_effect=put_then_fail, autospec=True):
+        with patch("workbench_backend.chat.branches.new_id", side_effect=["chat_fail", "thread_fail"]):
+            with patch.object(type(app_store), "put_conversation", side_effect=put_then_fail, autospec=True):
                 with self.assertRaises(RuntimeError):
                     self.client.post(
                         f"/v1/chat/conversations/{conversation['id']}/branches",
                         json={"source_run_id": run["id"]},
                     )
 
-        self.assertIsNone(self.app.state.lab.store.get_workspace("ws_fail"))
-        self.assertFalse((self.app.state.manager.paths.workspaces / "ws_fail").exists())
+        self.assertIsNone(self.app.state.app_store.get_conversation("chat_fail"))
+        workspaces = self.app.state.manager.paths.workspaces
+        self.assertFalse(workspaces.exists() and any(workspaces.iterdir()))
+        self.assertEqual((self.project / "seed.txt").read_text(encoding="utf-8"), "original")
         saver = open_sqlite_checkpointer(self.app.state.manager.paths.checkpoints_db)
         self.assertEqual(list(saver.list({"configurable": {"thread_id": "thread_fail", "checkpoint_ns": ""}})), [])
 
@@ -201,23 +204,37 @@ class ChatBranchTests(unittest.TestCase):
         self.assertIsNone(body["regenerate_reason"])
         self.assertFalse((self.root / "inspection-must-not-create").exists())
 
-    def test_regenerate_unavailable_without_final_project_snapshot(self) -> None:
-        self.install_model([AIMessage(content="answer")])
+    def test_regenerate_without_project_copy_stays_on_the_same_chat(self) -> None:
+        self.install_model([AIMessage(content="answer"), AIMessage(content="regenerated answer")])
         conversation = self.create_conversation()
         run = AgentRun.model_validate(self.start_turn(conversation["id"], "task"))
+        self.assertIsNone(run.final_snapshot_id)
         self.app.state.app_store.put_run(run.model_copy(update={"final_snapshot_id": None}))
         self.app.state.harness._runs[run.id] = run.model_copy(update={"final_snapshot_id": None})
 
-        response = self.client.get(
+        actions = self.client.get(
             f"/v1/chat/conversations/{conversation['id']}/replies/{run.id}/actions"
         )
+        self.assertEqual(actions.status_code, 200, actions.text)
+        self.assertTrue(actions.json()["regenerate_available"], actions.text)
+        self.assertIsNone(actions.json()["regenerate_reason"])
 
+        response = self.client.post(
+            f"/v1/chat/conversations/{conversation['id']}/branches",
+            json={"source_run_id": run.id, "mode": "regenerate"},
+        )
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
-        self.assertFalse(body["regenerate_available"])
-        self.assertEqual(body["regenerate_reason"], "This turn has no matching retained project snapshot.")
+        self.assertEqual(body["id"], conversation["id"])
+        self.assertNotEqual(body["current_run_id"], run.id)
+        chats = self.app.state.chat.store.list_conversations(include_archived=True)
+        self.assertEqual([item.id for item in chats], [conversation["id"]])
+        self.assertEqual((self.project / "seed.txt").read_text(encoding="utf-8"), "original")
+        workspaces = self.app.state.manager.paths.workspaces
+        self.assertFalse(workspaces.exists() and any(workspaces.iterdir()))
+        self.assertEqual(list(self.app.state.manager.paths.snapshots.glob("snap_*")), [])
 
-    def test_regenerate_replaces_answer_in_branch_without_new_human_or_tool_effects(self) -> None:
+    def test_regenerate_stays_on_the_same_chat_without_new_tool_effects(self) -> None:
         self.install_model([
             AIMessage(
                 content="",
@@ -239,25 +256,28 @@ class ChatBranchTests(unittest.TestCase):
             json={"source_run_id": run["id"], "mode": "regenerate"},
         )
         self.assertEqual(response.status_code, 200, response.text)
-        branch = response.json()
-        regen_run_id = branch["current_run_id"]
-        regen = wait_for_run(self.client, regen_run_id)
+        same = response.json()
+        self.assertEqual(same["id"], conversation["id"])
+        regen = wait_for_run(self.client, same["current_run_id"])
         self.assertEqual(regen["status"], "completed", regen)
         self.assertEqual(regen["presented_tools"], [])
         self.assertEqual(regen["tool_invocations"], [])
         self.assertEqual(regen["parent_run_id"], run["id"])
+        self.assertIsNone(regen["starting_snapshot_id"])
+        self.assertIsNone(regen["final_snapshot_id"])
         self.app.state.chat.observe_terminal_run(AgentRun.model_validate(regen))
-        branch = self.client.get(f"/v1/chat/conversations/{branch['id']}").json()
-        messages = branch["transcript"]
+        viewed = self.client.get(f"/v1/chat/conversations/{conversation['id']}").json()
+        messages = viewed["transcript"]
         self.assertEqual([item["role"] for item in messages].count("user"), 1)
-        self.assertEqual([item["role"] for item in messages].count("assistant"), 1)
-        self.assertEqual(messages[-1]["content"], "regenerated answer")
-        self.assertNotIn("original answer", str(messages))
-        state = conversation_state(self.app.state.manager.paths.checkpoints_db, branch["thread_id"])
+        self.assertIn("regenerated answer", str(messages))
+        state = conversation_state(self.app.state.manager.paths.checkpoints_db, viewed["thread_id"])
         self.assertEqual(sum(1 for item in state.get("messages", []) if getattr(item, "type", None) == "human"), 1)
-        original = self.client.get(f"/v1/chat/conversations/{conversation['id']}").json()
-        self.assertIn("original answer", str(original["transcript"]))
-        self.assertNotIn("regenerated answer", str(original["transcript"]))
+        chats = self.app.state.chat.store.list_conversations(include_archived=True)
+        self.assertEqual([item.id for item in chats], [conversation["id"]])
+        self.assertEqual((self.project / "seed.txt").read_text(encoding="utf-8"), "original")
+        workspaces = self.app.state.manager.paths.workspaces
+        self.assertFalse(workspaces.exists() and any(workspaces.iterdir()))
+        self.assertEqual(list(self.app.state.manager.paths.snapshots.glob("snap_*")), [])
 
     def test_continue_branch_retains_file_created_by_completed_run(self) -> None:
         self.install_model([
@@ -270,14 +290,15 @@ class ChatBranchTests(unittest.TestCase):
         conversation = self.create_conversation(approval_mode="full_access")
         run = self.start_turn(conversation["id"], "Create the result file.", presented_tools=["write_file"])
         self.assertEqual(run["status"], "completed", run)
+        self.assertIsNone(run["final_snapshot_id"])
         self.assertEqual((self.project / "created.txt").read_text(encoding="utf-8"), "safe result")
-        snapshot_tree = self.app.state.manager.paths.snapshots / run["final_snapshot_id"] / "tree"
-        self.assertEqual((snapshot_tree / "created.txt").read_text(encoding="utf-8"), "safe result")
 
         branched = self.client.post(f"/v1/chat/conversations/{conversation['id']}/branches",
             json={"source_run_id": run["id"], "mode": "continue"})
         self.assertEqual(branched.status_code, 200, branched.text)
-        self.assertEqual((Path(branched.json()["project_path"]) / "created.txt").read_text(encoding="utf-8"), "safe result")
+        self.assertEqual(Path(branched.json()["project_path"]).resolve(), self.project.resolve())
+        self.assertEqual((self.project / "created.txt").read_text(encoding="utf-8"), "safe result")
+        self.assertEqual(list(self.app.state.manager.paths.snapshots.glob("snap_*")), [])
 
     def test_regenerate_final_store_failure_preserves_accepted_run_resources(self) -> None:
         self.install_model([AIMessage(content="original answer"), AIMessage(content="regenerated answer")])
@@ -287,34 +308,34 @@ class ChatBranchTests(unittest.TestCase):
         real_put = type(app_store).put_conversation
 
         def put_or_fail(store, item):
-            saved = real_put(store, item)
-            if item.id == "chat_regen_fail" and item.current_run_id:
+            if item.id == conversation["id"] and item.current_run_id not in {None, run["id"]}:
                 raise RuntimeError("final branch store failed")
-            return saved
+            return real_put(store, item)
 
-        with patch("workbench_backend.chat.branches.new_id", side_effect=["chat_regen_fail", "thread_regen_fail", "ws_regen_fail"]):
-            with patch.object(type(app_store), "put_conversation", side_effect=put_or_fail, autospec=True):
-                with self.assertRaises(RuntimeError):
-                    self.client.post(
-                        f"/v1/chat/conversations/{conversation['id']}/branches",
-                        json={"source_run_id": run["id"], "mode": "regenerate"},
-                    )
+        with patch.object(type(app_store), "put_conversation", side_effect=put_or_fail, autospec=True):
+            with self.assertRaises(RuntimeError):
+                self.client.post(
+                    f"/v1/chat/conversations/{conversation['id']}/branches",
+                    json={"source_run_id": run["id"], "mode": "regenerate"},
+                )
 
-        staged = self.app.state.app_store.get_conversation("chat_regen_fail")
-        self.assertIsNotNone(staged)
-        assert staged is not None
+        stored = self.app.state.app_store.get_conversation(conversation["id"])
+        self.assertIsNotNone(stored)
+        assert stored is not None
+        chats = self.app.state.chat.store.list_conversations(include_archived=True)
+        self.assertEqual([item.id for item in chats], [conversation["id"]])
         accepted = [
             item for item in self.app.state.harness.list_runs()
-            if item.parent_run_id == run["id"] and item.thread_id == "thread_regen_fail"
+            if item.parent_run_id == run["id"] and item.resume_checkpoint_id
         ]
         self.assertEqual(len(accepted), 1)
-        self.assertEqual(staged.current_run_id, accepted[0].id)
-        self.assertTrue((self.app.state.manager.paths.workspaces / "ws_regen_fail").exists())
+        self.assertNotEqual(stored.current_run_id, accepted[0].id)
+        workspaces = self.app.state.manager.paths.workspaces
+        self.assertFalse(workspaces.exists() and any(workspaces.iterdir()))
+        self.assertEqual((self.project / "seed.txt").read_text(encoding="utf-8"), "original")
         wait_for_run(self.client, accepted[0].id)
-        saver = open_sqlite_checkpointer(self.app.state.manager.paths.checkpoints_db)
-        self.assertTrue(list(saver.list({"configurable": {"thread_id": "thread_regen_fail", "checkpoint_ns": ""}})))
 
-    def test_regenerate_branch_projection_excludes_source_pending_answer_writes(self) -> None:
+    def test_regenerate_resumes_pre_answer_checkpoint_on_the_same_chat(self) -> None:
         self.install_model([
             AIMessage(content="first answer", additional_kwargs={"reasoning_content": "First reasoning"}),
             AIMessage(content="original second answer", additional_kwargs={"reasoning_content": "Second reasoning"}),
@@ -346,29 +367,28 @@ class ChatBranchTests(unittest.TestCase):
                 json={"source_run_id": second["id"], "mode": "regenerate"},
             )
             self.assertEqual(regenerated.status_code, 200, regenerated.text)
-            branch = regenerated.json()
+            same = regenerated.json()
+            self.assertEqual(same["id"], continuation.json()["id"])
             wait_for_generate_hold()
-            registered = self.client.post(
-                "/v1/agent-interaction/threads",
-                json={"source_surface": "chat", "conversation_id": branch["id"]},
-            )
-            self.assertEqual(registered.status_code, 200, registered.text)
-            pending_state = self.client.get(f"/v1/agent-interaction/threads/{branch['id']}/state").json()
-            before = pending_state["values"]["messages"]
-            self.assertEqual([message["type"] for message in before], ["human", "ai", "human"])
-            self.assertNotIn("original second answer", str(before))
-            self.assertIn("First reasoning", str(before))
+            prompt = RECEIVED_PROMPTS[-1]
+            self.assertIn("second task", prompt)
+            self.assertIn("first answer", prompt)
+            self.assertNotIn("original second answer", prompt)
         finally:
             hold.set()
             set_generate_hold(None)
 
-        result = wait_for_run(self.client, branch["current_run_id"])
+        result = wait_for_run(self.client, same["current_run_id"])
         self.assertEqual(result["status"], "completed", result)
-        final = self.client.get(f"/v1/agent-interaction/threads/{branch['id']}/state").json()["values"]["messages"]
-        self.assertEqual([message["type"] for message in final], ["human", "ai", "human", "ai"])
-        self.assertNotIn("original second answer", str(final))
-        self.assertIn("Replacement reasoning", str(final))
-        self.assertEqual(final, self.app.state.app_store.get_interaction(branch["id"])["snapshot"]["messages"])
+        self.assertEqual(result["presented_tools"], [])
+        self.assertIsNone(result["starting_snapshot_id"])
+        self.assertIsNone(result["final_snapshot_id"])
+        chats = self.app.state.chat.store.list_conversations(include_archived=True)
+        self.assertEqual(sorted(item.id for item in chats), sorted([conversation["id"], continuation.json()["id"]]))
+        self.assertEqual((self.project / "seed.txt").read_text(encoding="utf-8"), "original")
+        workspaces = self.app.state.manager.paths.workspaces
+        self.assertFalse(workspaces.exists() and any(workspaces.iterdir()))
+        self.assertEqual(list(self.app.state.manager.paths.snapshots.glob("snap_*")), [])
         original = conversation_state(self.app.state.manager.paths.checkpoints_db, first["thread_id"])
         self.assertIn("original second answer", str(original["messages"]))
 

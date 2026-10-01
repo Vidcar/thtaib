@@ -142,12 +142,7 @@ from workbench_backend.knowledge.schemas import (
     KnowledgeVersion,
 )
 from workbench_backend.knowledge.service import KnowledgeService
-from workbench_backend.lab.schemas import SnapshotManifest
-from workbench_backend.lab.snapshot import (
-    capture_project_snapshot,
-    discard_incomplete_snapshot_staging,
-    verify_snapshot_tree,
-)
+from workbench_backend.lab.snapshot import discard_incomplete_snapshot_staging
 from workbench_backend.lab.store import LabStore
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -208,7 +203,6 @@ class HarnessService:
         self._model_clients: dict[str, httpx.Client] = {}
         self._adapter_models: dict[str, Any] = {}
         self._start_cancel_guards: dict[tuple[str | None, str | None], threading.Event] = {}
-        self._finalizing_runs: set[str] = set()
         self._lock = threading.RLock()
         self._updates = threading.Condition(self._lock)
         self._startup_reconciled = False
@@ -1208,7 +1202,7 @@ class HarnessService:
                 except Exception as error:
                     command_stop_errors.append(str(error))
             try:
-                # Settle owned children before final snapshot/terminal state,
+                # Settle owned children before the terminal record is saved,
                 # outside the run lock used by observer/effect persistence.
                 if command_stop_errors:
                     raise RuntimeError("; ".join(command_stop_errors))
@@ -1230,10 +1224,7 @@ class HarnessService:
                 return
             recovering = run.finalization_phase is not None
             if recovering:
-                if run.id in self._finalizing_runs:
-                    return
-                # A restart may have interrupted only snapshot persistence. The
-                # graph outcome was already durable; never rerun its tools.
+                # Settlement was already durable. Do not copy or restore the project.
                 if commands_settled:
                     status = AgentRunStatus(run.settled_status or "failed")
                     stop_reason = run.settled_stop_reason or status.value
@@ -1241,52 +1232,17 @@ class HarnessService:
                     run.settled_status = status.value
                     run.settled_stop_reason = stop_reason
                 snapshot_id = self._settled_snapshot_id(run)
+                if snapshot_id is not None:
+                    try:
+                        discard_incomplete_snapshot_staging(self.manager.paths, snapshot_id)
+                    except OSError:
+                        pass
             else:
                 if run.stop_reason == "tool_budget_exhausted" and status == AgentRunStatus.failed:
                     stop_reason = run.stop_reason
                 cancel = self._cancels.get(run.id)
                 if commands_settled and cancel is not None and cancel.is_set() and status is not AgentRunStatus.cancelled:
                     status, stop_reason = AgentRunStatus.cancelled, "cancelled"
-                if not run.project_path or run.final_snapshot_id is not None:
-                    self._commit_terminal_run(run, status, stop_reason)
-                    return
-                self._merge_latest_generation_sample(run)
-                run.finalization_phase = "saving_changes"
-                run.settled_status = status.value
-                run.settled_stop_reason = stop_reason
-                run.updated_at = utc_now()
-                snapshot_id = new_id("snap")
-                run.events.append(AgentEvent(at=run.updated_at, kind="finalizing",
-                    detail={"phase": "saving_changes", "execution_settled": True, "snapshot_id": snapshot_id}))
-                self._finalizing_runs.add(run.id)
-                try:
-                    self._persist_and_notify(run)
-                except BaseException:
-                    self._finalizing_runs.discard(run.id)
-                    raise
-            self._finalizing_runs.add(run.id)
-            project_path = Path(run.project_path or "")
-            workspace_id = run.workspace_id or "unbound"
-
-        manifest = None
-        snapshot_error: Exception | None = None
-        try:
-            if recovering:
-                if snapshot_id is not None:
-                    discard_incomplete_snapshot_staging(self.manager.paths, snapshot_id)
-                manifest = self._published_settled_snapshot(snapshot_id, workspace_id)
-            else:
-                manifest = capture_project_snapshot(self.manager.paths, workspace_id=workspace_id,
-                    project_root=project_path, kind="final", snapshot_id=snapshot_id)
-        except Exception as exc:  # noqa: BLE001 - execution outcome survives a missing branch snapshot
-            snapshot_error = exc
-        with self._lock:
-            self._finalizing_runs.discard(run.id)
-            if manifest is not None:
-                run.final_snapshot_id = manifest.id
-            elif snapshot_error is not None:
-                run.events.append(AgentEvent(at=utc_now(), kind="branch_snapshot_unavailable",
-                    detail={"message": str(snapshot_error)}))
             self._commit_terminal_run(run, status, stop_reason)
 
     @staticmethod
@@ -1300,20 +1256,6 @@ class HarnessService:
                     return ident
                 return None
         return None
-
-    def _published_settled_snapshot(self, snapshot_id: str | None, workspace_id: str) -> SnapshotManifest:
-        if snapshot_id is None:
-            raise OSError("The settled run has no reserved final snapshot identity.")
-        root = self.manager.paths.snapshots / snapshot_id
-        manifest_path = root / "manifest.json"
-        if not manifest_path.is_file():
-            raise OSError("Final snapshot capture was interrupted before publication.")
-        manifest = SnapshotManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
-        if (manifest.id != snapshot_id or manifest.workspace_id != workspace_id or manifest.kind != "final"
-            or Path(manifest.tree_path) != root / "tree"):
-            raise OSError("The published final snapshot does not match the settled run.")
-        verify_snapshot_tree(root / "tree", manifest.included_files)
-        return manifest
 
     def _merge_latest_generation_sample(self, run: AgentRun) -> None:
         model = self._adapter_models.get(run.id)
@@ -1999,43 +1941,6 @@ class HarnessService:
     def _expose_run(self, run: AgentRun) -> AgentRunOperational:
         return AgentRunOperational.model_validate(
             run.model_dump(mode="python", exclude={"model_requests"}))
-
-    def _capture_starting_snapshot(
-        self,
-        request: AgentStartRequest,
-        project_path: str | None,
-    ) -> str | None:
-        """Bind a starting snapshot before the worker can mutate project files."""
-
-        workspace_id = request.workspace_id
-        allowlist: list[str] | None = None
-        root: Path | None = None
-        if request.workspace_id:
-            stored = LabStore(self.manager.paths).get_workspace(request.workspace_id)
-            if stored is not None:
-                root = Path(stored.path)
-                allowlist = stored.allowlist
-                workspace_id = stored.id
-        if root is None and project_path:
-            root = Path(project_path)
-            workspace_id = workspace_id or "unbound"
-        if root is None or workspace_id is None:
-            return None
-        try:
-            manifest = capture_project_snapshot(
-                self.manager.paths.ensure(),
-                workspace_id=workspace_id,
-                project_root=root,
-                kind="starting",
-                allowlist=allowlist,
-            )
-        except OSError as exc:
-            raise HarnessError(
-                f"Starting snapshot could not be captured: {exc}",
-                code="starting_snapshot_failed",
-                status_code=409,
-            ) from exc
-        return manifest.id
 
 
 def _resolved_project_path(project_path: str | None) -> str | None:

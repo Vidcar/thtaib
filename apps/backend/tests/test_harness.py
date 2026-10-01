@@ -915,11 +915,12 @@ class HarnessApiTests(unittest.TestCase):
         harness.store.put_run(run)
         self.assertEqual(harness.active_workspace_run_ids("ws_cancel_live"), [])
 
-    def test_final_snapshot_does_not_hold_harness_lock_and_stop_is_too_late(self) -> None:
+    def test_finish_does_not_copy_the_project_or_hold_another_task_for_a_copy(self) -> None:
         harness = self.app.state.harness
         harness._reconcile_startup_once()
         project = self.root / "finalizing-project"
         project.mkdir()
+        (project / "keep.txt").write_text("keep", encoding="utf-8")
         now = utc_now()
         run = AgentRun(id="agent_finalizing_lock", status=AgentRunStatus.running,
             deployment_id=self.deployment_id, task="finished graph", enabled_tools=[], presented_tools=[],
@@ -928,46 +929,16 @@ class HarnessApiTests(unittest.TestCase):
             harness._runs[run.id] = run
             harness._cancels[run.id] = threading.Event()
             harness.store.put_run(run)
-
-        entered = threading.Event()
-        release = threading.Event()
-        read_done = threading.Event()
-        read_result: dict[str, object] = {}
-
-        def capture(*args, **kwargs):
-            entered.set()
-            if not release.wait(timeout=5):
-                raise TimeoutError("snapshot gate was not released")
-            return type("Captured", (), {"id": "snap_finalizing_test"})()
-
-        worker = threading.Thread(target=harness._finish, args=(run, AgentRunStatus.completed, "completed"))
-        reader = threading.Thread(target=lambda: (read_result.update(harness.projection_run(run.id)), read_done.set()))
-        with patch("workbench_backend.agents.harness.capture_project_snapshot", side_effect=capture):
-            worker.start()
-            try:
-                self.assertTrue(entered.wait(timeout=5))
-                reader.start()
-                self.assertTrue(read_done.wait(timeout=1), "A snapshot held the harness lock")
-                self.assertEqual(read_result["finalization_phase"], "saving_changes")
-                self.assertEqual(read_result["status"], "running")
-                with self.assertRaises(HarnessError) as ctx:
-                    harness.cancel(run.id)
-                self.assertEqual(ctx.exception.code, "run_finalizing")
-                with self.assertRaises(HarnessError) as busy:
-                    with harness.project_admission(str(project)):
-                        self.fail("A new task entered while its final snapshot was being written")
-                self.assertEqual(busy.exception.code, "project_busy")
-            finally:
-                release.set()
-                worker.join(timeout=5)
-                if reader.is_alive():
-                    reader.join(timeout=5)
-        self.assertFalse(worker.is_alive())
+        with patch("workbench_backend.lab.snapshot.capture_project_snapshot", side_effect=AssertionError("project copy")):
+            harness._finish(run, AgentRunStatus.completed, "completed")
         finished = harness.get_run(run.id)
         self.assertEqual(finished.status, AgentRunStatus.completed)
-        self.assertEqual(finished.final_snapshot_id, "snap_finalizing_test")
+        self.assertIsNone(finished.final_snapshot_id)
+        self.assertIsNone(finished.starting_snapshot_id)
         self.assertIsNone(finished.finalization_phase)
-        self.assertEqual([event.kind for event in finished.events].count("completed"), 1)
+        self.assertEqual([event.kind for event in finished.events], ["completed"])
+        self.assertEqual((project / "keep.txt").read_text(encoding="utf-8"), "keep")
+        self.assertEqual(list(self.manager.paths.snapshots.glob("snap_*")), [])
         with harness.project_admission(str(project)):
             pass
 
@@ -1009,8 +980,8 @@ class HarnessApiTests(unittest.TestCase):
                 self.assertIsNone(recovered.activity_phase)
                 self.assertEqual(recovered.housekeeping_generation["summary"].phase, "interrupted")
                 self.assertEqual(recovered.housekeeping_generation["summary"].output_tokens, 7)
-                self.assertTrue(recovered.final_snapshot_id)
-                self.assertEqual((self.manager.paths.snapshots / recovered.final_snapshot_id / "tree" / "created.txt").read_text(encoding="utf-8"), "retained")
+                self.assertIsNone(recovered.final_snapshot_id)
+                self.assertEqual((project / "created.txt").read_text(encoding="utf-8"), "later edit")
                 self.assertEqual([event.kind for event in recovered.events].count(outcome), 1)
 
     def test_restart_does_not_recapture_project_after_interrupted_snapshot(self) -> None:
@@ -1034,8 +1005,9 @@ class HarnessApiTests(unittest.TestCase):
         recovered = restarted.get_run(run.id)
         self.assertEqual(recovered.status, AgentRunStatus.completed)
         self.assertIsNone(recovered.final_snapshot_id)
-        self.assertEqual([event.kind for event in recovered.events],
-            ["finalizing", "branch_snapshot_unavailable", "completed"])
+        self.assertIsNone(recovered.finalization_phase)
+        self.assertEqual((project / "created.txt").read_text(encoding="utf-8"), "later edit")
+        self.assertEqual([event.kind for event in recovered.events], ["finalizing", "completed"])
         self.assertFalse(staging.exists())
 
     def test_failed_terminal_persistence_retries_saved_settlement_once(self) -> None:
@@ -1065,12 +1037,14 @@ class HarnessApiTests(unittest.TestCase):
             with self.assertRaisesRegex(OSError, "temporary terminal persistence failure"):
                 harness._finish(run, AgentRunStatus.completed, "completed")
         saved = harness.store.get_run(run.id)
-        self.assertEqual(saved.finalization_phase, "saving_changes")
-        self.assertEqual(saved.settled_status, "completed")
+        self.assertEqual(saved.status, AgentRunStatus.running)
+        self.assertIsNone(saved.finalization_phase)
+        self.assertIsNone(saved.final_snapshot_id)
         recovered = harness.get_run(run.id)
         self.assertEqual(recovered.status, AgentRunStatus.completed)
         self.assertIsNone(recovered.finalization_phase)
-        self.assertTrue(recovered.final_snapshot_id)
+        self.assertIsNone(recovered.final_snapshot_id)
+        self.assertEqual(list(self.manager.paths.snapshots.glob("snap_*")), [])
         self.assertEqual([event.kind for event in recovered.events].count("completed"), 1)
 
     def test_terminal_retry_does_not_orphan_another_live_worker(self) -> None:
@@ -1170,14 +1144,15 @@ class HarnessApiTests(unittest.TestCase):
         recovered = self._restart_harness().get_run(run.id)
         self.assertEqual(recovered.status, AgentRunStatus.completed)
         self.assertIsNone(recovered.final_snapshot_id)
-        self.assertEqual([event.kind for event in recovered.events],
-            ["finalizing", "branch_snapshot_unavailable", "completed"])
+        self.assertEqual((project / "saved.txt").read_text(encoding="utf-8"), "original")
+        self.assertEqual([event.kind for event in recovered.events], ["finalizing", "completed"])
 
-    def test_snapshot_failure_keeps_settled_execution_outcome_and_blocks_branch(self) -> None:
+    def test_finish_keeps_settled_outcome_without_a_project_copy(self) -> None:
         harness = self.app.state.harness
         harness._reconcile_startup_once()
         project = self.root / "failed-snapshot-project"
         project.mkdir()
+        (project / "saved.txt").write_text("original", encoding="utf-8")
         now = utc_now()
         run = AgentRun(id="agent_snapshot_failure", status=AgentRunStatus.running,
             deployment_id=self.deployment_id, task="completed graph", enabled_tools=[], presented_tools=[],
@@ -1185,13 +1160,15 @@ class HarnessApiTests(unittest.TestCase):
         with harness._lock:
             harness._runs[run.id] = run
             harness.store.put_run(run)
-        with patch("workbench_backend.agents.harness.capture_project_snapshot", side_effect=OSError("source changed")):
+        with patch("workbench_backend.lab.snapshot.capture_project_snapshot", side_effect=OSError("source changed")) as capture:
             harness._finish(run, AgentRunStatus.completed, "completed")
+        capture.assert_not_called()
         observed = harness.get_run(run.id)
         self.assertEqual(observed.status, AgentRunStatus.completed)
         self.assertIsNone(observed.final_snapshot_id)
         self.assertIsNone(observed.finalization_phase)
-        self.assertEqual([event.kind for event in observed.events], ["finalizing", "branch_snapshot_unavailable", "completed"])
+        self.assertEqual([event.kind for event in observed.events], ["completed"])
+        self.assertEqual((project / "saved.txt").read_text(encoding="utf-8"), "original")
         self.assertEqual(harness.store.get_run(run.id).status, AgentRunStatus.completed)
 
     def test_restart_reconciles_orphan_running_run_as_failed(self) -> None:

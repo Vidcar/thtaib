@@ -1623,7 +1623,8 @@ class ChatHarnessTests(unittest.TestCase):
         run = self.app.state.app_store.get_run(started["current_run"]["id"])
         self.assertIsNotNone(run)
         assert run is not None
-        self.assertTrue(run.final_snapshot_id)
+        self.assertIsNone(run.final_snapshot_id)
+        self.assertIsNone(run.starting_snapshot_id)
 
         original_path = str(self.project.resolve())
         shutil.rmtree(self.project)
@@ -1645,10 +1646,10 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertEqual(body["area_project_path"], original_path)
         self.assertEqual(body["area_id"], conversation["area_id"])
         self.assertEqual(body["area_label"], self.project.name)
-        self.assertNotEqual(body["project_path"], original_path)
-        branch_project_path = Path(body["project_path"])
-        self.assertTrue(branch_project_path.is_dir())
-        self.assertTrue(branch_project_path.is_relative_to(self.app.state.manager.paths.workspaces.resolve()))
+        self.assertEqual(body["project_path"], original_path)
+        self.assertFalse(Path(body["project_path"]).exists())
+        workspaces = self.app.state.manager.paths.workspaces
+        self.assertFalse(workspaces.exists() and any(workspaces.iterdir()))
         self.assertEqual(body["branch_head_checkpoint_id"], body["source_checkpoint_id"])
 
     def test_terminal_reconciliation_updates_branch_head_checkpoint(self) -> None:
@@ -1665,13 +1666,54 @@ class ChatHarnessTests(unittest.TestCase):
         run = self.app.state.app_store.get_run(started["current_run"]["id"])
         self.assertIsNotNone(run)
         assert run is not None
-        self.assertTrue(run.final_snapshot_id)
+        self.assertIsNone(run.final_snapshot_id)
+        self.assertIsNone(run.starting_snapshot_id)
         self.assertTrue(run.checkpoint_ids)
-        self.assertNotEqual(run.final_snapshot_id, run.checkpoint_ids[0])
         self.app.state.chat.observe_terminal_run(run)
         fetched = self.client.get(f"/v1/chat/conversations/{conversation['id']}").json()
         self.assertEqual(fetched["current_run"]["status"], finished["current_run"]["status"])
         self.assertIn(fetched["branch_head_checkpoint_id"], run.checkpoint_ids)
+
+    def test_second_chat_same_folder_does_not_wait_for_a_project_copy(self) -> None:
+        self.scripted = ScriptedChatModel([
+            AIMessage(content="first answer"),
+            AIMessage(content="second answer"),
+        ])
+        first = self._create(title="First chat")
+        started = self._start(first["id"], "First task in the shared folder.")
+        first_done = wait_for_chat(self.client, first["id"])
+        self.assertEqual(first_done["current_run"]["status"], "completed")
+        second = self._create(title="Second chat")
+        with patch(
+            "workbench_backend.lab.snapshot.capture_project_snapshot",
+            side_effect=AssertionError("project copy"),
+        ):
+            response = self.client.post(
+                f"/v1/chat/conversations/{second['id']}/start",
+                json={"task": "Second task in the same folder."},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["id"], second["id"])
+        self.assertNotEqual(body["id"], first["id"])
+        self.assertEqual(body["queue"], [])
+        self.assertTrue(body["current_run_id"])
+        self.assertEqual(Path(body["project_path"]).resolve(), Path(first["project_path"]).resolve())
+        second_done = wait_for_chat(self.client, second["id"])
+        self.assertEqual(second_done["current_run"]["status"], "completed")
+        self.assertEqual(second_done["queue"], [])
+        for run_id in (started["current_run"]["id"], body["current_run_id"]):
+            stored = self.app.state.app_store.get_run(run_id)
+            self.assertIsNotNone(stored)
+            assert stored is not None
+            self.assertIsNone(stored.starting_snapshot_id)
+            self.assertIsNone(stored.final_snapshot_id)
+        self.assertEqual((self.project / "keep.md").read_text(encoding="utf-8"), "retain-me")
+        self.assertFalse((self.project / ".git").exists())
+        self.assertEqual(list(self.root.rglob(".git")), [])
+        workspaces = self.app.state.manager.paths.workspaces
+        self.assertFalse(workspaces.exists() and any(workspaces.iterdir()))
+        self.assertEqual(list(self.app.state.manager.paths.snapshots.glob("snap_*")), [])
 
     def test_accepted_start_clears_matching_draft_revision(self) -> None:
         conversation = self._create()

@@ -49,7 +49,7 @@ def _execute_then_reply(command: str, *, call_id: str = "call_interaction_exec")
 
 
 class InteractionApiTests(unittest.TestCase):
-    def test_checkpoint_branch_continues_saved_context_in_separate_workspace(self) -> None:
+    def test_checkpoint_branch_continues_saved_context_in_the_same_project(self) -> None:
         conversation_id, thread = self._register_chat()
         self._install_model([AIMessage(content="Remembered first answer")])
         response = self._run_start(thread)
@@ -61,7 +61,7 @@ class InteractionApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         branch = response.json()
         self.assertNotEqual(branch["thread_id"], source["thread_id"])
-        self.assertNotEqual(branch["project_path"], source["project_path"])
+        self.assertEqual(Path(branch["project_path"]).resolve(), Path(source["project_path"]).resolve())
         self.assertEqual(branch["area_id"], source["area_id"])
         from workbench_backend.state.checkpointer import conversation_state
         state = conversation_state(self.app.state.manager.paths.checkpoints_db, branch["thread_id"])
@@ -76,8 +76,7 @@ class InteractionApiTests(unittest.TestCase):
         finished = wait_for_run(self.client, following.json()["current_run_id"])
         self.assertEqual(finished["status"], "completed", finished)
         self.assertEqual(finished["project_id"], source["project_id"])
-        self.assertEqual(Path(finished["project_path"]).resolve(), Path(branch["project_path"]).resolve())
-        self.assertNotEqual(Path(finished["project_path"]).resolve(), Path(source["project_path"]).resolve())
+        self.assertEqual(Path(finished["project_path"]).resolve(), Path(source["project_path"]).resolve())
         original = self.client.get(f"/v1/chat/conversations/{conversation_id}").json()
         self.assertEqual(original["current_run_id"], source_run["id"])
         self.assertNotIn("A separate follow-up", str(original["transcript"]))
