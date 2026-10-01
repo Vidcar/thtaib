@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { estimateModel, type ModelEstimateSelection, type ModelMemoryEstimate } from "./modelEstimateApi";
 import { formatBytes } from "./display";
 import { errorMessage } from "./errors";
-import { SettingRow } from "./CompactControls";
+import { NumberField, SettingRow } from "./CompactControls";
 
 type CapacityEstimate = ModelMemoryEstimate & { basis?: string; gpu_budget_bytes?: Record<string, number | null>; ram_budget_bytes?: number | null; gpu_headroom_bytes?: number; ram_headroom_bytes?: number };
 export type CapacityFit = "green" | "amber" | "red" | "unknown";
@@ -23,6 +23,13 @@ export function capacityFit(value?: CapacityEstimate): CapacityFit {
   return gpuWeights >= value.weights_bytes * .99 ? "green" : "amber";
 }
 
+function advisoryStartupSendable(startup: Record<string, unknown>) {
+  return Object.entries(startup).every(([key, value]) => {
+    if (typeof value !== "number" || !Number.isFinite(value)) return typeof value !== "number";
+    return key !== "ctx_size" || Number.isInteger(value) && value >= 1;
+  });
+}
+
 /** Advisory state never reaches an import or saved configuration request. */
 export function useCapacityEstimates(selections: Array<{ key: string; selection: ModelEstimateSelection }>, startup: Record<string, unknown>, active: boolean) {
   const [answers, setAnswers] = useState<Record<string, CapacityEstimate>>({});
@@ -31,6 +38,7 @@ export function useCapacityEstimates(selections: Array<{ key: string; selection:
   const owner = useRef(identity); owner.current = identity;
   useEffect(() => {
     if (!active) return;
+    if (!advisoryStartupSendable(startup)) { setAnswers({}); setError("Check the selected launch settings."); return; }
     const controller = new AbortController(); setAnswers({}); setError("");
     const queue = [...selections];
     async function worker() {
@@ -46,15 +54,16 @@ export function useCapacityEstimates(selections: Array<{ key: string; selection:
   return { answers, error };
 }
 
-export function ModelCapacityPreview({ estimate, startup, onChange, error }: { estimate?: CapacityEstimate; startup: Record<string, unknown>; onChange: (value: Record<string, unknown>) => void; error?: string }) {
+export function ModelCapacityPreview({ estimate, startup, onChange, error, pending = true }: { estimate?: CapacityEstimate; startup: Record<string, unknown>; onChange: (value: Record<string, unknown>) => void; error?: string; pending?: boolean }) {
   const patch = (key: string, value: unknown) => { const next = { ...startup }; if (value === "" || value == null) delete next[key]; else next[key] = value; onChange(next); };
   const fit = capacityFit(estimate);
-  const number = (key: string, label: string, flag: string, min: number, defaultValue?: number) => <SettingRow layout="models" label={label} htmlFor={"preview-" + key} help={<><span>Memory preview only.</span><code>{flag}</code></>} onReset={Object.hasOwn(startup, key) ? () => patch(key, null) : undefined}><input id={"preview-" + key} type="number" min={min} step={1} value={typeof startup[key] === "number" ? Number(startup[key]) : ""} placeholder={defaultValue == null ? "" : String(defaultValue)} onChange={event => patch(key, event.target.value === "" ? null : Number(event.target.value))} /></SettingRow>;
-  const choice = (key: string, label: string, flag: string, options: string[]) => <SettingRow layout="models" label={label} htmlFor={"preview-" + key} help={<><span>Memory preview only.</span><code>{flag}</code></>} onReset={Object.hasOwn(startup, key) ? () => patch(key, null) : undefined}><select id={"preview-" + key} value={String(startup[key] ?? "")} onChange={event => patch(key, ["kv_offload", "swa_full"].includes(key) ? event.target.value === "" ? null : event.target.value === "true" : key === "n_gpu_layers" && event.target.value === "0" ? 0 : event.target.value)}><option value="">Default</option>{options.map(value => <option key={value} value={value}>{value === "true" ? key === "kv_offload" ? "GPU" : "On" : value === "false" ? key === "kv_offload" ? "CPU" : "Off" : value === "none" ? "Off" : value === "draft-mtp" ? "On" : value}</option>)}</select></SettingRow>;
   const size = (bytes?: number | null) => bytes == null ? "—" : formatBytes(bytes);
+  const summary = estimate ? estimate.gpu_bytes != null && estimate.ram_bytes != null ? "≈ " + size(estimate.gpu_bytes + estimate.ram_bytes) + (estimate.completeness === "complete" ? "" : " known subtotal") : "—" : error || !pending ? "—" : "Estimating…";
+  const number = (key: string, label: string, flag: string, min: number, defaultValue?: number) => <SettingRow layout="models" label={label} htmlFor={"preview-" + key} help={<><span>Memory preview only.</span><code>{flag}</code></>} onReset={Object.hasOwn(startup, key) ? () => patch(key, null) : undefined}><NumberField id={"preview-" + key} label={label} min={min} step={1} value={typeof startup[key] === "number" ? Number(startup[key]) : null} placeholder={defaultValue == null ? "" : String(defaultValue)} onChange={next => patch(key, next)} /></SettingRow>;
+  const choice = (key: string, label: string, flag: string, options: string[]) => <SettingRow layout="models" label={label} htmlFor={"preview-" + key} help={<><span>Memory preview only.</span><code>{flag}</code></>} onReset={Object.hasOwn(startup, key) ? () => patch(key, null) : undefined}><select id={"preview-" + key} value={String(startup[key] ?? "")} onChange={event => patch(key, ["kv_offload", "swa_full"].includes(key) ? event.target.value === "" ? null : event.target.value === "true" : key === "n_gpu_layers" && event.target.value === "0" ? 0 : event.target.value)}><option value="">Default</option>{options.map(value => <option key={value} value={value}>{value === "true" ? key === "kv_offload" ? "GPU" : "On" : value === "false" ? key === "kv_offload" ? "CPU" : "Off" : value === "none" ? "Off" : value === "draft-mtp" ? "On" : value}</option>)}</select></SettingRow>;
   return <section className="model-capacity-preview" aria-label="Memory preview">
-    <h3><i className="model-fit-dot" data-fit={fit} />Memory preview <small>{estimate ? estimate.gpu_bytes != null && estimate.ram_bytes != null ? "≈ " + size(estimate.gpu_bytes + estimate.ram_bytes) + (estimate.completeness === "complete" ? "" : " known subtotal") : "—" : "Estimating…"}</small></h3>
-    <p className="hint">Total hardware capacity · advisory</p>
+    <h3><i className="model-fit-dot" data-fit={fit} />Memory preview <small>{summary}</small></h3>
+    <p className="hint">{!estimate && !error && !pending ? "Select a quantization to preview memory." : "Total hardware capacity · advisory"}</p>
     <dl className="model-capacity-totals"><div><dt>GPU</dt><dd>{size(estimate?.gpu_bytes)}</dd></div><div><dt>RAM</dt><dd>{size(estimate?.ram_bytes)}</dd></div></dl>
     <div className="setting-rows">
       {number("ctx_size", "Context", "--ctx-size", 1, estimate?.context_maximum ?? undefined)}

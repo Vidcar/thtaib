@@ -20,6 +20,7 @@ const options = id => ({ bundle_id: id, context_size: { maximum: 32768, options:
 const nodeMock = element => element.type === "form" ? { reportValidity: () => true } : element.type === "dialog" ? { showModal() {} } : null;
 const button = (renderer, label) => { const node = renderer.root.findAllByType("button").find(item => text(item) === label); assert.ok(node, "Expected button " + label); return node; };
 const control = (renderer, name, label) => { const node = renderer.root.findAll(item => item.type?.name === name && item.props.label === label)[0]; assert.ok(node, "Expected " + name + " " + label); return node; };
+const previewContext = renderer => { const node = renderer.root.findAll(item => item.type === "input" && item.props.id === "preview-ctx_size")[0]; assert.ok(node, "Expected preview context input"); return node; };
 const mount = async (Component, props) => { let renderer; await act(async () => { renderer = create(React.createElement(Component, props), { createNodeMock: nodeMock }); await tick(); }); return renderer; };
 const unmount = async renderer => { if (renderer) await act(async () => renderer.unmount()); };
 const change = async callback => act(async () => { callback(); await tick(); });
@@ -350,6 +351,19 @@ async function checkCapacity(fit, Preview) {
     assert.match(heading, /unknown|partial|≥|at least|—/i, "header identifies an incomplete total instead of counting unknown memory as zero");
     assert.ok(text(renderer.root).includes("Total hardware capacity"));
   } finally { await unmount(renderer); }
+  let rejected;
+  try {
+    renderer = await mount(Preview, { startup: { ctx_size: 8192 }, pending: false, onChange: value => { rejected = value; } });
+    assert.match(text(renderer.root.findByType("h3")), /—/, "an unselected preview does not claim estimation is still running");
+    assert.ok(text(renderer.root).includes("Select a quantization"));
+    await change(() => previewContext(renderer).props.onChange({ target: { value: "-1" } }));
+    assert.equal(rejected, undefined, "context below 1 is not stored or sent");
+    assert.equal(previewContext(renderer).props.value, "-1", "the rejected draft stays visible while editing");
+    await change(() => previewContext(renderer).props.onBlur());
+    assert.equal(previewContext(renderer).props.value, 8192, "leaving an invalid context restores the last accepted value");
+    await change(() => previewContext(renderer).props.onChange({ target: { value: "4096" } }));
+    assert.equal(rejected.ctx_size, 4096, "a whole context within bounds replaces the preview value");
+  } finally { await unmount(renderer); }
 }
 
 async function checkImportBoundary(Import) {
@@ -375,7 +389,7 @@ async function checkImportBoundary(Import) {
     await change(() => renderer.root.findByProps({ "aria-label": "Image input" }).props.onChange({ target: { value: "mmproj-f16.gguf" } }));
     const presetMenu = () => renderer.root.findAll(item => item.type?.name === "MenuPopover" && item.props.label === "Model card presets")[0];
     await change(() => presetMenu().props.children[1].props.children[0].props.onChange({ target: { checked: false } }));
-    await change(() => renderer.root.findByProps({ id: "preview-ctx_size" }).props.onChange({ target: { value: "4096" } }));
+    await change(() => previewContext(renderer).props.onChange({ target: { value: "4096" } }));
     await change(() => button(renderer, "Back to Find").props.onClick());
     await search("publisher/failure");
     assert.ok(text(renderer.root).includes("Publisher temporarily unavailable"));
@@ -383,7 +397,7 @@ async function checkImportBoundary(Import) {
     assert.equal(renderer.root.findAllByProps({ role: "radio" }).find(item => item.props["aria-label"].startsWith("Q4_K_M ")).props["aria-checked"], true, "failed inspection retains the previous variant");
     assert.equal(renderer.root.findByProps({ "aria-label": "Image input" }).props.value, "mmproj-f16.gguf", "failed inspection retains the previous projector");
     assert.equal(presetMenu().props.children[0].props.children[0].props.checked, true, "failed inspection retains checked presets");
-    assert.equal(renderer.root.findByProps({ id: "preview-ctx_size" }).props.value, 4096, "failed inspection retains user preview edits");
+    assert.equal(previewContext(renderer).props.value, 4096, "failed inspection retains user preview edits");
     await change(() => button(renderer, "Back to Find").props.onClick());
     await change(() => button(renderer, "Retry").props.onClick());
     await change(() => button(renderer, "2Choose").props.onClick());
