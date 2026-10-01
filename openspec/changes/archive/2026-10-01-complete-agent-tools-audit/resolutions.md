@@ -2,7 +2,7 @@
 
 Completed 1 October 2026. **Confirmed application defects resolved, upgrades delivered and established local application refreshed.**
 
-Source: Dave's `thtaib-agent-tools-report-2026-09-30.md` (30 September 2026, pinned audit revision 0d3be38). Current implementation baseline: 21136f3; implementation merged in [PR #216](https://github.com/Vidcar/thtaib/pull/216), main `c18f85f`; final documentation branch `codex/agent-tools-audit-delivery`. The attachment is evidence and recommendations, not execution authority. Dave separately authorized verification, fixes, upgrades and full validation.
+Source: Dave's `thtaib-agent-tools-report-2026-09-30.md` (30 September 2026, pinned audit revision 0d3be38). Current implementation baseline: 21136f3; implementation merged in [PR #216](https://github.com/Vidcar/thtaib/pull/216), implementation `c18f85f`; completed report/archive in [PR #217](https://github.com/Vidcar/thtaib/pull/217). The attachment is evidence and recommendations, not execution authority. Dave separately authorized verification, fixes, upgrades and full validation.
 
 The original attachment remains unchanged, SHA-256 `572ad39b1281a5f5b9db1db121ddfc12d710bc61bd417ac8080c3efe0ac44e06`. Coverage includes all ten findings, all 55 numbered tools, all nine capability proposals, nine skills, eleven baseline settings, seven proposed tuning areas and six starting setups. Confirmed defects, intentional boundaries, conditional proposals and measured model limits are distinguished below.
 
