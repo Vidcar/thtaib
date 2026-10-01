@@ -1,4 +1,4 @@
-"""Authenticated Lab workbench API; case replay keeps its existing routes."""
+"""Authenticated Lab workbench API for Performance, Memory, and Challenges."""
 
 from fastapi import APIRouter, Request
 

@@ -26,6 +26,7 @@ from workbench_backend.chat.schemas import ChatConversation, ChatConversationVie
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.service import ManagerError
 from workbench_backend.inference.ids import utc_now
+from workbench_backend.lab.schemas import WorkspaceCreateRequest
 from workbench_backend.paths import WorkbenchPaths
 from workbench_backend.state.checkpointer import conversation_state
 
@@ -454,17 +455,16 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertIn(project["id"], unarchived_ids)
 
     def test_workspace_id_resolves_project_path(self) -> None:
-        workspace = self.client.post(
-            "/v1/lab/workspaces",
-            json={"display_name": "chat-ws", "files": {"from-lab.md": "lab-seed"}},
-        ).json()
-        conversation = self._create(workspace_id=workspace["id"], project_path=workspace["path"])
-        self.assertEqual(Path(conversation["project_path"]), Path(workspace["path"]).resolve())
+        workspace = self.app.state.lab.create_workspace(
+            WorkspaceCreateRequest(display_name="chat-ws", files={"from-lab.md": "lab-seed"})
+        )
+        conversation = self._create(workspace_id=workspace.id, project_path=workspace.path)
+        self.assertEqual(Path(conversation["project_path"]), Path(workspace.path).resolve())
         started = self._start(conversation["id"])
         wait_for_chat(self.client, conversation["id"])
-        self.assertTrue((Path(workspace["path"]) / "edited.md").is_file())
-        self.assertEqual((Path(workspace["path"]) / "from-lab.md").read_text(encoding="utf-8"), "lab-seed")
-        self.assertEqual(started["current_run"]["workspace_id"], workspace["id"])
+        self.assertTrue((Path(workspace.path) / "edited.md").is_file())
+        self.assertEqual((Path(workspace.path) / "from-lab.md").read_text(encoding="utf-8"), "lab-seed")
+        self.assertEqual(started["current_run"]["workspace_id"], workspace.id)
 
     def test_chat_without_project_uses_visibility_tools(self) -> None:
         self.scripted = ScriptedChatModel(
@@ -547,13 +547,12 @@ class ChatHarnessTests(unittest.TestCase):
                 AIMessage(content="Cleared optional bindings."),
             ]
         )
-        workspace = self.client.post(
-            "/v1/lab/workspaces",
-            json={"display_name": "clear-ws", "files": {"seed.md": "seed"}},
-        ).json()
+        workspace = self.app.state.lab.create_workspace(
+            WorkspaceCreateRequest(display_name="clear-ws", files={"seed.md": "seed"})
+        )
         conversation = self._create(
-            workspace_id=workspace["id"],
-            project_path=workspace["path"],
+            workspace_id=workspace.id,
+            project_path=workspace.path,
             retrieval_project_paths=["seed.md"],
         )
         first = self._start(conversation["id"], "First turn with the project.")
@@ -576,24 +575,23 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertEqual(started.json()["code"], "session_area_immutable")
         body = self.client.get(f"/v1/chat/conversations/{conversation['id']}").json()
         self.assertEqual(body["profile_id"], self.profile_id)
-        self.assertEqual(body["project_path"], str(Path(workspace["path"]).resolve()))
-        self.assertEqual(body["workspace_id"], workspace["id"])
+        self.assertEqual(body["project_path"], str(Path(workspace.path).resolve()))
+        self.assertEqual(body["workspace_id"], workspace.id)
         self.assertEqual(body["retrieval_project_paths"], ["seed.md"])
         self.assertTrue(body["filesystem_tools_available"])
         self.assertTrue(body["shell_tools_available"])
         first_run = self.client.get(f"/v1/agent-runs/{first_run_id}").json()
-        self.assertEqual(first_run["project_path"], str(Path(workspace["path"]).resolve()))
-        self.assertEqual(first_run["workspace_id"], workspace["id"])
+        self.assertEqual(first_run["project_path"], str(Path(workspace.path).resolve()))
+        self.assertEqual(first_run["workspace_id"], workspace.id)
         self.assertEqual(first_run["profile_id"], self.profile_id)
 
     def test_omitted_bindings_preserve_and_independent_clears_are_scoped(self) -> None:
-        workspace = self.client.post(
-            "/v1/lab/workspaces",
-            json={"display_name": "omit-ws", "files": {"seed.md": "seed"}},
-        ).json()
+        workspace = self.app.state.lab.create_workspace(
+            WorkspaceCreateRequest(display_name="omit-ws", files={"seed.md": "seed"})
+        )
         conversation = self._create(
-            workspace_id=workspace["id"],
-            project_path=workspace["path"],
+            workspace_id=workspace.id,
+            project_path=workspace.path,
             retrieval_project_paths=["seed.md"],
         )
         preserved = self.client.post(
@@ -603,8 +601,8 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertEqual(preserved.status_code, 200, preserved.text)
         preserved_body = preserved.json()
         self.assertEqual(preserved_body["profile_id"], self.profile_id)
-        self.assertEqual(preserved_body["workspace_id"], workspace["id"])
-        self.assertEqual(preserved_body["project_path"], str(Path(workspace["path"]).resolve()))
+        self.assertEqual(preserved_body["workspace_id"], workspace.id)
+        self.assertEqual(preserved_body["project_path"], str(Path(workspace.path).resolve()))
         self.assertEqual(preserved_body["retrieval_project_paths"], ["seed.md"])
         wait_for_chat(self.client, conversation["id"])
 
@@ -615,8 +613,8 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertEqual(profile_cleared.status_code, 200, profile_cleared.text)
         profile_body = profile_cleared.json()
         self.assertIsNone(profile_body["profile_id"])
-        self.assertEqual(profile_body["workspace_id"], workspace["id"])
-        self.assertEqual(profile_body["project_path"], str(Path(workspace["path"]).resolve()))
+        self.assertEqual(profile_body["workspace_id"], workspace.id)
+        self.assertEqual(profile_body["project_path"], str(Path(workspace.path).resolve()))
         self.assertEqual(profile_body["retrieval_project_paths"], ["seed.md"])
         wait_for_chat(self.client, conversation["id"])
 
@@ -632,8 +630,8 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertEqual(project_cleared.status_code, 409, project_cleared.text)
         self.assertEqual(project_cleared.json()["code"], "session_area_immutable")
         project_body = self.client.get(f"/v1/chat/conversations/{conversation['id']}").json()
-        self.assertEqual(project_body["workspace_id"], workspace["id"])
-        self.assertEqual(project_body["project_path"], str(Path(workspace["path"]).resolve()))
+        self.assertEqual(project_body["workspace_id"], workspace.id)
+        self.assertEqual(project_body["project_path"], str(Path(workspace.path).resolve()))
         self.assertEqual(project_body["retrieval_project_paths"], ["seed.md"])
         self.assertTrue(project_body["filesystem_tools_available"])
         self.assertTrue(project_body["shell_tools_available"])

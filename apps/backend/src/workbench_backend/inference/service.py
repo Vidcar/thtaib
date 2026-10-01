@@ -66,7 +66,6 @@ from workbench_backend.inference.schemas import (
 )
 from workbench_backend.inference.settings import resolve_bags, split_response_startup, STARTUP_KEYS, PER_REQUEST_KEYS
 from workbench_backend.inference.store import RecordStore
-from workbench_backend.lab.store import LabStore
 from workbench_backend.paths import WorkbenchPaths
 from workbench_backend.state.migrate import open_application_store
 
@@ -1343,7 +1342,6 @@ class ModelManager:
             )
         consumers.extend(self._run_consumers(profile_ids={profile_id}))
         consumers.extend(self._chat_consumers(profile_id=profile_id))
-        consumers.extend(self._lab_consumers(profile_id=profile_id))
         return consumers
 
     def _bundle_consumers(self, bundle_id: str) -> list[LifecycleConsumer]:
@@ -1376,7 +1374,6 @@ class ModelManager:
                 )
         consumers.extend(self._run_consumers(deployment_ids=deployment_ids, profile_ids=profile_ids))
         consumers.extend(self._chat_consumers(profile_ids=profile_ids, deployment_ids=deployment_ids))
-        consumers.extend(self._lab_consumers(profile_ids=profile_ids, deployment_ids=deployment_ids))
         return consumers
 
     def _run_consumers(
@@ -1439,19 +1436,6 @@ class ModelManager:
                         for helper in item.helper_snapshots or [])):
                     consumers.append(LifecycleConsumer(kind="chat_queue", id=item.id, label=conversation.title or conversation.id, live=True))
         return consumers
-
-    def _lab_consumers(self, *, profile_id: str | None = None, profile_ids: set[str] | None = None, deployment_ids: set[str] | None = None) -> list[LifecycleConsumer]:
-        profiles = set(profile_ids or ()) | ({profile_id} if profile_id else set())
-        deployments = deployment_ids or set()
-        try:
-            cases = LabStore(self.paths).list_cases()
-        except Exception as exc:
-            raise ManagerError("Could not check saved Lab cases. Retry after the local state store is available.", code="model_dependencies_unavailable", status_code=503) from exc
-        return [
-            LifecycleConsumer(kind="lab_case", id=case.id, label=case.task[:80], live=False)
-            for case in cases
-            if case.profile_id in profiles or case.deployment_id in deployments or case.embedding_deployment_id in deployments
-        ]
 
     def _require_no_live_runs(
         self,

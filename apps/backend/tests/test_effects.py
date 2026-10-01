@@ -189,58 +189,6 @@ class UnknownEffectSafetyTests(unittest.TestCase):
         self.assertEqual(restore.rollback_promise, "none")
         self.assertEqual(restore.unresolved_side_effects, ["effect_fixture"])
 
-    def test_lab_capture_restore_preserves_unresolved_effects(self) -> None:
-        workspace = self.client.post(
-            "/v1/lab/workspaces",
-            json={"display_name": "effects", "files": {"notes.md": "keep"}},
-        )
-        self.assertEqual(workspace.status_code, 200, workspace.text)
-        workspace_id = workspace.json()["id"]
-        started = self.client.post(
-            "/v1/agent-runs",
-            json={
-                "deployment_id": self.deployment_id,
-                "task": "Echo the text harness-ok using the echo tool.",
-                "presented_tools": ["echo"],
-                "workspace_id": workspace_id,
-            },
-        )
-        self.assertEqual(started.status_code, 200, started.text)
-        run = wait_for_run(self.client, started.json()["id"])
-        effect = self.client.post(
-            "/v1/effects",
-            json={"operation": "email-user", "run_id": run["id"]},
-        ).json()
-        captured = self.client.post(
-            "/v1/lab/cases/capture",
-            json={"workspace_id": workspace_id, "run_id": run["id"]},
-        )
-        self.assertEqual(captured.status_code, 200, captured.text)
-        case = captured.json()
-        self.assertEqual(case["rollback_promise"], "none")
-        self.assertEqual(case["external_effect_rollback"], "not_supported")
-        self.assertIn(effect["id"], case["unresolved_side_effects"])
-        snapshot = self.client.get(f"/v1/lab/snapshots/{case['snapshot_id']}").json()
-        self.assertEqual(snapshot["rollback_promise"], "none")
-        self.assertEqual(snapshot["external_effect_rollback"], "not_supported")
-        self.assertEqual(snapshot["kind"], "starting")
-        self.assertEqual(case["input_origin"], "starting_snapshot")
-        self.assertNotIn(effect["id"], snapshot["unresolved_side_effects"])
-
-        restored = self.client.post(f"/v1/lab/cases/{case['id']}/restore")
-        self.assertEqual(restored.status_code, 200, restored.text)
-        restore = restored.json()
-        self.assertFalse(restore["external_effects_rolled_back"])
-        self.assertEqual(restore["rollback_promise"], "none")
-        self.assertIn(effect["id"], restore["unresolved_side_effects"])
-        self.assertTrue(
-            any("does not roll back external effects" in item for item in restore["deviations"])
-        )
-        after = self.client.get(f"/v1/effects/{effect['id']}").json()
-        self.assertTrue(after["unresolved"])
-        self.assertEqual(after["outcome"], "dispatched")
-        self.assertEqual(after["replay_count"], 0)
-
     def test_recover_during_cancel_requested_does_not_replay(self) -> None:
         now = utc_now()
         run = AgentRun(

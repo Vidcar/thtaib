@@ -38,6 +38,7 @@ from workbench_backend.inference.capabilities import setup_fingerprint
 from workbench_backend.inference.probes import _image_fixture
 from workbench_backend.inference.adapter import RecordingTransport
 from workbench_backend.inference.ids import new_id, utc_now
+from workbench_backend.lab.schemas import WorkspaceCreateRequest
 from workbench_backend.lab.snapshot import capture_project_snapshot
 from workbench_backend.inference.schemas import ServerProperties
 from workbench_backend.state.checkpointer import open_sqlite_checkpointer
@@ -721,12 +722,9 @@ class HarnessApiTests(unittest.TestCase):
         self.addCleanup(hold.set)
         project = self.root / "shared-project"
         project.mkdir()
-        workspace = self.client.post(
-            "/v1/lab/workspaces",
-            json={"display_name": "shared-folder", "files": {"notes.md": "original\n"}},
+        workspace = self.app.state.lab.create_workspace(
+            WorkspaceCreateRequest(display_name="shared-folder", files={"notes.md": "original\n"})
         )
-        self.assertEqual(workspace.status_code, 200, workspace.text)
-        workspace_id = workspace.json()["id"]
 
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
             return ScriptedChatModel(echo_then_reply(), hold=hold)
@@ -736,7 +734,6 @@ class HarnessApiTests(unittest.TestCase):
             model_factory=factory,
             knowledge_provider=lambda: self.app.state.knowledge,
         )
-        self.app.state.lab._harness_provider = lambda: self.app.state.harness
         first = self._start(project_path=str(project), presented_tools=["echo"])
         wait_for_status(self.client, first["id"], "running")
         with patch.object(self.manager, "ensure_deployment_ready", wraps=self.manager.ensure_deployment_ready) as loaded:
@@ -746,18 +743,12 @@ class HarnessApiTests(unittest.TestCase):
             self.assertEqual(second.json()["code"], "project_busy")
             self.assertEqual(second.json()["run_id"], first["id"])
             loaded.assert_not_called()
-        held_workspace = self._start(workspace_id=workspace_id, presented_tools=["echo"], task="Hold the workspace.")
+        held_workspace = self._start(workspace_id=workspace.id, presented_tools=["echo"], task="Hold the workspace.")
         wait_for_status(self.client, held_workspace["id"], "running")
         another_workspace = self.client.post("/v1/agent-runs", json={"deployment_id": self.deployment_id,
-            "workspace_id": workspace_id, "presented_tools": ["echo"], "task": "Another task in this workspace"})
+            "workspace_id": workspace.id, "presented_tools": ["echo"], "task": "Another task in this workspace"})
         self.assertEqual(another_workspace.status_code, 409, another_workspace.text)
         self.assertEqual(another_workspace.json()["code"], "project_busy")
-        blocked = self.client.post(
-            "/v1/lab/cases/capture",
-            json={"workspace_id": workspace_id, "run_id": held_workspace["id"]},
-        )
-        self.assertEqual(blocked.status_code, 409, blocked.text)
-        self.assertEqual(blocked.json()["code"], "not_quiescent")
         hold.set()
         for run_id in (first["id"], held_workspace["id"]):
             self.assertEqual(wait_for_run(self.client, run_id)["status"], "completed")

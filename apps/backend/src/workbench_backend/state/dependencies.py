@@ -20,8 +20,8 @@ def _knowledge_refs(value: Any) -> set[str]:
 class DependencyPreviewService:
     """Explain deactivation without deleting versions or granting permissions."""
 
-    def __init__(self, store: Any, setups: Any, knowledge: Any, connections: Any, lab: Any = None):
-        self.store, self.setups, self.knowledge, self.connections, self.lab = store, setups, knowledge, connections, lab
+    def __init__(self, store: Any, setups: Any, knowledge: Any, connections: Any):
+        self.store, self.setups, self.knowledge, self.connections = store, setups, knowledge, connections
 
     def preview(self, kind: str, target_id: str) -> DeletePreview:
         kind, label, summary, versions, project_path = self._load_target(kind, target_id)
@@ -32,7 +32,6 @@ class DependencyPreviewService:
         self._scan_runs(kind, target_id, versions, project_path, result, seen)
         self._scan_conversations(kind, target_id, versions, project_path, result, seen)
         self._scan_knowledge(kind, target_id, result, seen)
-        self._scan_lab_cases(kind, target_id, versions, project_path, result, seen)
         if kind == "skill_package":
             result.retained.append("All retained skill package resources; source packages are not deleted")
         if kind in {"connection", "credential"}:
@@ -162,13 +161,6 @@ class DependencyPreviewService:
                 self._add(result, seen, "automatic_save_policy", f"{policy.scope}:{policy.scope_id}", "Automatic memory saving", future=policy.automatic_agent_writes,
                     effect="The exact scope permission is retained, but cannot authorize writes to an inactive scope.")
 
-    def _scan_lab_cases(self, kind: str, target_id: str, versions: set[str], project_path, result: DeletePreview, seen: set[tuple[str, str]]) -> None:
-        if self.lab is not None:
-            for case in self.lab.list_cases():
-                if self._uses(case, kind, target_id, versions, project_path):
-                    self._add(result, seen, "lab_case", case.id, case.task[:120], future=True,
-                        effect="The saved comparison retains its references; a future live run checks unavailable selections.")
-
 
 def dependency_preview_for_app(state: Any, kind: str, target_id: str) -> DeletePreview:
-    return DependencyPreviewService(state.app_store, state.setups, state.knowledge, state.connections, state.lab).preview(kind, target_id)
+    return DependencyPreviewService(state.app_store, state.setups, state.knowledge, state.connections).preview(kind, target_id)

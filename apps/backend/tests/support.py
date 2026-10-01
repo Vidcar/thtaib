@@ -208,21 +208,6 @@ def wait_for_status(
     raise TimeoutError(f"run {run_id} did not reach {status}: {body}")
 
 
-def wait_for_lab_result(client: TestClient, result_id: str, *, timeout: float = 20.0) -> dict[str, Any]:
-    deadline = time.monotonic() + timeout
-    body: dict[str, Any] = {}
-    while time.monotonic() < deadline:
-        response = client.get(f"/v1/lab/results/{result_id}")
-        body = response.json()
-        evidence = body.get("evidence") or {}
-        if evidence.get("executable_checks") or body.get("judgement") or body.get("deviations"):
-            run = client.get(f"/v1/agent-runs/{body['agent_run_id']}").json()
-            if run.get("status") in TERMINAL_RUN_STATUSES:
-                return client.get(f"/v1/lab/results/{result_id}").json()
-        time.sleep(0.05)
-    raise TimeoutError(f"lab result {result_id} did not finish: {body}")
-
-
 def write_tiny_gguf(
     path: Path,
     *,

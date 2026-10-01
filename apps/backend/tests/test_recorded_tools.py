@@ -22,7 +22,7 @@ from workbench_backend.app import create_app
 from workbench_backend.errors import ReplayError
 
 from tests.scripted_model import ScriptedChatModel
-from tests.support import close_workbench_sqlite, offline_workbench_client, wait_for_lab_result, wait_for_run
+from tests.support import close_workbench_sqlite, offline_workbench_client, wait_for_run
 
 
 def write_then_reply(path: str, content: str, call_id: str = "call_write") -> list[AIMessage]:
@@ -375,132 +375,6 @@ class RecordedToolHarnessTests(unittest.TestCase):
         self.assertFalse((self.project / "memories").exists())
         self.assertFalse((self.project / "skills").exists())
 
-
-class RecordedToolLabTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name)
-        self.app = create_app(data_root=self.root)
-        self.manager = self.app.state.manager
-        self._install_script(write_then_reply("/case.md", "case-bytes"))
-        self.client = offline_workbench_client(self.app)
-        self.deployment_id = self.client.post(
-            "/v1/deployments/connected",
-            json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "lab-recorded"},
-        ).json()["id"]
-
-    def tearDown(self) -> None:
-        close_workbench_sqlite(self.app, getattr(self, "client", None))
-        self.tmp.cleanup()
-
-    def _install_script(self, script: list[AIMessage]) -> None:
-        def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
-            return ScriptedChatModel(script)
-
-        self.app.state.harness = HarnessService(
-            lambda: self.manager,
-            model_factory=factory,
-            app_store=self.app.state.app_store,
-        )
-        self.app.state.lab._manager_provider = lambda: self.manager
-        self.app.state.lab._harness_provider = lambda: self.app.state.harness
-
-    def test_lab_recorded_write_file_leaves_parent_and_is_labelled(self) -> None:
-        workspace = self.client.post(
-            "/v1/lab/workspaces",
-            json={"display_name": "case-project", "files": {"notes.md": "original"}},
-        ).json()
-        live = wait_for_run(
-            self.client,
-            self.client.post(
-                "/v1/agent-runs",
-                json={
-                    "deployment_id": self.deployment_id,
-                    "task": "Write case.md",
-                    "approval_mode": "full_access",
-                    "workspace_id": workspace["id"],
-                    "project_path": workspace["path"],
-                    "presented_tools": ["write_file"],
-                    "tool_mode": "live-tool",
-                },
-            ).json()["id"],
-        )
-        self.assertEqual(live["status"], "completed", live.get("error"))
-        case = self.client.post(
-            "/v1/lab/cases/capture",
-            json={"workspace_id": workspace["id"], "run_id": live["id"]},
-        ).json()
-        restore = self.client.post(f"/v1/lab/cases/{case['id']}/restore").json()
-        self.assertEqual(restore.get("input_origin"), "starting_snapshot")
-        self.assertFalse(
-            (Path(restore["workspace"]["path"]) / "case.md").exists(),
-            "starting snapshot must not already contain the live write; reconstruction is the replay step",
-        )
-        parent_before = (Path(workspace["path"]) / "notes.md").read_text(encoding="utf-8")
-        constructions: list[object] = []
-        real = harness_backend_mod.FilesystemBackend
-
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            constructions.append((args, kwargs))
-            return real(*args, **kwargs)
-
-        with patch.object(harness_backend_mod, "FilesystemBackend", side_effect=wrapper):
-            recorded = wait_for_lab_result(
-                self.client,
-                self.client.post(
-                    f"/v1/lab/cases/{case['id']}/rerun",
-                    json={"tool_mode": "recorded-tool", "workspace_id": restore["workspace"]["id"]},
-                ).json()["id"],
-            )
-        self.assertEqual(recorded["tool_mode"], "recorded-tool")
-        self.assertTrue(recorded["recorded_is_not_live_proof"])
-        self.assertIn("not proof of a current live integration", " ".join(recorded["deviations"]).lower())
-        self.assertEqual(constructions, [])
-        self.assertEqual((Path(workspace["path"]) / "notes.md").read_text(encoding="utf-8"), parent_before)
-        child_written = Path(restore["workspace"]["path"]) / "case.md"
-        self.assertTrue(child_written.is_file(), f"missing reconstructed file in {restore['workspace']['path']}")
-        self.assertEqual(child_written.read_text(encoding="utf-8"), "case-bytes")
-        child_run = self.client.get(f"/v1/agent-runs/{recorded['agent_run_id']}").json()
-        self.assertEqual(child_run["status"], "completed", child_run.get("error"))
-        self.assertNotEqual(recorded["tool_mode"], live["tool_mode"])
-
-    def test_lab_recorded_mismatch_is_explicit_deviation(self) -> None:
-        workspace = self.client.post(
-            "/v1/lab/workspaces",
-            json={"display_name": "mismatch-project", "files": {"notes.md": "original"}},
-        ).json()
-        live = wait_for_run(
-            self.client,
-            self.client.post(
-                "/v1/agent-runs",
-                json={
-                    "deployment_id": self.deployment_id,
-                    "task": "Write case.md",
-                    "workspace_id": workspace["id"],
-                    "approval_mode": "full_access",
-                    "project_path": workspace["path"],
-                    "presented_tools": ["write_file"],
-                    "tool_mode": "live-tool",
-                },
-            ).json()["id"],
-        )
-        case = self.client.post(
-            "/v1/lab/cases/capture",
-            json={"workspace_id": workspace["id"], "run_id": live["id"]},
-        ).json()
-        restore = self.client.post(f"/v1/lab/cases/{case['id']}/restore").json()
-        self._install_script(write_then_reply("/case.md", "different-bytes"))
-        recorded = wait_for_lab_result(
-            self.client,
-            self.client.post(
-                f"/v1/lab/cases/{case['id']}/rerun",
-                json={"tool_mode": "recorded-tool", "workspace_id": restore["workspace"]["id"]},
-            ).json()["id"],
-        )
-        child_run = self.client.get(f"/v1/agent-runs/{recorded['agent_run_id']}").json()
-        self.assertEqual(child_run["status"], "failed")
-        self.assertIn("structured replay failure", " ".join(recorded["deviations"]).lower())
-        self.assertTrue(recorded["recorded_is_not_live_proof"])
 
 
 if __name__ == "__main__":

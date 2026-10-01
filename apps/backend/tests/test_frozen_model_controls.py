@@ -24,6 +24,7 @@ from workbench_backend.inference.schemas import (
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.inference.settings import resolve_bags
 from workbench_backend.knowledge.schemas import KnowledgeRefs
+from workbench_backend.lab.schemas import WorkspaceCreateRequest
 from workbench_backend.paths import WorkbenchPaths
 
 
@@ -174,7 +175,7 @@ class DirectHelperPreparationTests(unittest.TestCase):
         self.assertEqual(helper_models[0].profile["max_input_tokens"], 8192,
             "Binding must use newly observed helper capacity, not unknown admission capacity")
 
-    def test_helper_role_and_lab_capture_keep_accepted_output_when_capacity_changes(self):
+    def test_helper_role_keeps_accepted_output_when_capacity_changes(self):
         manager = self.app.state.manager
         initial = self.deployment.model_copy(update={"server_props": ServerProperties(
             fetched="now", source_url="fixture", n_ctx=8192)})
@@ -199,17 +200,16 @@ class DirectHelperPreparationTests(unittest.TestCase):
             return ScriptedChatModel([AIMessage(content="Helper done")])
 
         self.harness(model_for_role)
-        workspace = self.post("/v1/lab/workspaces", {"display_name": "Helper binding", "files": {"note.txt": "Fixture"}})
-        finished = wait_for_run(self.client, self.start(workspace_id=workspace["id"], presented_tools=["echo"], helper_agent_ids=[helper["id"]])["id"])
+        workspace = self.app.state.lab.create_workspace(
+            WorkspaceCreateRequest(display_name="Helper binding", files={"note.txt": "Fixture"})
+        )
+        finished = wait_for_run(self.client, self.start(workspace_id=workspace.id, presented_tools=["echo"], helper_agent_ids=[helper["id"]])["id"])
         self.assertEqual(finished["status"], "completed", finished.get("error"))
         self.assertEqual(len(bindings), 2)
         self.assertEqual(bindings[0], bindings[1])
         self.assertEqual(bindings[0], -1)
         self.assertTrue(all(bag.per_request.applied["max_tokens"] == bindings[0] for bag in parent_snapshots),
             "the accepted exact output setting must remain durable for repeated helper calls")
-        case = self.post("/v1/lab/cases/capture", {"workspace_id": workspace["id"], "run_id": finished["id"]})
-        captured = type(parent_snapshots[0]).model_validate(case["helper_snapshots"][0]["settings_snapshot"])
-        self.assertEqual(captured.per_request.applied["max_tokens"], bindings[0])
 
     def test_direct_execution_prepares_a_cold_helper_setup_without_loading_at_save(self):
         manager = self.app.state.manager

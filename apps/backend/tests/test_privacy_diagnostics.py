@@ -1,4 +1,4 @@
-"""Issue #64: Knowledge capture policy on model_requests and case export.
+"""Issue #64: Knowledge capture policy on model_requests.
 
 Synthetic credentials only. The detector is incomplete; these tests do not
 claim perfect secret detection.
@@ -29,7 +29,7 @@ from workbench_backend.app import create_app
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.knowledge.diagnostics import apply_capture_policy
-from workbench_backend.knowledge.redaction import DETECTOR_LIMITATIONS, REDACTION_MARK
+from workbench_backend.knowledge.redaction import REDACTION_MARK
 from workbench_backend.knowledge.schemas import ContextCaptureSettings
 from workbench_backend.paths import WorkbenchPaths
 
@@ -495,133 +495,6 @@ class FailedTransportDiagnosticsApiTests(unittest.TestCase):
         self.assertTrue(stored_capture["response_observed"])
         self.assertGreaterEqual(stored_capture["transport_attempt_count"], 1)
 
-
-class PrivacyExportApiTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name)
-        self.paths = WorkbenchPaths(self.root).ensure()
-        self.manager = ModelManager(self.paths)
-        self.app = create_app(data_root=self.root)
-        self.app.state.manager = self.manager
-
-        def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
-            return ScriptedChatModel(echo_secret_then_reply())
-
-        self.app.state.harness = HarnessService(
-            lambda: self.manager,
-            model_factory=factory,
-            knowledge_provider=lambda: self.app.state.knowledge,
-            app_store=self.app.state.app_store,
-        )
-        self.app.state.lab._manager_provider = lambda: self.manager
-        self.app.state.lab._harness_provider = lambda: self.app.state.harness
-        self.app.state.lab._knowledge_provider = lambda: self.app.state.knowledge
-        self.client = offline_workbench_client(self.app)
-        self.deployment_id = self.client.post(
-            "/v1/deployments/connected",
-            json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "privacy-export"},
-        ).json()["id"]
-
-    def tearDown(self) -> None:
-        close_workbench_sqlite(self.app, getattr(self, "client", None))
-        self.tmp.cleanup()
-
-    def _workspace(self, files: dict[str, str] | None = None) -> dict[str, Any]:
-        return self.client.post(
-            "/v1/lab/workspaces",
-            json={
-                "display_name": "privacy-export",
-                "files": files or {"notes.md": "safe notes"},
-            },
-        ).json()
-
-    def _capture(self, workspace_id: str, **extra: Any) -> dict[str, Any]:
-        payload = {
-            "workspace_id": workspace_id,
-            "deployment_id": self.deployment_id,
-            "task": extra.pop("task", "Echo a harmless phrase."),
-            **extra,
-        }
-        response = self.client.post("/v1/lab/cases/capture", json=payload)
-        self.assertEqual(response.status_code, 200, response.text)
-        return response.json()
-
-    def _assert_shareable(self, export: dict[str, Any]) -> None:
-        dumped = json.dumps(export)
-        self.assertNotIn(SYNTH_API_KEY, dumped)
-        self.assertNotIn(SYNTH_TOKEN, dumped)
-        self.assertIn("incomplete", export["detector_limitations"].lower())
-        self.assertEqual(export["detector_limitations"], DETECTOR_LIMITATIONS)
-        if export["secret_scan_clean"]:
-            self.assertEqual(export["export_status"], "clean")
-            self.assertNotIn(SYNTH_ASSIGNMENT, dumped)
-        else:
-            self.assertEqual(export["export_status"], "sanitized")
-            self.assertTrue(export["sanitized_fields"])
-
-    def test_export_sanitizes_synthetic_credential_in_task(self) -> None:
-        workspace = self._workspace()
-        case = self._capture(workspace["id"], task=f"Document {SYNTH_ASSIGNMENT} in the task.")
-        self.assertIn(SYNTH_API_KEY, case["task"])
-        response = self.client.get(f"/v1/lab/cases/{case['id']}/export")
-        self.assertEqual(response.status_code, 200, response.text)
-        export = response.json()
-        self.assertFalse(export["secret_scan_clean"])
-        self.assertEqual(export["export_status"], "sanitized")
-        self.assertIn("task", export["sanitized_fields"])
-        self.assertNotEqual(export["case"]["task"], case["task"])
-        self.assertIn(REDACTION_MARK, export["case"]["task"])
-        stored = self.client.get(f"/v1/lab/cases/{case['id']}").json()
-        self.assertIn(SYNTH_API_KEY, stored["task"])
-        self._assert_shareable(export)
-
-    def test_export_sanitizes_synthetic_credential_in_tool_fixtures(self) -> None:
-        workspace = self._workspace()
-        case = self._capture(workspace["id"])
-        loaded = self.app.state.lab.get_case(case["id"])
-        loaded.tool_fixtures = [
-            {
-                "name": "echo",
-                "args": {"text": SYNTH_TOKEN_ASSIGNMENT},
-                "result": SYNTH_ASSIGNMENT,
-            }
-        ]
-        self.app.state.lab.store.put_case(loaded)
-        response = self.client.get(f"/v1/lab/cases/{case['id']}/export")
-        self.assertEqual(response.status_code, 200, response.text)
-        export = response.json()
-        self.assertFalse(export["secret_scan_clean"])
-        self.assertEqual(export["export_status"], "sanitized")
-        self.assertIn("tool_fixtures", export["sanitized_fields"])
-        self.assertNotIn(SYNTH_API_KEY, json.dumps(export["case"]["tool_fixtures"]))
-        self.assertNotIn(SYNTH_TOKEN, json.dumps(export["case"]["tool_fixtures"]))
-        stored = self.client.get(f"/v1/lab/cases/{case['id']}").json()
-        self.assertIn(SYNTH_API_KEY, json.dumps(stored["tool_fixtures"]))
-        self._assert_shareable(export)
-
-    def test_export_sanitizes_ordinary_config_file(self) -> None:
-        workspace = self._workspace(
-            {
-                "settings.json": f'endpoint=local\n{SYNTH_ASSIGNMENT}\n',
-                "notes.md": "safe notes",
-            }
-        )
-        case = self._capture(workspace["id"])
-        response = self.client.get(f"/v1/lab/cases/{case['id']}/export")
-        self.assertEqual(response.status_code, 200, response.text)
-        export = response.json()
-        self.assertFalse(export["secret_scan_clean"])
-        self.assertEqual(export["export_status"], "sanitized")
-        self.assertTrue(any(item.startswith("snapshot_file:") for item in export["sanitized_fields"]))
-        self.assertIn("settings.json", export["exported_files"])
-        self.assertNotIn(SYNTH_API_KEY, export["exported_files"]["settings.json"])
-        self.assertIn(REDACTION_MARK, export["exported_files"]["settings.json"])
-        on_disk = (self.paths.snapshots / case["snapshot_id"] / "tree" / "settings.json").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn(SYNTH_API_KEY, on_disk)
-        self._assert_shareable(export)
 
 
 if __name__ == "__main__":

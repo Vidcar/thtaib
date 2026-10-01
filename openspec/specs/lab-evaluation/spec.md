@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Specify the retained case-capture, restore, recorded/live replay and evidence boundaries. The Lab sidebar uses the separate lab, lab-speed, lab-memory and lab-challenges contracts for loaded-model Performance, Memory and Challenges; case replay remains a distinct retained capability.
+Case capture, case restore, and recorded-tool replay are removed. Loaded-model Performance, Memory, and Challenges remain specified by the lab, lab-speed, lab-memory, and lab-challenges contracts.
 
 ## Requirements
 

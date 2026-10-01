@@ -2,9 +2,9 @@
 
 ## Purpose
 
-Specify how Chat, Agent-run, and Workflows use the embedded Deep Agents harness and LangGraph runtime while keeping active context, displayed history, configuration links, workflow sequencing, and durable knowledge distinct.
+Specify how Chat and Workflows use the embedded Deep Agents harness and LangGraph runtime while keeping active context, displayed history, configuration links, workflow sequencing, and durable knowledge distinct.
 
-Chat and named helpers are implemented. The visual workflow editor and its full registry-backed LangGraph execution remain outstanding in [consolidate-product-contract](../../changes/consolidate-product-contract/tasks.md); the existing Agent run panel is a task runner, not that workflow editor.
+Chat and named helpers are implemented. The canvas contract remains WF-012 and is delivered by [consolidate-product-contract](../../changes/consolidate-product-contract/tasks.md). Until that screen exists, the sidebar page is the one-task form.
 
 ## Requirements
 
