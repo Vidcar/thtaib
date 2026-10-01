@@ -16,8 +16,7 @@ function connectionReadiness(item: Connection): string {
   if (item.last_error) return "Needs attention";
   if (!item.last_tested_at) return "Not tested";
   const count = item.tools?.length ?? 0;
-  if (count > 0 || item.protocol_capabilities?.includes("tools")) return `${count} tools ready`;
-  return "Ready · no tools";
+  return count > 0 ? `${count} tools ready` : "Ready · no tools";
 }
 
 export function ConnectionsPanel() {

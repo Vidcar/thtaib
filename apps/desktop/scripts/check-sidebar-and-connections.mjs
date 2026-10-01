@@ -85,20 +85,18 @@ try {
   const status = name => text(row(name).findAllByType("button").find(node => node.props.className === "connection-title"));
   const pressTest = async name => { await act(async () => { row(name).findAllByType("button").find(node => text(node).trim() === "Test").props.onClick(); await tick(); }); };
   assert.match(status("Files"), /Ready · no tools/);
-  assert.doesNotMatch(status("Files"), /\b0 tools ready/);
+  assert.match(status("Empty"), /Ready · no tools/);
   assert.match(status("Tools"), /2 tools ready/);
-  assert.match(status("Empty"), /\b0 tools ready/);
-  assert.doesNotMatch(status("Empty"), /Ready · no tools/);
   assert.match(status("Broken"), /Needs attention/);
   assert.doesNotMatch(status("Broken"), /tools ready/);
+  assert.doesNotMatch(text(connections.root), /0 tools ready/);
   await pressTest("Files");
-  assert.match(status("Files"), /Ready · no tools/);
-  assert.doesNotMatch(status("Files"), /\b0 tools ready/);
   await pressTest("Empty");
-  assert.match(status("Empty"), /\b0 tools ready/);
-  assert.doesNotMatch(status("Empty"), /Ready · no tools/);
   await pressTest("Tools");
+  assert.match(status("Files"), /Ready · no tools/);
+  assert.match(status("Empty"), /Ready · no tools/);
   assert.match(status("Tools"), /2 tools ready/);
+  assert.doesNotMatch(text(connections.root), /0 tools ready/);
   console.log("Sidebar and connection wording checks passed.");
 } finally {
   if (sidebar) await act(async () => sidebar.unmount());
