@@ -64,7 +64,6 @@ class UnknownEffectSafetyTests(unittest.TestCase):
             app_store=self.app.state.app_store,
         )
         self.app.state.lab._manager_provider = lambda: self.manager
-        self.app.state.lab._harness_provider = lambda: self.app.state.harness
         self.client = offline_workbench_client(self.app)
         self.deployment_id = self.client.post(
             "/v1/deployments/connected",

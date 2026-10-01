@@ -1090,7 +1090,6 @@ class HarnessApiTests(unittest.TestCase):
         harness = HarnessService(lambda: self.manager, model_factory=factory,
             knowledge_provider=lambda: self.app.state.knowledge)
         self.app.state.harness = harness
-        self.app.state.lab._harness_provider = lambda: harness
         project = self.root / "terminal-retry-project"
         project.mkdir()
         other_project = self.root / "terminal-retry-independent-project"

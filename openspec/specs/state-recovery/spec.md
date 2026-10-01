@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Specify how Local AI Workbench persists enough to explain, continue, and compare runs after restart while keeping chat history, project files, external effects, and durable knowledge distinct. Application backup, project copies, and stored copies of the model request are removed. A Markdown transcript is a download, not a restore.
+Specify how Local AI Workbench persists enough to explain, continue, and compare runs after restart while keeping chat history, project files, external effects, and durable knowledge distinct. A Markdown transcript is a download, not a restore.
 
 ## Requirements
 

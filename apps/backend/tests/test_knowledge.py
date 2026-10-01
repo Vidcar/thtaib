@@ -325,8 +325,6 @@ class KnowledgeLabHarnessTests(unittest.TestCase):
             knowledge_provider=lambda: self.app.state.knowledge,
         )
         self.app.state.lab._manager_provider = lambda: self.manager
-        self.app.state.lab._harness_provider = lambda: self.app.state.harness
-        self.app.state.lab._knowledge_provider = lambda: self.app.state.knowledge
         self.client = offline_workbench_client(self.app)
         self.deployment_id = self.client.post(
             "/v1/deployments/connected",

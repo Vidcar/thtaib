@@ -5,30 +5,18 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from workbench_backend.agents.harness import HarnessService
 from workbench_backend.errors import LabError
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.service import ModelManager
-from workbench_backend.knowledge.service import KnowledgeService
 from workbench_backend.lab.schemas import LabWorkspace, WorkspaceCreateRequest
 from workbench_backend.lab.snapshot import write_text_files
 from workbench_backend.lab.store import LabStore
 from workbench_backend.paths import WorkbenchPaths
-from workbench_backend.state.effects import EffectService
 
 
 class LabService:
-    def __init__(
-        self,
-        manager_provider: Callable[[], ModelManager],
-        harness_provider: Callable[[], HarnessService],
-        knowledge_provider: Callable[[], KnowledgeService] | None = None,
-        effects_provider: Callable[[], EffectService] | None = None,
-    ) -> None:
+    def __init__(self, manager_provider: Callable[[], ModelManager]) -> None:
         self._manager_provider = manager_provider
-        self._harness_provider = harness_provider
-        self._knowledge_provider = knowledge_provider
-        self._effects_provider = effects_provider
 
     @property
     def manager(self) -> ModelManager:

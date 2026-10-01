@@ -240,12 +240,7 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         desktop_automation=application.state.desktop_automation,
     )
     application.state.browser.state_invalidator = application.state.harness.invalidate_browser_state
-    application.state.lab = LabService(
-        lambda: application.state.manager,
-        lambda: application.state.harness,
-        knowledge_provider=lambda: application.state.knowledge,
-        effects_provider=lambda: application.state.effects,
-    )
+    application.state.lab = LabService(lambda: application.state.manager)
     application.state.lab_workbench = LabWorkbenchService(
         lambda: application.state.manager, lambda: application.state.harness, application.state.app_store,
     )
