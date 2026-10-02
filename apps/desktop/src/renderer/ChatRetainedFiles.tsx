@@ -262,7 +262,7 @@ export function ChatRetainedFiles({
         </div>
       </div> : null}
       {loading ? <p className="hint" role="status">Loading chat files…</p> : null}
-      {showEmpty && !loading && !error && !visible.length ? <p className="hint">Uploads and files created in this chat will appear here.</p> : null}
+      {showEmpty && !loading && !error && !visible.length ? <p className="hint">No chat files</p> : null}
       {error ? <Notice tone="error" role="status">{error}</Notice> : null}
       {message ? <Notice role="status">{message}</Notice> : null}
       <div className="chat-retained-file-groups">

@@ -13,7 +13,7 @@ export function SettingSection({ title, description, actions, children, classNam
   title: string; description?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string;
 }) {
   return <section className={className ? `setting-section ${className}` : "setting-section"}>
-    <header className="setting-section-head"><div><h3>{title}</h3>{description ? <p>{description}</p> : null}</div>{actions ? <div className="setting-section-actions">{actions}</div> : null}</header>
+    <header className="setting-section-head"><div className="entity-head"><h3>{title}</h3>{description ? <HoverHelp title={title}>{description}</HoverHelp> : null}</div>{actions ? <div className="setting-section-actions">{actions}</div> : null}</header>
     <div className="setting-rows">{children}</div>
   </section>;
 }

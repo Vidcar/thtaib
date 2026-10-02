@@ -285,7 +285,7 @@ export function LibraryPanel() {
     <section className="surface file-browser" aria-label="Library">
       <header className="surface-head">
         <div className="entity-head"><h2>Library</h2><span className="file-count">{assets.length} {assets.length === 1 ? "file" : "files"}</span><HoverHelp title="About saved files">Files uploaded to chats and saved outputs. These are retained copies; project originals stay in their folders.</HoverHelp></div>
-        <button type="button" className="icon-button" aria-label="Refresh files" disabled={busy} onClick={() => { void loadAssets(); void loadSourceNames(); }}><Icon name="refresh" size={16} /></button>
+        <button type="button" className="icon-button" aria-label="Refresh files" title="Refresh files" disabled={busy} onClick={() => { void loadAssets(); void loadSourceNames(); }}><Icon name="refresh" size={16} /></button>
       </header>
 
       <div className="file-browser-toolbar" aria-label="Library filters">
@@ -326,11 +326,11 @@ export function LibraryPanel() {
               <td className="file-date">{new Date(asset.observed_at).toLocaleDateString()}</td>
             </tr>)}</tbody>
           </table>
-          {!visibleAssets.length ? <div className="file-browser-empty"><Icon name="files" size={28} /><strong>{loading ? "Loading files…" : scope !== "all" && !scopeTarget ? `Choose a ${scope}` : query ? "No matching files" : "No saved files yet"}</strong><span>{scope !== "all" && !scopeTarget ? `Select a ${scope} to see its saved files.` : query ? "Try another name or source." : "Files you attach and outputs you save in Chat appear here."}</span></div> : null}
+          {!visibleAssets.length ? <div className="file-browser-empty"><Icon name="files" size={28} /><strong>{loading ? "Loading files…" : scope !== "all" && !scopeTarget ? `Choose a ${scope}` : query ? "No matching files" : "No saved files yet"}</strong></div> : null}
         </div>
 
         {preview ? <aside className="file-preview-pane" aria-label="Library detail">
-          <header><div><strong>{preview.filename}</strong><span>{formatBytes(preview.size_bytes)} · {sourceStatusLabel(preview.source_status)}</span>{activeAsset ? <span>{sourceName(activeAsset)}</span> : null}</div><button type="button" className="icon-button" aria-label="Close file preview" onClick={() => { detailGeneration.current += 1; setPreview(null); setFullContent(null); setBusy(false); }}><Icon name="close" size={15} /></button></header>
+          <header><div><strong>{preview.filename}</strong><span>{formatBytes(preview.size_bytes)} · {sourceStatusLabel(preview.source_status)}</span>{activeAsset ? <span>{sourceName(activeAsset)}</span> : null}</div><button type="button" className="icon-button" aria-label="Close file preview" title="Close file preview" onClick={() => { detailGeneration.current += 1; setPreview(null); setFullContent(null); setBusy(false); }}><Icon name="close" size={15} /></button></header>
           <div className="file-preview-actions">
             {activeAsset && activeAsset.content_kind !== "image" && (activeAsset.content_kind as string) !== "binary" && fullContent?.id !== preview.id ? <button type="button" disabled={busy} onClick={() => void showFullContent(activeAsset)}><Icon name="expand" size={14} /> Open full text</button> : null}
             {activeAsset && window.workbench?.saveAsset ? <button type="button" disabled={busy} onClick={() => void saveCopy(activeAsset)}><Icon name="download" size={14} /> Save copy</button> : null}

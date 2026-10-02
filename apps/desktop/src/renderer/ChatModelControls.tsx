@@ -42,6 +42,9 @@ function modelDescription(bundle?: ModelBundle): string {
   const variant = /low[-_]mtp/i.test(filename) ? "LOW-MTP" : /(?:^|[-_.])mtp(?:[-_.]|$)/i.test(filename) ? "MTP" : "";
   return [bundle.quantization, variant].filter(Boolean).join(" · ");
 }
+function modelQuantization(bundle?: ModelBundle): string {
+  return bundle?.quantization?.trim() || "";
+}
 function modelName(bundle: ModelBundle): string {
   const repositoryName = bundle.display_name === bundle.source?.repo_id;
   if (!repositoryName && !/\.gguf$/i.test(bundle.display_name)) return bundle.display_name;
@@ -325,7 +328,7 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
     } finally { finishOperation(operation); }
   }
 
-  function choiceRow(profile: RunProfile | null, connected: Deployment | null, label: string, close: () => void, className = "chat-model-choice", description = "", details = description) {
+  function choiceRow(profile: RunProfile | null, connected: Deployment | null, label: string, close: () => void, className = "chat-model-choice", description = "", details = description, secondary = "") {
     const key = profile?.id ?? connected?.id ?? label;
     const state = observed(profile, connected);
     const reason = incompatibleChoices[key];
@@ -335,7 +338,7 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
     const status = <span className={"model-state-dot is-" + (reason ? "attention" : state.tone)} aria-label={reason || state.label} />;
     return <button id={`chat-model-option-${index}`} type="button" role="option" aria-selected={selected} data-highlighted={index === highlighted} className={className} key={key} disabled={disabled || busy || fixedModel || Boolean(reason) || (!profile && !connected)} aria-pressed={selected} title={[label, details, reason || state.label].filter(Boolean).join(" · ")} onPointerMove={() => setHighlighted(index)} onClick={() => void applyChoice(profile, connected, close)}>
       {!variant ? status : null}
-      <span className="chat-model-choice-name"><strong>{label}</strong></span>
+      <span className="chat-model-choice-name"><strong>{label}</strong>{secondary ? <small>{secondary}</small> : null}</span>
       {description ? <span className="chat-model-quantization">{description}</span> : null}
       {variant && (reason || state.tone === "loading" || state.tone === "attention") ? status : variant && selected ? <Icon name="check" size={14} /> : null}
     </button>;
@@ -378,7 +381,7 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   }, [pickerOpen, search, visibleKeySignature]);
   useEffect(() => { choicesRef.current?.querySelector<HTMLElement>(`#chat-model-option-${highlighted}`)?.scrollIntoView?.({ block: "nearest" }); }, [highlighted, search, pickerOpen]);
   return <>
-    <MenuPopover label={"Chat model: " + selectedName} className="chat-model-controls" panelClassName="chat-model-controls-panel" trigger={<><Icon name="models" size={16} /><span className="chat-model-controls-model" title={[modelDetails(selectedBundle) || selectedName, selectedProfile?.display_name].filter(Boolean).join(" · ")}>{selectedName}</span>{modelDescription(selectedBundle) ? <span className="chat-model-quantization">{modelDescription(selectedBundle)}</span> : null}<span className={"model-state-dot is-" + selectedState.tone} title={selectedState.label} /><span className="sr-only chat-model-status">{selectedState.label}</span></>} disabled={disabled} openRequest={openRequest} onOpenChange={setPickerOpen}>
+    <MenuPopover label={"Chat model: " + selectedName} className="chat-model-controls" panelClassName="chat-model-controls-panel" trigger={<><Icon name="models" size={16} /><span className="chat-model-controls-model" title={[modelDetails(selectedBundle) || selectedName, selectedProfile?.display_name].filter(Boolean).join(" · ")}>{selectedName}</span>{modelQuantization(selectedBundle) ? <span className="chat-model-quantization">{modelQuantization(selectedBundle)}</span> : null}<span className={"model-state-dot is-" + selectedState.tone} title={selectedState.label} /><span className="sr-only chat-model-status">{selectedState.label}</span></>} disabled={disabled} openRequest={openRequest} onOpenChange={setPickerOpen}>
       {close => <>
         {fixedModel ? <div className="actions"><span>Assigned by agent</span><button type="button" onClick={onManageAgent}>Change in Agents</button></div> : null}
         <input aria-label="Search models" placeholder="Search models" value={search} aria-controls="chat-model-choices" aria-activedescendant={visibleKeys.length ? `chat-model-option-${Math.min(highlighted, visibleKeys.length - 1)}` : undefined} onChange={event => setSearch(event.target.value)} onKeyDown={event => {
@@ -392,8 +395,10 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
           {visibleBundles.map(bundle => {
             const profile = preferredConfiguration(bundle);
             const variants = profiles.filter(item => item.bundle_id === bundle.id);
+            const soleSetup = variants.length === 1 ? variants[0].display_name : "";
+            const details = [modelDetails(bundle), profile?.display_name, soleSetup && profile?.display_name !== soleSetup ? soleSetup : ""].filter(Boolean).join(" · ");
             return <div key={bundle.id} className="chat-model-row">
-              <div className="chat-model-primary">{choiceRow(profile ?? null, null, modelLabel(bundle, availableBundles), close, "chat-model-choice", modelDescription(bundle), [modelDetails(bundle), profile?.display_name].filter(Boolean).join(" · "))}</div>
+              <div className="chat-model-primary">{choiceRow(profile ?? null, null, modelLabel(bundle, availableBundles), close, "chat-model-choice", modelDescription(bundle), details, soleSetup)}</div>
               {variants.length > 1 ? <div className="chat-model-variants" role="group" aria-label={"Settings for " + modelLabel(bundle, availableBundles)}>{variants.map(item => choiceRow(item, null, item.display_name, close, "chat-model-choice chat-model-variant", "", modelDetails(bundle)))}</div> : null}
             </div>;
           })}

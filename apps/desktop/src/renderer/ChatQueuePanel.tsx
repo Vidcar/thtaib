@@ -180,18 +180,17 @@ export function ChatQueuePanel({ conversation, deployments, profiles, disabled =
                       }
                     }}
                   />
-                  <p className="hint">{capturedModelLabel(item, profiles, deployments)} · settings captured when queued</p>
-                  {item.frozen_config ? <p className="hint">{frozenConfigLabel(item)}</p> : null}
+                  <p className="hint" title="settings captured when queued">{capturedModelLabel(item, profiles, deployments)}</p>
+                  {item.frozen_config ? <p className="hint" title="Model, access and helper settings captured when queued.">{frozenConfigLabel(item)}</p> : null}
                   <div className="composer-queue-editor-actions">
                     <button type="button" aria-label="Save queued turn" disabled={itemDisabled || !draft.dirty || !hasSendableContent(draft)} onClick={() => void updateQueueItem(item)}>
                       {savingThisItem ? "Saving..." : "Save"}
                     </button>
-                    {getCurrentSetup ? <button type="button" disabled={itemDisabled || !hasSendableContent(draft)} onClick={() => void updateQueueItem(item, true)}>Use current setup</button> : null}
+                    {getCurrentSetup ? <button type="button" title="Use current setup saves this message with your current composer choices." disabled={itemDisabled || !hasSendableContent(draft)} onClick={() => void updateQueueItem(item, true)}>Use current setup</button> : null}
                   </div>
-                  {getCurrentSetup ? <p className="hint">Use current setup saves this message with your current composer choices.</p> : null}
                 </div>
               ) : (
-                <div className="composer-queue-text"><p title={preview}>{preview}</p>{item.wait_reason ? <div className="queue-project-wait" role="status"><span>Waiting for project{item.queue_position ? ` · position ${item.queue_position}` : ""}{item.waiting_owner_title ? ` · ${item.waiting_owner_title}` : ""}{item.wait_reason === "project_uncertain" ? " · effects need review" : ""}</span>{item.waiting_thread_id && onOpenOwner ? <button type="button" onClick={() => onOpenOwner(item.waiting_thread_id!)}>Open active chat</button> : null}</div> : null}</div>
+                <div className="composer-queue-text"><p title={preview}>{preview}</p>{item.wait_reason ? <div className="queue-project-wait" role="status"><span title={item.wait_reason === "project_uncertain" ? "Effects from the active chat were not confirmed. This message waits until they are reviewed." : undefined}>Waiting for project{item.queue_position ? ` · position ${item.queue_position}` : ""}{item.waiting_owner_title ? ` · ${item.waiting_owner_title}` : ""}{item.wait_reason === "project_uncertain" ? " · Uncertain effects" : ""}</span>{item.waiting_thread_id && onOpenOwner ? <button type="button" onClick={() => onOpenOwner(item.waiting_thread_id!)}>Open active chat</button> : null}</div> : null}</div>
               )}
               <div className="composer-queue-actions">
                 <button type="button" className="icon-button" aria-label="Edit queued turn" title={locked ? "View queued message" : "Edit queued message"} disabled={disabled || itemBusy} onClick={() => setOpenEditors((current) => ({ ...current, [item.id]: !current[item.id] }))}>
@@ -260,6 +259,5 @@ function queueItemPath(conversationId: string, itemId: string): string {
 
 function frozenConfigLabel(item: ChatQueueItem): string {
   const config = (item.frozen_config ?? item.intended_config ?? {}) as Record<string, unknown>;
-  const mode = config.work_mode === "plan" ? "Plan" : "Work";
-  return `${mode} · model, access and helper settings captured when queued.`;
+  return config.work_mode === "plan" ? "Plan" : "Work";
 }

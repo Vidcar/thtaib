@@ -238,7 +238,22 @@ async function checkSettingsCategoriesHaveNoBackup(RecoverySettingsPanel) {
   assert.equal(visible.toLowerCase().includes("browser sign-in"), false, "Settings must not offer browser sign-in backup");
   assert.equal(renderer.root.findAll((node) => node.type === "button" && textOf(node).includes("Create backup")).length, 0);
   assert.equal(renderer.root.findAll((node) => node.type === "button" && textOf(node).includes("Restore")).length, 0);
+  const howTo = "In Ask mode, choose Allow for this session or Always allow on an action's approval card to save it here. Approve once and Full access do not save permissions.";
+  const permissionEmpty = renderer.root.findAll((node) => node.props?.className === "empty-state" && textOf(node.findByType("h3")) === "No saved permissions");
+  assert.equal(permissionEmpty.length, 1, "an empty grants list shows No saved permissions");
+  assert.equal(renderedText(renderer.root).includes(howTo), false, "the permissions how-to is not visible text");
+  const helps = renderer.root.findAll((node) => node.type?.name === "HoverHelp" && textOf(node).includes(howTo));
+  assert.equal(helps.length, 1, "the permissions how-to stays in one hover");
+  assert.equal(helps[0].props.title, "Saved permissions");
   await act(async () => renderer.unmount());
+}
+
+function renderedText(node) {
+  if (node == null || typeof node === "boolean") return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map((item) => renderedText(item)).join("");
+  if (node.children) return renderedText(node.children);
+  return "";
 }
 
 function themeSelect(renderer) {

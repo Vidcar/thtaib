@@ -67,7 +67,6 @@ export function LabConfigurationControls({ selection, models, profiles, disabled
       <option value="">{configurations.length ? "Choose a saved setup" : selection.bundleId ? "No saved configurations" : "Choose a model first"}</option>
       {configurations.map(item => <option key={item.id} value={item.id}>{item.display_name}</option>)}
     </select></label>
-    {selection.bundleId && !configurations.length ? <p className="hint">Save a configuration for this model in Models.</p> : null}
     {error ? <div className="notice notice-error" role="alert">Model choices could not load: {error} <button type="button" className="text-button" onClick={() => setRevision(value => value + 1)}>Retry choices</button></div> : null}
     {selection.configuration_id && !selection.options && !error ? <p className="hint">Reading legal model choices…</p> : null}
     {concurrent ? <SettingRow label="Concurrent requests" htmlFor={`lab-${selection.key}-requests`} help="Requests run together on this configuration. These are the same request counts offered in Models; context is shared between requests."><select id={`lab-${selection.key}-requests`} aria-label={index ? `Concurrent requests ${index + 1}` : "Concurrent requests"} value={selection.concurrent_requests} disabled={disabled} onChange={event => onChange({ ...selection, concurrent_requests: Number(event.target.value) })}>{requestChoices.map(value => <option key={value} value={value}>{value}</option>)}</select></SettingRow> : null}

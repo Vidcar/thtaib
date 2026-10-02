@@ -95,7 +95,7 @@ await withFixture({ requestOverride({ req, res, url }) {
   if (req.method === "GET" && url.pathname === "/v1/deployments") { json(res, 503, { error: "Model status unavailable" }); return true; }
 } }, async renderer => {
   await until(() => assert.match(panelText(renderer), /Model status unavailable/), "initial failed model read");
-  assert.doesNotMatch(panelText(renderer), /Your workspace for local AI/, "failed model reads cannot establish an empty workspace");
+  assert.doesNotMatch(panelText(renderer), /No models/, "failed model reads cannot establish an empty workspace");
 });
 
 {
@@ -114,16 +114,16 @@ await withFixture({ requestOverride({ req, res, url }) {
     assert.ok(modelReads > 30 && fileReads > 30, `failed initial reads keep retrying beyond thirty failures (models=${modelReads}, files=${fileReads})`);
     assert.match(panelText(renderer), /Models: Model status unavailable/);
     assert.match(panelText(renderer), /Model files: Model files unavailable/);
-    assert.doesNotMatch(panelText(renderer), /Your workspace for local AI/);
+    assert.doesNotMatch(panelText(renderer), /No models/);
     failModels = false;
     harness.state.conversationListError = null;
     await advance(8000);
     await until(() => assert.doesNotMatch(panelText(renderer), /Models:|History unavailable/), "model and history reads recover automatically");
     assert.match(panelText(renderer), /Model files: Model files unavailable/, "one resource cannot clear another failure");
-    assert.doesNotMatch(panelText(renderer), /Your workspace for local AI/);
+    assert.doesNotMatch(panelText(renderer), /No models/);
     failFiles = false;
     await advance(8000);
-    await until(() => assert.match(panelText(renderer), /Your workspace for local AI/), "only successful empty catalogues permit empty copy");
+    await until(() => assert.match(panelText(renderer), /No models/), "only successful empty catalogues permit empty copy");
     assert.doesNotMatch(panelText(renderer), /Model files unavailable|History unavailable|Model status unavailable/);
     const verifiedFileReads = fileReads;
     await advance(60000);
@@ -167,10 +167,10 @@ for (const oldFailure of [false, true]) {
     firstGeneration = false;
     await updatePanel(renderer, { activeTab: "models" });
     await updatePanel(renderer, { activeTab: "chat" });
-    await until(() => assert.match(panelText(renderer), /Your workspace for local AI/), "replacement empty response verified");
+    await until(() => assert.match(panelText(renderer), /No models/), "replacement empty response verified");
     await act(async () => barrier.resolve());
     await settle();
-    assert.match(panelText(renderer), /Your workspace for local AI/, "obsolete success cannot overwrite replacement model files");
+    assert.match(panelText(renderer), /No models/, "obsolete success cannot overwrite replacement model files");
     assert.doesNotMatch(panelText(renderer), /Obsolete file error/);
     const settledReads = reads;
     await advance(60000);

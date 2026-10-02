@@ -19,9 +19,10 @@ export function CatalogueWorkspace({ title, search, onSearch, searchPlaceholder,
 }) {
   const id = useId();
   const selectionVisible = items.some(item => item.id === selectedId);
+  const placeholder = searchPlaceholder ?? `Search ${title.toLowerCase()}`;
   return <div className="catalogue-workspace">
     <aside className="catalogue-navigation" aria-label={title}>
-      <div className="catalogue-search"><Icon name="search" /><input aria-label={`Search ${title.toLowerCase()}`} type="search" value={search} placeholder={searchPlaceholder ?? `Search ${title.toLowerCase()}`} onChange={event => onSearch(event.target.value)} /></div>
+      <div className="catalogue-search"><Icon name="search" /><input aria-label={`Search ${title.toLowerCase()}`} type="search" value={search} placeholder={placeholder} title={placeholder} onChange={event => onSearch(event.target.value)} /></div>
       {actions ? <div className="catalogue-actions">{actions}</div> : null}
       <div className="catalogue-narrow"><label htmlFor={id}>{title}</label><select id={id} value={selectionVisible ? selectedId : ""} onChange={event => onSelect(event.target.value)}>
         {!selectionVisible ? <option value="">{loading ? "Loading…" : items.length ? "Choose a record" : emptyLabel}</option> : null}

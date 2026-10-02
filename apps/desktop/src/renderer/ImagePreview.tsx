@@ -51,7 +51,7 @@ export function ImagePreview({ src, name, loadOriginal, small = false }: {
       <img src={safeSrc} alt={name} loading="lazy" /><span><Icon name="expand" size={13} /> View</span>
     </button>
     {open && createPortal(<dialog ref={dialog} className="image-viewer" aria-label={name} onCancel={event => { event.preventDefault(); close(); }} onClose={close} onClick={event => { if (event.target === event.currentTarget) close(); }}>
-      <header><strong>{name}</strong><button type="button" onClick={() => setZoomed(value => !value)}>{zoomed ? "Fit image" : "Actual size"}</button><button type="button" className="icon-button" aria-label="Close image" onClick={close}><Icon name="close" /></button></header>
+      <header><strong>{name}</strong><button type="button" onClick={() => setZoomed(value => !value)}>{zoomed ? "Fit image" : "Actual size"}</button><button type="button" className="icon-button" aria-label="Close image" title="Close image" onClick={close}><Icon name="close" /></button></header>
       {loading ? <p role="status">Loading full image…</p> : null}{error ? <p role="alert">{error}</p> : null}
       <div className={`image-viewer-canvas${zoomed ? " is-zoomed" : ""}`}><img src={original ?? safeSrc} alt={name} /></div>
     </dialog>, document.body)}

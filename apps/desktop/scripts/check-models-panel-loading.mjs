@@ -33,6 +33,7 @@ try {
   await checkModelsRenderBeforeDeferredRuntimeAndConfiguration(ModelsPanel);
   for (const pending of ["runtime", "deployments", "profiles", "profiles-failure", "runtime-failure"]) await checkInitialModelDraftOwnership(ModelsPanel, pending);
   await checkRefreshFailureKeepsModelDraft(ModelsPanel);
+  await checkSuccessfulEmptyModels(ModelsPanel);
   // Mounted workspace, new lifecycle and import acceptance now live in
   // check-models-workspace.mjs, run by the unified-settings delivery gate.
 
@@ -499,6 +500,33 @@ async function checkInitialModelDraftOwnership(ModelsPanel, pending) {
   }
 }
 
+async function checkSuccessfulEmptyModels(ModelsPanel) {
+  const originalFetch = globalThis.fetch;
+  let renderer;
+  globalThis.fetch = async (url) => {
+    const address = String(url);
+    if (address.endsWith("/v1/bundles") || address.endsWith("/v1/profiles")) return jsonResponse([]);
+    throw new Error(`Unexpected empty catalogue request: ${address}`);
+  };
+  try {
+    await act(async () => { renderer = create(React.createElement(ModelsPanel)); await tick(); });
+    const hint = renderer.root.findByProps({ className: "models-library-list" }).findAll((node) => node.type === "p" && node.props.className === "hint");
+    assert.equal(hint.length, 1, "a successful empty catalogue has one hint");
+    assert.equal(textOf(hint[0]), "No models");
+    const empty = renderer.root.findByProps({ id: "models-panel-library" }).findAll((node) => node.props?.className === "empty-state");
+    assert.equal(empty.length, 1, "a successful empty library has one editor empty state");
+    assert.equal(textOf(empty[0].findByType("h3")), "No models");
+    const visible = textOf(renderer.root);
+    assert.equal(visible.includes("Add a model to get started"), false);
+    assert.equal(visible.includes("Your first model starts here"), false);
+    assert.equal(visible.includes("No matching models"), false);
+    assert.equal(visible.includes("Loading your models"), false);
+  } finally {
+    if (renderer) await act(async () => renderer.unmount());
+    globalThis.fetch = originalFetch;
+  }
+}
+
 async function checkRefreshFailureKeepsModelDraft(ModelsPanel) {
   const originalFetch = globalThis.fetch;
   const bag = requested => ({ requested, applied: requested, unsupported: [], retired: [], overridden: [], unverified: [] });
@@ -591,7 +619,9 @@ async function checkRefreshFailureKeepsModelDraft(ModelsPanel) {
     failure = "bundles";
     await act(async () => { renderer = create(React.createElement(ModelsPanel)); await tick(); });
     assert.ok(textOf(renderer.root).includes("Model refresh connection failed"), "initial failure still exposes its retry notice");
-    assert.ok(!textOf(renderer.root).includes("Your first model starts here"), "failed loading does not imply the user's model catalogue is empty");
+    assert.ok(!textOf(renderer.root).includes("No models"), "failed loading does not imply the user's model catalogue is empty");
+    assert.ok(!textOf(renderer.root).includes("No matching models"), "failed loading does not imply a search miss");
+    assert.ok(textOf(renderer.root).includes("Model library unavailable."), "failed loading names the library as unavailable");
     failure = "";
     await act(async () => { button("Retry").props.onClick(); await tick(); });
     assert.equal(context().props["data-token-value"], 16384, "initial-error recovery loads the saved configuration");

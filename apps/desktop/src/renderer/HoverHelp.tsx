@@ -59,7 +59,15 @@ export function HoverHelp({ title = "About this setting", children, triggerConte
     };
     setPosition(current => current?.left === next.left && current.top === next.top ? current : next);
   }, [placement, clearanceSelector]);
-  useLayoutEffect(() => { if (open) locate(); }, [open, children, locate]);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const tip = bubble.current;
+    // A modal dialog paints above document.body. A manual popover joins the top layer so the bubble stays visible.
+    if (tip && tip.getAttribute?.("popover") === "manual" && typeof tip.showPopover === "function" && !tip.matches?.(":popover-open")) {
+      try { tip.showPopover(); } catch { /* The portaled bubble remains when the popover API is unavailable. */ }
+    }
+    locate();
+  }, [open, children, locate]);
   useEffect(() => {
     if (!open) return;
     const outside = (event: PointerEvent) => {
@@ -92,8 +100,8 @@ export function HoverHelp({ title = "About this setting", children, triggerConte
           if (control) { event.preventDefault(); control.focus(); }
         }
       }}>{triggerContent ?? <Icon name="info" size={14} />}</button>
-    {open && typeof document !== "undefined" ? createPortal(<div ref={bubble} id={id} role={interactive ? "dialog" : "tooltip"} aria-label={interactive ? title : undefined} className={["hover-help-bubble", bubbleClassName].filter(Boolean).join(" ")}
-      style={{ left: position?.left ?? 8, top: position?.top ?? 8, visibility: position ? "visible" : "hidden" }}
+    {open && typeof document !== "undefined" ? createPortal(<div ref={bubble} id={id} role={interactive ? "dialog" : "tooltip"} aria-label={interactive ? title : undefined} popover={trigger.current?.closest?.("dialog") ? "manual" : undefined} className={["hover-help-bubble", bubbleClassName].filter(Boolean).join(" ")}
+      style={{ left: position?.left ?? 8, top: position?.top ?? 8, right: "auto", bottom: "auto", margin: 0, visibility: position ? "visible" : "hidden" }}
       onFocus={() => { focused.current = true; clearClose(); }} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) { focused.current = false; leave(); } }}
       onMouseEnter={() => { hovered.current = true; clearClose(); }} onMouseLeave={() => { hovered.current = false; leave(); }}>{children}</div>, document.body) : null}
   </span>;

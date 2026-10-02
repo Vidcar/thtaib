@@ -330,9 +330,9 @@ export function WorkbenchSidebar(props: {
         <label className="chat-search" hidden={!searchOpen}>
           <span className="sr-only">Search chats</span><Icon name="search" size={15} />
           <input value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder="Search chats" onKeyDown={event => { if (event.key === "Escape") { setSearchOpen(false); setSearchQuery(""); } }} />
-          <button type="button" className="icon-button" aria-label="Close search" onClick={() => { setSearchOpen(false); setSearchQuery(""); }}><Icon name="close" size={12} /></button>
+          <button type="button" className="icon-button" aria-label="Close search" title="Close search" onClick={() => { setSearchOpen(false); setSearchQuery(""); }}><Icon name="close" size={12} /></button>
         </label>
-        <button type="button" className="icon-button" aria-label="Add project" title="New project" onClick={props.onAddProject}><Icon name="plus" size={14} /></button>
+        <button type="button" className="icon-button" aria-label="Add project" title="Add project" onClick={props.onAddProject}><Icon name="plus" size={14} /></button>
         <label className="archive-filter" title="Include archived chats"><input type="checkbox" aria-label="Show archived" checked={includeArchived} onChange={event => setIncludeArchived(event.target.checked)} /><Icon name="archive" size={14} /></label>
       </div>
       <div className="sidebar-scroll">

@@ -45,7 +45,8 @@ async function checkFilesKeepsUnownedUploads(ChatRetainedFiles) {
     assert.match(textOf(renderer.toJSON()), /retained upload/, "reopening restores the selected scoped preview");
     assert.match(seen.at(-1), /session_id=chat_1/);
     await act(async () => renderer.update(React.createElement(ChatRetainedFiles, { ...props, records: [], previewId: "" })));
-    assert.match(textOf(renderer.toJSON()), /Uploads and files created in this chat/);
+    assert.match(textOf(renderer.toJSON()), /No chat files/);
+    assert.doesNotMatch(textOf(renderer.toJSON()), /Uploads and files created in this chat will appear here/);
   } finally { restore(); if (renderer) await act(async () => renderer.unmount()); }
 }
 

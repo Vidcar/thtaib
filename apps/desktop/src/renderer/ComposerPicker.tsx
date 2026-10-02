@@ -19,7 +19,7 @@ export function ComposerPicker({ kind, query, choices, highlighted, onQuery, onH
       if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); onHighlight(Math.max(0, Math.min(choices.length - 1, highlighted + (event.key === "ArrowDown" ? 1 : -1)))); }
       else if (event.key === "Enter" && choices[active]) { event.preventDefault(); if (choices[active].unavailable) onRepair(choices[active]); else onSelect(choices[active]); }
       else if (event.key === "Escape") { event.preventDefault(); onClose(); }
-    }} />}<button type="button" className="icon-button" aria-label="Close picker" onClick={onClose}><Icon name="close" size={14} /></button></div>
+    }} />}<button type="button" className="icon-button" aria-label="Close picker" title="Close picker" onClick={onClose}><Icon name="close" size={14} /></button></div>
     <div ref={list} id="composer-suggestions" className="composer-picker-list" role="listbox" aria-label="Suggestions">
       {choices.map((item, index) => <button id={"composer-option-" + index} key={item.kind + ":" + item.id} type="button" role="option" aria-selected={highlighted === index} aria-disabled={Boolean(item.unavailable)} className={highlighted === index ? "is-highlighted" : ""} onPointerMove={() => onHighlight(index)} onClick={() => item.unavailable ? onRepair(item) : onSelect(item)}><span>{item.name}</span><small>{item.unavailable ?? item.description ?? item.kind}</small></button>)}
       {!choices.length ? <p className="hint">No matches</p> : null}

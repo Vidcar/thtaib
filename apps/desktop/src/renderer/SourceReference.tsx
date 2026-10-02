@@ -51,7 +51,7 @@ export function SourceLink({ href, children }: { href: string; children: ReactNo
   }
   return <><button ref={trigger} className="source-reference-link" type="button" onClick={() => void inspect()}><Icon name="files" size={12} />{children}</button>
     {open && createPortal(<dialog ref={dialog} className="source-viewer" aria-label="Retained source" onCancel={event => { event.preventDefault(); close(); }} onClose={close}>
-      <header><div><strong>{passage?.filename ?? "Retained source"}</strong><span>{passage?.source ?? (error ? "Source unavailable" : "Loading source…")}{reference.source ? ` · line ${reference.line}` : ""}</span></div><button type="button" className="icon-button" aria-label="Close source" onClick={close}><Icon name="close" /></button></header>
+      <header><div><strong>{passage?.filename ?? "Retained source"}</strong><span>{passage?.source ?? (error ? "Source unavailable" : "Loading source…")}{reference.source ? ` · line ${reference.line}` : ""}</span></div><button type="button" className="icon-button" aria-label="Close source" title="Close source" onClick={close}><Icon name="close" /></button></header>
       {error ? <p role="alert">{error}</p> : null}
       {passage ? <><pre>{passage.text || "This range is empty."}</pre>{passage.truncated ? <p className="hint">Showing the first 12,000 characters of this range. Save the original to inspect the complete document.</p> : null}<footer><span title={passage.sha256}>Retained version {passage.sha256.slice(0, 10)}{passage.parser ? ` · ${passage.parser}` : ""}</span><button type="button" disabled={saving} onClick={() => void save()}><Icon name="download" size={14} />Save original</button></footer></> : !error ? <p role="status">Loading…</p> : null}
     </dialog>, document.body)}

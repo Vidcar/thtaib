@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { CompactDialog } from "./CompactDialog";
+import { HoverHelp } from "./HoverHelp";
 import { Notice } from "./Notice";
 import { SettingRow } from "./CompactControls";
 import { workspaceApi, type SetupConfiguration, type InputPreviewContext } from "./workspaceApi";
@@ -91,24 +92,27 @@ export function AgentInputs(props: {
   const localText = props.scope === "agent" ? props.configuration.instructions ?? "" : policy.instruction_override;
   const replaced = props.scope === "agent" || localText != null;
   const sourceCost = shownSources.filter(source => source.mode !== "off").reduce((sum, source) => sum + (source.estimated_tokens ?? 0), 0);
+  const sourceMethod = props.preview?.token_counting_method ?? shownSources.find(source => source.token_counting_method)?.token_counting_method ?? "Approximate; model counts may differ.";
   const excluded = Boolean(policy.excluded_sources?.length || Object.values(policy.reference_loading ?? {}).includes("off"));
-  return <CompactDialog title="What the agent sees" labelledBy={`${id}-title`} onClose={props.onClose}>
+  return <CompactDialog title="Inputs" labelledBy={`${id}-title`} onClose={props.onClose}>
     <div className="agent-inputs">
-      <p className="hint">Preview of the next message: which instructions, memories, skills, and files will go out. Opening this does not call the model. Sending freezes the saved versions.</p>
       {error ? <Notice tone="error">{error}</Notice> : null}
       {loading ? <p className="hint" role="status">Reading inputs…</p> : null}
-      <SettingRow label="Tool definitions" help="When needed keeps enabled tools discoverable and supplies their definitions as they are needed. Always include supplies every enabled definition."><select aria-label="Tool definition loading" disabled={props.disabled} value={policy.tool_loading ?? "when_needed"} onChange={event => patchPolicy({ tool_loading: event.target.value as "when_needed" | "always" })}><option value="when_needed">When needed</option><option value="always">Always include</option></select></SettingRow>
+      <div className="agent-input-tool-row">
+        <span className="setting-row-name">Tool definitions</span>
+        <select aria-label="Tool definition loading" disabled={props.disabled} value={policy.tool_loading ?? "when_needed"} onChange={event => patchPolicy({ tool_loading: event.target.value as "when_needed" | "always" })}><option value="when_needed">When needed</option><option value="always">Always include</option></select>
+        <HoverHelp title="About tool definitions">When needed keeps enabled tools discoverable and supplies their definitions as they are needed. Always include supplies every enabled definition.</HoverHelp>
+      </div>
       <details className="agent-input-instructions" open={replaced}>
-        <summary>{props.scope === "agent" ? "Agent instructions" : replaced ? "Instructions for this chat · local replacement" : "Instructions for this chat"}</summary>
+        <summary>{props.scope === "agent" ? "Agent instructions" : replaced ? "Instructions for this chat · local replacement" : "Instructions for this chat"}{props.scope !== "agent" ? <span onClick={event => event.stopPropagation()}><HoverHelp title="Instructions for this chat">Changes apply to this chat's next message. Empty replacement text supplies no agent instructions.</HoverHelp></span> : null}</summary>
         {!replaced ? <button type="button" disabled={props.disabled} onClick={() => patchPolicy({ instruction_override: sources.find(source => source.id === "agent_instructions" || source.id === "conversation_instructions")?.content ?? "" })}>Replace agent instructions</button> : <>
-          <SettingRow stacked label={props.scope === "agent" ? "Instructions" : "Local instructions"} htmlFor={`${id}-instructions`}><textarea id={`${id}-instructions`} rows={5} value={localText ?? ""} disabled={props.disabled} onChange={event => props.scope === "agent" ? props.onChange({ ...props.configuration, instructions: event.target.value || null }) : patchPolicy({ instruction_override: event.target.value })} placeholder="How should this agent work?" /></SettingRow>
+          <SettingRow stacked label={props.scope === "agent" ? "Instructions" : "Local instructions"} htmlFor={`${id}-instructions`}><textarea id={`${id}-instructions`} rows={5} value={localText ?? ""} disabled={props.disabled} onChange={event => props.scope === "agent" ? props.onChange({ ...props.configuration, instructions: event.target.value || null }) : patchPolicy({ instruction_override: event.target.value })} /></SettingRow>
           {props.scope !== "agent" ? <button type="button" disabled={props.disabled} onClick={() => patchPolicy({ instruction_override: null })}>{props.agentName ? "Use agent instructions" : "Reset replacement"}</button> : null}
         </>}
-        {props.scope !== "agent" ? <p className="hint">Changes apply to this chat's next message. Empty replacement text supplies no agent instructions.</p> : null}
       </details>
       {deferredWithoutReading.length ? <Notice tone="warn" action={<div className="actions"><button type="button" disabled={props.disabled} onClick={() => patchPolicy({ reference_loading: { ...authoredPolicy.reference_loading, ...Object.fromEntries(deferredWithoutReading.map(source => [source.entry_id!, "always" as const])) } })}>Include now</button><button type="button" disabled={props.disabled} onClick={() => patchPolicy({ reference_loading: { ...authoredPolicy.reference_loading, ...Object.fromEntries(deferredWithoutReading.map(source => [source.entry_id!, "off" as const])) } })}>Remove</button>{!toolsOff || props.onEditSource ? <button type="button" disabled={props.disabled} onClick={() => toolsOff ? props.onEditSource?.("agents") : patchPolicy({ excluded_sources: policy.excluded_sources?.filter(source => source !== "tool:read_reference") })}>Enable reading</button> : null}</div>}>{toolsOff ? "Tools are off. References set to When needed need reading. Include their full text, remove them from future inputs, or enable reading in the saved agent." : "References set to When needed have no enabled reading route. Include their full text, remove them from future inputs, or enable reading."}</Notice> : null}
       <div className="agent-input-sources" aria-label="Next input sources">
-        {!loading && shownSources.length ? <p className="hint">Source estimate: {estimate(sourceCost)}. {props.preview?.token_counting_method ?? shownSources.find(source => source.token_counting_method)?.token_counting_method ?? "Approximate; model counts may differ."}</p> : null}
+        {!loading && shownSources.length ? <p className="hint" title={sourceMethod}>Source estimate: ~{sourceCost.toLocaleString()} tokens</p> : null}
         {shownSources.map(source => {
           const isExcluded = policy.excluded_sources?.includes(source.id) || source.mode === "off";
           return <details key={source.id} className="agent-input-source" data-excluded={isExcluded || undefined}>
@@ -122,7 +126,7 @@ export function AgentInputs(props: {
               {source.entry_id || source.editable && !source.required ? <button type="button" disabled={props.disabled} onClick={() => edit(source)}>{source.entry_id ? "Open in Knowledge" : (source.id === "agent_instructions" || source.id === "conversation_instructions") && props.scope !== "agent" ? "Edit for this chat" : "Edit source"}</button> : null}
             </div> : null}
             {source.history_hint ? <p className="hint">{source.history_hint}</p> : null}
-            {source.available === false ? <p className="hint">Not available in this preview or capture.</p> : null}
+            {source.available === false ? <p className="hint">Not available in this preview.</p> : null}
             {source.required_tools?.length || source.required_connections?.length || source.requires_project ? <p className="hint">Needs: {[...(source.required_tools ?? []), ...(source.required_connections ?? []).map(name => `Connection ${name}`), source.requires_project ? "Project folder" : ""].filter(Boolean).join(", ")}</p> : null}
             {source.path ? <p className="hint">{source.path}</p> : null}
             {source.version_id ? <p className="hint">Version: {source.version_id}</p> : null}
@@ -132,7 +136,7 @@ export function AgentInputs(props: {
       </div>
       {props.hasHistory && (excluded || policy.instruction_override != null) ? <Notice tone="info" action={props.onFreshChat ? <button type="button" disabled={props.disabled} onClick={() => props.onFreshChat?.(policy)}>{props.preparingFresh ? "Preparing fresh chat…" : "Fresh chat with these choices"}</button> : undefined}>Earlier messages, tool results or summaries may still contain previously supplied text. Excluding a source changes future inputs; a fresh chat removes that retained history.</Notice> : null}
       {props.onSaveToAgent ? <div className="agent-input-save">
-        {!props.agentName ? <SettingRow label="Agent name"><input aria-label="Agent name for saved instructions" value={saveName} disabled={saving} onChange={event => setSaveName(event.target.value)} placeholder="Name this reusable agent" /></SettingRow> : <p className="hint">Reusable destination: {props.agentName}</p>}
+        {!props.agentName ? <SettingRow label="Agent name"><input aria-label="Agent name for saved instructions" value={saveName} disabled={saving} onChange={event => setSaveName(event.target.value)} /></SettingRow> : <p className="hint">Reusable destination: {props.agentName}</p>}
         <button type="button" disabled={props.disabled || saving || !props.agentName && !saveName.trim()} onClick={() => void saveAgent()}>{saving ? "Saving…" : "Save to agent"}</button>
       </div> : null}
       {savedMessage ? <p className="hint" role="status">{savedMessage}</p> : null}
