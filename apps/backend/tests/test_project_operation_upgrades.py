@@ -89,6 +89,15 @@ class ProjectOperationUpgradeTests(unittest.TestCase):
         self.assertEqual(same, file_order_path(self.root, "./file.txt"))
         self.assertIs(file_order_lock(same), file_order_lock(file_order_path(self.root, "./file.txt")))
         self.assertNotEqual(same, file_order_path(self.root, "other.txt"))
+        from langchain_core.tools import ToolException
+        from workbench_backend.agents.file_operations import hold_file_order
+        with hold_file_order(file_order_path(self.root, "left.txt")):
+            with hold_file_order(file_order_path(self.root, "right.txt")):
+                pass
+        with hold_file_order(file_order_path(self.root, "dir")):
+            with self.assertRaises(ToolException):
+                with hold_file_order(file_order_path(self.root, "dir/child.txt")):
+                    pass
 
 
 if __name__ == "__main__":

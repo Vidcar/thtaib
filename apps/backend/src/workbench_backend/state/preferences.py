@@ -48,7 +48,7 @@ class ProjectFileGrantRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     project_id: str = Field(min_length=1)
     operations: list[Literal["write_file", "edit_file"]] = Field(default_factory=lambda: ["write_file", "edit_file"], min_length=1)
-    excluded_paths: list[str] = Field(default_factory=lambda: [".env", ".env.*", "**/.env", "**/.env.*"], max_length=128)
+    excluded_paths: list[str] = Field(default_factory=lambda: list(DEFAULT_SECRET_EXCLUSIONS), max_length=128)
 
     @field_validator("operations")
     @classmethod

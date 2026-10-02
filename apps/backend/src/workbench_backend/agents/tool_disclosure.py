@@ -15,7 +15,7 @@ import re
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
 
-from deepagents.middleware.filesystem import FilesystemMiddleware
+from deepagents.middleware.filesystem import TOOLS_EXCLUDED_FROM_EVICTION, FilesystemMiddleware
 from langchain.agents.middleware import AgentMiddleware, AgentState, ModelRequest, TodoListMiddleware
 from langchain.agents.middleware.types import PrivateStateAttr
 from langchain.tools import ToolRuntime
@@ -550,6 +550,19 @@ class LeanFilesystemMiddleware(FilesystemMiddleware):
     async def awrap_model_call(self, request, handler):
         prepared = await asyncio.to_thread(self.prepare_request, request)
         return await super().awrap_model_call(prepared, handler)
+
+    def wrap_tool_call(self, request, handler):
+        # Same-path calls in one message run in call order. They are not rejected.
+        tool_result = handler(request)
+        if self._tool_token_limit_before_evict is None or request.tool_call["name"] in TOOLS_EXCLUDED_FROM_EVICTION:
+            return tool_result
+        return self._intercept_large_tool_result(tool_result)
+
+    async def awrap_tool_call(self, request, handler):
+        tool_result = await handler(request)
+        if self._tool_token_limit_before_evict is None or request.tool_call["name"] in TOOLS_EXCLUDED_FROM_EVICTION:
+            return tool_result
+        return await self._aintercept_large_tool_result(tool_result)
 
 
 class LeanTodoListMiddleware(TodoListMiddleware):

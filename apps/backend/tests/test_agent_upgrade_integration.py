@@ -233,7 +233,7 @@ class MutationCancellationTests(unittest.IsolatedAsyncioTestCase):
     async def test_queued_cancellation_does_not_steal_or_strand_the_lease(self):
         from workbench_backend.agents.file_operations import file_order_lock, file_order_path
         lock = file_order_lock(file_order_path(self.project, "file.txt"))
-        self.assertTrue(lock.acquire(blocking=False))
+        self.assertTrue(lock.acquire())
         called = []
         async def handler(request):
             called.append(True)
@@ -251,10 +251,10 @@ class MutationCancellationTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await asyncio.wait_for(task, timeout=2)
             self.assertEqual(called, [])
-            self.assertFalse(lock.acquire(blocking=False), "queued cancellation must leave the holder admitted")
+            self.assertFalse(lock.acquire(), "queued cancellation must leave the holder admitted")
         finally:
             lock.release()
-        self.assertTrue(lock.acquire(blocking=False))
+        self.assertTrue(lock.acquire())
         lock.release()
 
     async def test_repeated_cancellation_keeps_lease_until_native_worker_settles(self):
@@ -277,14 +277,14 @@ class MutationCancellationTests(unittest.IsolatedAsyncioTestCase):
             task.cancel()
             await asyncio.sleep(0)
             self.assertFalse(task.done())
-            self.assertFalse(lock.acquire(blocking=False), "native worker still owns mutation lease")
+            self.assertFalse(lock.acquire(), "native worker still owns mutation lease")
         finally:
             release.set()
         with self.assertRaises(asyncio.CancelledError):
             await asyncio.wait_for(task, timeout=5)
         self.assertEqual((self.project / "file.txt").read_text(encoding="utf-8"), "written")
         self.assertEqual(self.run.tool_outcomes["native-async"].outcome, "succeeded")
-        self.assertTrue(lock.acquire(blocking=False))
+        self.assertTrue(lock.acquire())
         lock.release()
 
 

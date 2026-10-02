@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,6 +6,7 @@ import { app, BrowserWindow, dialog } from "electron";
 import { installAppearancePreview } from "./appearancePreviewWindow";
 import { probeBackendCompatibility } from "./backendCompatibility";
 import { installBackground, retainWindowInBackground } from "./background";
+import { clearDesktopProcess, publishDesktopProcess } from "./desktopProcess";
 import { configureWindowsNotificationIdentity, ensureWindowsNotificationShortcut, WINDOWS_LAUNCH_BACKEND_ARG } from "./windowsNotificationIdentity";
 
 import {
@@ -28,28 +29,6 @@ configureWindowsNotificationIdentity();
 
 if (!ownsSingleInstance) {
   app.quit();
-}
-
-function desktopProcessRecordPath(): string {
-  return path.join(resolveProductDataRoot(), "state", "desktop-process.json");
-}
-
-function publishDesktopProcess(): void {
-  try {
-    const record = desktopProcessRecordPath();
-    mkdirSync(path.dirname(record), { recursive: true });
-    writeFileSync(record, JSON.stringify({ pid: process.pid }), { encoding: "utf8", mode: 0o600 });
-  } catch (error: unknown) {
-    console.warn("Desktop process record was not written", error);
-  }
-}
-
-function clearDesktopProcess(): void {
-  try {
-    rmSync(desktopProcessRecordPath(), { force: true });
-  } catch (error: unknown) {
-    console.warn("Desktop process record was not cleared", error);
-  }
 }
 
 function preloadScriptPath(): string {
@@ -210,7 +189,7 @@ if (ownsSingleInstance) {
   });
 
   app.whenReady().then(async () => {
-    publishDesktopProcess();
+    publishDesktopProcess(resolveProductDataRoot());
     installApplicationTrust();
     await ensureWindowsNotificationShortcut().catch((error: unknown) => {
       console.warn("Windows notification shortcut setup failed", error);
@@ -247,8 +226,8 @@ if (ownsSingleInstance) {
   });
 }
 
-app.on("before-quit", () => {
-  clearDesktopProcess();
+app.on("will-quit", () => {
+  clearDesktopProcess(resolveProductDataRoot());
 });
 
 app.on("window-all-closed", () => {

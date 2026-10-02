@@ -78,6 +78,9 @@ async def _settle_owned_task(task):
     return task.result(), interrupted
 
 
+_FILE_ORDER_TOOLS = frozenset({"write_file", "edit_file", "delete", "apply_edits", "read_file"})
+
+
 class WorkbenchHarnessMiddleware(AgentMiddleware):
     """Record the post-middleware model request and keep enabled tools visible.
 
@@ -113,6 +116,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         self.outline_cache = ProjectOutlineCache()
         self._outline_initialized = "snapshot_text" in (run.project_outline or {})
         self._outline_text = (run.project_outline or {}).get("snapshot_text", "")
+        self._call_settled: dict[str, asyncio.Event] = {}
 
     def wrap_model_call(
         self,
@@ -250,31 +254,35 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Any],
     ) -> ToolMessage | Any:
-        self._require_dispatch_allowed()
-        blocked = self._reject_projectless_privileged_tool(request)
-        if blocked is not None:
-            self._record_tool_result(request, blocked)
-            return blocked
-        name, _, call_id = _tool_call_parts(request)
-        with self.execution_control.tool_dispatch(self.run, call_id, name) as dispatch:
-            if not dispatch:
-                return self._browser_action_reconsidered(request)
-            self._begin_tool(request)
-            try:
-                with self._mutation_lease(request):
-                    self._require_dispatch_allowed()
-                    self._before_tool_effect(request)
-                    try:
-                        result = self._wrap_tool_call(request, handler)
-                    finally:
-                        self._capture_delete_after(request)
-            except BaseException as exc:
-                result = self._handle_tool_failure(request, exc)
-                if result is None:
-                    raise
-            result = self._offload_read_file_image(result)
-            self._record_tool_result(request, result)
-            return self._authorization_result(result)
+        call_id = ""
+        try:
+            self._require_dispatch_allowed()
+            name, _, call_id = _tool_call_parts(request)
+            blocked = self._reject_projectless_privileged_tool(request)
+            if blocked is not None:
+                self._record_tool_result(request, blocked)
+                return blocked
+            with self.execution_control.tool_dispatch(self.run, call_id, name) as dispatch:
+                if not dispatch:
+                    return self._browser_action_reconsidered(request)
+                self._begin_tool(request)
+                try:
+                    with self._mutation_lease(request):
+                        self._require_dispatch_allowed()
+                        self._before_tool_effect(request)
+                        try:
+                            result = self._wrap_tool_call(request, handler)
+                        finally:
+                            self._capture_delete_after(request)
+                except BaseException as exc:
+                    result = self._handle_tool_failure(request, exc)
+                    if result is None:
+                        raise
+                result = self._offload_read_file_image(result)
+                self._record_tool_result(request, result)
+                return self._authorization_result(result)
+        finally:
+            self._mark_call_settled(call_id)
 
     def _begin_tool(self, request):
         name, args, call_id = _tool_call_parts(request)
@@ -310,19 +318,86 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         except HarnessError as exc:
             raise ToolException(str(exc)) from exc
 
-    def _native_mutation_lock(self, request):
-        name, args, _ = _tool_call_parts(request)
-        if self.fixture_bank is not None or not self.run.project_path or name not in {"write_file", "edit_file", "delete", "apply_edits", "read_file"}:
+    def _request_messages(self, request) -> list:
+        runtime = getattr(request, "runtime", None)
+        for state in (getattr(request, "state", None), getattr(runtime, "state", None)):
+            if isinstance(state, dict) and isinstance(state.get("messages"), list):
+                return state["messages"]
+        return []
+
+    def _file_order_target(self, name: str, args: dict):
+        if self.fixture_bank is not None or not self.run.project_path or name not in _FILE_ORDER_TOOLS:
             return None
         value = args.get("file_path") if isinstance(args.get("file_path"), str) else args.get("path")
         if not isinstance(value, str) or not value.strip():
             return None
+        from workbench_backend.agents.file_operations import file_order_path
+        return file_order_path(Path(self.run.project_path), value)
+
+    def _mutation_path(self, request):
+        name, args, _call_id = _tool_call_parts(request)
         from langchain_core.tools import ToolException
-        from workbench_backend.agents.file_operations import file_order_lock, file_order_path
         try:
-            return file_order_lock(file_order_path(Path(self.run.project_path), value))
+            return self._file_order_target(name, args)
         except (OSError, RuntimeError, ValueError) as exc:
             raise ToolException("Choose a path inside this project.") from exc
+
+    def _earlier_conflict_ids(self, request) -> list[str]:
+        name, args, call_id = _tool_call_parts(request)
+        try:
+            target = self._file_order_target(name, args)
+        except (OSError, RuntimeError, ValueError):
+            return []
+        if target is None:
+            return []
+        from workbench_backend.agents.file_operations import paths_overlap
+        for message in reversed(self._request_messages(request)):
+            if not isinstance(message, AIMessage):
+                continue
+            calls = [call for call in (message.tool_calls or []) if isinstance(call, dict)]
+            if not any(str(call.get("id")) == call_id for call in calls):
+                continue
+            earlier: list[str] = []
+            for call in calls:
+                if str(call.get("id")) == call_id:
+                    return earlier
+                other_args = call.get("args") if isinstance(call.get("args"), dict) else {}
+                try:
+                    other = self._file_order_target(str(call.get("name") or ""), other_args)
+                except (OSError, RuntimeError, ValueError):
+                    continue
+                other_id = call.get("id")
+                if other is not None and other_id and paths_overlap(Path(str(target)), Path(str(other))):
+                    earlier.append(str(other_id))
+            return earlier
+        return []
+
+    def _settled_event(self, call_id: str) -> asyncio.Event:
+        event = self._call_settled.get(call_id)
+        if event is None:
+            event = asyncio.Event()
+            previous = self.run.tool_outcomes.get(call_id)
+            if previous is not None and previous.outcome != "running":
+                event.set()
+            self._call_settled[call_id] = event
+        return event
+
+    def _mark_call_settled(self, call_id: str) -> None:
+        if not call_id:
+            return
+        event = self._call_settled.get(call_id)
+        if event is None:
+            event = asyncio.Event()
+            self._call_settled[call_id] = event
+        event.set()
+
+    async def _wait_for_earlier_file_calls(self, request) -> None:
+        # Arrival order is not call order. Overlapping paths wait off the worker.
+        for earlier in self._earlier_conflict_ids(request):
+            previous = self.run.tool_outcomes.get(earlier)
+            if previous is not None and previous.outcome != "running":
+                continue
+            await self._settled_event(earlier).wait()
 
     def _capture_delete_after(self, request):
         name, args, call_id = _tool_call_parts(request)
@@ -344,37 +419,25 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
 
     @contextmanager
     def _mutation_lease(self, request):
-        lock = self._native_mutation_lock(request)
-        if lock is None:
+        path = self._mutation_path(request)
+        if path is None:
             yield
             return
-        from langchain_core.tools import ToolException
-        from workbench_backend.agents.file_operations import ADMITTED_PROJECT_MUTATION
-        if not lock.acquire(blocking=False):
-            raise ToolException("This file is already being changed. Retry after that change finishes.")
-        token = ADMITTED_PROJECT_MUTATION.set(lock)
-        try:
+        from workbench_backend.agents.file_operations import hold_file_order
+        with hold_file_order(path):
             yield
-        finally:
-            ADMITTED_PROJECT_MUTATION.reset(token)
-            lock.release()
 
     @asynccontextmanager
     async def _amutation_lease(self, request):
-        lock = self._native_mutation_lock(request)
-        if lock is None:
+        path = self._mutation_path(request)
+        if path is None:
             yield
             return
         # Park on the loop. Do not submit this wait to the worker pool: the
         # admitted mutation needs those workers to finish and release the gate.
-        from workbench_backend.agents.file_operations import ADMITTED_PROJECT_MUTATION
-        await lock.acquire_async()
-        token = ADMITTED_PROJECT_MUTATION.set(lock)
-        try:
+        from workbench_backend.agents.file_operations import ahold_file_order
+        async with ahold_file_order(path):
             yield
-        finally:
-            ADMITTED_PROJECT_MUTATION.reset(token)
-            lock.release()
 
     def _handle_tool_failure(self, request, exc):
         from langgraph.errors import GraphInterrupt
@@ -426,42 +489,47 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Any],
     ) -> ToolMessage | Any:
-        self._require_dispatch_allowed()
-        blocked = self._reject_projectless_privileged_tool(request)
-        if blocked is not None:
-            self._record_tool_result(request, blocked)
-            return blocked
-        name, _, call_id = _tool_call_parts(request)
-        with self.execution_control.tool_dispatch(self.run, call_id, name) as dispatch:
-            if not dispatch:
-                return self._browser_action_reconsidered(request)
-            await asyncio.to_thread(self._begin_tool, request)
-            try:
-                async with self._amutation_lease(request):
-                    self._require_dispatch_allowed()
-                    await asyncio.to_thread(self._before_tool_effect, request)
-                    try:
-                        result = await self._awrap_tool_call(request, handler)
-                    finally:
-                        # Shield the post-effect inspection too: the mutation
-                        # lease stays owned until its final evidence settles.
-                        inspection = asyncio.create_task(asyncio.to_thread(self._capture_delete_after, request))
-                        _, interrupted = await _settle_owned_task(inspection)
-                        if interrupted is not None:
-                            raise interrupted
-            except BaseException as exc:
-                previous = self.run.tool_outcomes.get(_tool_call_parts(request)[2])
-                # Shielded Windows work may have settled while cancellation was
-                # waiting. Keep its returned result and process-stop evidence;
-                # interrupted command effects still require inspection.
-                if (isinstance(exc, asyncio.CancelledError) and previous is not None
-                    and (previous.outcome in {"succeeded", "failed"} or previous.outcome == "uncertain" and previous.result is not None)):
-                    raise
-                result = self._handle_tool_failure(request, exc)
-                if result is None:
-                    raise
-            self._record_tool_result(request, result)
-            return self._authorization_result(await asyncio.to_thread(self._offload_read_file_image, result))
+        call_id = ""
+        try:
+            self._require_dispatch_allowed()
+            name, _, call_id = _tool_call_parts(request)
+            blocked = self._reject_projectless_privileged_tool(request)
+            if blocked is not None:
+                self._record_tool_result(request, blocked)
+                return blocked
+            with self.execution_control.tool_dispatch(self.run, call_id, name) as dispatch:
+                if not dispatch:
+                    return self._browser_action_reconsidered(request)
+                await self._wait_for_earlier_file_calls(request)
+                await asyncio.to_thread(self._begin_tool, request)
+                try:
+                    async with self._amutation_lease(request):
+                        self._require_dispatch_allowed()
+                        await asyncio.to_thread(self._before_tool_effect, request)
+                        try:
+                            result = await self._awrap_tool_call(request, handler)
+                        finally:
+                            # Shield the post-effect inspection too: the mutation
+                            # lease stays owned until its final evidence settles.
+                            inspection = asyncio.create_task(asyncio.to_thread(self._capture_delete_after, request))
+                            _, interrupted = await _settle_owned_task(inspection)
+                            if interrupted is not None:
+                                raise interrupted
+                except BaseException as exc:
+                    previous = self.run.tool_outcomes.get(_tool_call_parts(request)[2])
+                    # Shielded Windows work may have settled while cancellation was
+                    # waiting. Keep its returned result and process-stop evidence;
+                    # interrupted command effects still require inspection.
+                    if (isinstance(exc, asyncio.CancelledError) and previous is not None
+                        and (previous.outcome in {"succeeded", "failed"} or previous.outcome == "uncertain" and previous.result is not None)):
+                        raise
+                    result = self._handle_tool_failure(request, exc)
+                    if result is None:
+                        raise
+                self._record_tool_result(request, result)
+                return self._authorization_result(await asyncio.to_thread(self._offload_read_file_image, result))
+        finally:
+            self._mark_call_settled(call_id)
 
     def _offload_read_file_image(self, result: ToolMessage | Any) -> ToolMessage | Any:
         """Replace a successful native image result with a durable asset path."""

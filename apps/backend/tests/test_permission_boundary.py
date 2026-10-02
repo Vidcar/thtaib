@@ -488,7 +488,8 @@ class FileOrderTests(unittest.IsolatedAsyncioTestCase):
             executor.shutdown(wait=True, cancel_futures=True)
 
     def test_dot_segment_shares_the_lease_and_an_illegal_path_is_refused(self):
-        from workbench_backend.agents.file_operations import file_order_lock, file_order_path
+        from langchain_core.tools import ToolException
+        from workbench_backend.agents.file_operations import file_order_lock, file_order_path, hold_file_order
 
         with tempfile.TemporaryDirectory() as area:
             project = Path(area)
@@ -500,7 +501,11 @@ class FileOrderTests(unittest.IsolatedAsyncioTestCase):
             for illegal in ("../notes.txt", "nested/../../notes.txt", "C:/outside.txt", "//host/share"):
                 with self.assertRaises(ValueError, msg=illegal):
                     file_order_path(project, illegal)
-            run = _run(project_path=str(project), id="illegal-path", enabled_tools=["write_file"], presented_tools=["write_file"])
+            with hold_file_order(file_order_path(project, "dir")):
+                with self.assertRaises(ToolException):
+                    with hold_file_order(file_order_path(project, "dir/child.txt")):
+                        pass
+            run = _run(project_path=str(project), id="illegal-path")
             middleware = WorkbenchHarnessMiddleware(run)
             called = []
             message = AIMessage(content="", tool_calls=[
@@ -508,15 +513,80 @@ class FileOrderTests(unittest.IsolatedAsyncioTestCase):
                 {"name": "write_file", "args": {"file_path": "./notes.txt", "content": "two"}, "id": "2", "type": "tool_call"},
                 {"name": "delete", "args": {"file_path": "notes.txt"}, "id": "3", "type": "tool_call"},
             ])
-            middleware._before_tool_effect(SimpleNamespace(
-                tool_call={"name": "write_file", "args": {"file_path": "./notes.txt", "content": "two"}, "id": "2"},
-                runtime=SimpleNamespace(state={"messages": [message]})))
+
+            def effect(request):
+                called.append(request.tool_call["id"])
+                target = project / "notes.txt"
+                if request.tool_call["name"] == "delete":
+                    target.unlink(missing_ok=True)
+                else:
+                    target.write_text(request.tool_call["args"]["content"], encoding="utf-8")
+                return ToolMessage(content="done", name=request.tool_call["name"], tool_call_id=request.tool_call["id"])
+
+            for call in message.tool_calls:
+                result = middleware.wrap_tool_call(SimpleNamespace(
+                    tool_call=call, runtime=SimpleNamespace(state={"messages": [message]})), effect)
+                self.assertEqual(result.status, "success", result.content)
+            self.assertEqual(called, ["1", "2", "3"])
+            self.assertFalse((project / "notes.txt").exists())
             refused = middleware.wrap_tool_call(SimpleNamespace(
                 tool_call={"name": "write_file", "args": {"file_path": "../notes.txt", "content": "no"}, "id": "bad"},
-                runtime=SimpleNamespace(state={"messages": []})), lambda _request: called.append(True))
-            self.assertEqual(called, [])
+                runtime=SimpleNamespace(state={"messages": []})), lambda _request: called.append("bad"))
+            self.assertEqual(called, ["1", "2", "3"])
             self.assertEqual(refused.status, "error")
             self.assertIn("inside this project", refused.content)
+
+    async def test_same_message_effects_finish_in_call_order(self):
+        with tempfile.TemporaryDirectory() as area:
+            project = Path(area)
+            folder = project / "dir"
+            folder.mkdir()
+            (folder / "child.txt").write_text("before", encoding="utf-8")
+            run = _run(project_path=str(project), id="batch-order")
+            middleware = WorkbenchHarnessMiddleware(run)
+
+            async def effect(request):
+                def work():
+                    name = request.tool_call["name"]
+                    args = request.tool_call["args"]
+                    target = project / str(args["file_path"]).replace("\\", "/").lstrip("./")
+                    if name == "delete":
+                        if target.is_dir():
+                            import shutil
+                            shutil.rmtree(target)
+                        else:
+                            target.unlink(missing_ok=True)
+                    else:
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_text(args["content"], encoding="utf-8")
+                    return ToolMessage(content="done", name=name, tool_call_id=request.tool_call["id"])
+                return await asyncio.to_thread(work)
+
+            write_calls = [
+                {"name": "write_file", "args": {"file_path": "notes.txt", "content": "one"}, "id": "one", "type": "tool_call"},
+                {"name": "write_file", "args": {"file_path": "./notes.txt", "content": "two"}, "id": "two", "type": "tool_call"},
+            ]
+            write_state = {"messages": [AIMessage(content="", tool_calls=write_calls)]}
+            write_results = await asyncio.wait_for(asyncio.gather(*(
+                middleware.awrap_tool_call(SimpleNamespace(
+                    tool_call=call, runtime=SimpleNamespace(state=write_state)), effect)
+                for call in write_calls
+            )), 5)
+            self.assertEqual([item.status for item in write_results], ["success", "success"])
+            self.assertEqual((project / "notes.txt").read_text(encoding="utf-8"), "two")
+
+            nested_calls = [
+                {"name": "delete", "args": {"file_path": "dir"}, "id": "remove", "type": "tool_call"},
+                {"name": "write_file", "args": {"file_path": "dir/child.txt", "content": "after"}, "id": "rewrite", "type": "tool_call"},
+            ]
+            nested_state = {"messages": [AIMessage(content="", tool_calls=nested_calls)]}
+            nested_results = await asyncio.wait_for(asyncio.gather(*(
+                middleware.awrap_tool_call(SimpleNamespace(
+                    tool_call=call, runtime=SimpleNamespace(state=nested_state)), effect)
+                for call in nested_calls
+            )), 5)
+            self.assertEqual([item.status for item in nested_results], ["success", "success"])
+            self.assertEqual((project / "dir" / "child.txt").read_text(encoding="utf-8"), "after")
 
     async def _until(self, predicate, timeout: float = 5) -> None:
         deadline = asyncio.get_running_loop().time() + timeout
@@ -603,8 +673,19 @@ class OneWindowTests(unittest.TestCase):
             calls = []
             try:
                 (paths.state / "desktop-process.json").write_text(json.dumps({"pid": child.pid}), encoding="utf-8")
+                import psutil
+                live = {psutil.Process().pid, child.pid}
+                parent = psutil.Process().parent()
+                if parent is not None:
+                    live.add(parent.pid)
+                    live.update(item.pid for item in parent.children(recursive=True))
+                    live.update(item.pid for item in psutil.Process(child.pid).children(recursive=True))
+                decoy_pid = 50_000
+                while decoy_pid in live:
+                    decoy_pid += 1
                 identities = {
                     404: WindowIdentity(404, child.pid, 1.0),
+                    505: WindowIdentity(505, decoy_pid, 2.0),
                     303: WindowIdentity(303, 30, 3000.0),
                 }
 
@@ -612,13 +693,19 @@ class OneWindowTests(unittest.TestCase):
                     calls.append(args)
                     payload = [
                         {"hwnd": 404, "processId": child.pid, "processName": "electron", "title": "Local AI Workbench", "width": 800, "height": 600, "ownerHwnd": 0, "className": "TestWindow", "isForeground": False},
+                        {"hwnd": 505, "processId": decoy_pid, "processName": "electron", "title": "Local AI Workbench", "width": 800, "height": 600, "ownerHwnd": 0, "className": "TestWindow", "isForeground": False},
                         {"hwnd": 303, "processId": 30, "processName": "notes", "title": "Notes", "width": 800, "height": 600, "ownerHwnd": 0, "className": "TestWindow", "isForeground": True},
                     ]
                     return CompletedProcess(args=args, returncode=0, stdout=json.dumps(payload), stderr="")
 
                 service = DesktopAutomationService(
                     paths, runtime=_WindowRuntime(), identity_lookup=lambda hwnd: identities[hwnd], command_runner=runner)
-                self.assertEqual([item.hwnd for item in service.picker_windows()], [303])
+                listed = service.picker_windows()
+                self.assertEqual([item.hwnd for item in listed], [505, 303])
+                decoy = next(item for item in listed if item.hwnd == 505)
+                self.assertEqual(decoy.process_name, "electron")
+                self.assertEqual(decoy.title, "Local AI Workbench")
+                self.assertNotIn(decoy.process_id, live)
                 with self.assertRaises(DesktopAutomationError) as refused:
                     service.set_scope("thread", "selected", hwnd=404)
                 self.assertEqual(refused.exception.code, "desktop_window_refused")

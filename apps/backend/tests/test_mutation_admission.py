@@ -258,14 +258,14 @@ async def _cancel_queued_and_settling() -> None:
             raise AssertionError(f"queued cancellation did not finish cleanly: {queued_done!r}")
         if (project / "holder.txt").exists():
             raise AssertionError("cancelled same-file waiter wrote before the holder")
-        if lease.acquire(blocking=False):
+        if lease.acquire():
             lease.release()
             raise AssertionError("queued cancellation released the admitted holder")
         release.set()
         await asyncio.wait_for(holding, timeout=5)
         if (project / "holder.txt").read_text(encoding="utf-8") != "held":
             raise AssertionError("settling holder did not finish its write")
-        if not lease.acquire(blocking=False):
+        if not lease.acquire():
             raise AssertionError("lease stayed held after the admitted worker settled")
         lease.release()
 
@@ -297,7 +297,7 @@ async def _cancel_queued_and_settling() -> None:
         task.cancel()
         if task.done():
             raise AssertionError("cancellation abandoned the admitted worker")
-        if lease.acquire(blocking=False):
+        if lease.acquire():
             lease.release()
             raise AssertionError("settling cancellation released the lease early")
         finish.set()
@@ -308,7 +308,7 @@ async def _cancel_queued_and_settling() -> None:
             pass
         if (project / "settling.txt").read_text(encoding="utf-8") != "settled":
             raise AssertionError("cancelled admitted work did not settle its effect")
-        if not lease.acquire(blocking=False):
+        if not lease.acquire():
             raise AssertionError("lease was not reusable after settling cancellation")
         lease.release()
 
@@ -439,7 +439,7 @@ async def _read_and_other_project_continue() -> None:
             raise AssertionError("another project did not continue")
         if (first / "neighbor.txt").read_text(encoding="utf-8") != "neighbor":
             raise AssertionError("a different file in the same folder did not continue")
-        if lease.acquire(blocking=False):
+        if lease.acquire():
             lease.release()
             raise AssertionError("the busy file was not still admitted")
         reading = asyncio.create_task(read())

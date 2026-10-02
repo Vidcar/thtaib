@@ -140,9 +140,9 @@ class ToolSchemaContractTests(unittest.TestCase):
                 result = backend.write(args["file_path"], args["content"]) if current["name"] == "write_file" else backend.edit(args["file_path"], args["old_string"], args["new_string"])
                 return ToolMessage(content=result.error or "changed", name=current["name"], tool_call_id=current["id"], status="error" if result.error else "success")
             outcomes = [middleware.wrap_tool_call(ToolCallRequest(tool_call=current, tool=None, state=state, runtime=None), mutate) for current in calls]
-            self.assertEqual(executed, ["first"])
-            self.assertEqual(outcomes[1].status, "error")
-            self.assertEqual(Path(directory, "notes.txt").read_text(), "first")
+            self.assertEqual(executed, ["first", "second"])
+            self.assertEqual([item.status for item in outcomes], ["success", "success"])
+            self.assertEqual(Path(directory, "notes.txt").read_text(), "second")
             for step, replacement in enumerate(("second", "third"), 2):
                 before = Path(directory, "notes.txt").read_text()
                 self.assertEqual(backend.read("/notes.txt").error, None)

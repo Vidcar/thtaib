@@ -655,7 +655,7 @@ class HarnessApiTests(unittest.TestCase):
         self.assertFalse(set(effectful).intersection(set().union(*_RecordingModel.offered)))
         self.assertEqual(plan["tool_invocations"], [])
 
-    def test_compiled_native_and_structured_edits_cannot_compete_in_one_batch(self) -> None:
+    def test_compiled_native_and_structured_edits_run_in_call_order(self) -> None:
         project = self.root / "competing-edits"
         project.mkdir()
         target = project / "note.txt"
@@ -668,17 +668,21 @@ class HarnessApiTests(unittest.TestCase):
                 {"name": "write_file", "args": {"file_path": "/note.txt", "content": "native"}, "id": "native-conflict"},
                 {"name": "apply_edits", "args": {"file_path": "/note.txt", "edits": edits, "base_sha256": digest}, "id": "structured-conflict"},
             ]),
-            AIMessage(content="Competing changes were rejected."),
+            AIMessage(content="The write finished before the stale edit."),
         ])
         started = self._start(task="Check the shared mutation boundary.", project_path=str(project),
             presented_tools=["write_file", "apply_edits"], approval_mode="full_access", input_policy={"tool_loading": "always"})
         body = wait_for_run(self.client, started["id"])
         self.assertEqual(body["status"], "completed", body.get("error"))
-        self.assertEqual(target.read_bytes(), original)
-        for call_id in ("native-conflict", "structured-conflict"):
-            self.assertEqual(body["tool_outcomes"][call_id]["outcome"], "failed")
-            self.assertIn("one tool-call batch", body["tool_outcomes"][call_id]["detail"])
+        self.assertEqual(target.read_bytes(), b"native")
+        self.assertEqual(body["tool_outcomes"]["native-conflict"]["outcome"], "succeeded")
+        structured = body["tool_outcomes"]["structured-conflict"]
+        self.assertEqual(structured["outcome"], "failed")
+        self.assertIn("original file changed", structured["detail"].lower())
 
+        written = target.read_bytes()
+        digest = hashlib.sha256(written).hexdigest()
+        edits = [{"old_string": "native", "new_string": "structured", "replace_all": False}]
         self.scripted = ScriptedChatModel([
             AIMessage(content="", tool_calls=[{"name": "apply_edits", "args": {"file_path": "/note.txt", "edits": edits, "base_sha256": digest}, "id": "structured-sequential"}]),
             AIMessage(content="The independent edit was applied."),
@@ -688,7 +692,7 @@ class HarnessApiTests(unittest.TestCase):
         completed = wait_for_run(self.client, repaired["id"])
         self.assertEqual(completed["status"], "completed", completed.get("error"))
         self.assertEqual(completed["tool_outcomes"]["structured-sequential"]["outcome"], "succeeded")
-        self.assertEqual(target.read_text(encoding="utf-8"), "structured\n")
+        self.assertEqual(target.read_text(encoding="utf-8"), "structured")
 
     def test_completion_evidence_is_not_judgement(self) -> None:
         started = self._start(

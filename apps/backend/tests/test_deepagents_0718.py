@@ -12,6 +12,7 @@ from deepagents.backends.protocol import ExecuteResponse
 from deepagents.backends.sandbox import _parse_capture_execute_output
 from deepagents.backends.utils import create_file_data
 from deepagents.middleware.filesystem import FilesystemMiddleware
+from workbench_backend.agents.tool_disclosure import LeanFilesystemMiddleware
 from deepagents.middleware.subagents import TaskToolSchema
 from deepagents.middleware.unsupported_content import UnsupportedContentMiddleware
 from langchain.agents.middleware import ModelRequest, ModelResponse
@@ -23,13 +24,13 @@ from tests.scripted_model import ScriptedChatModel
 
 
 class DeepAgentsReleaseBehaviorTests(unittest.TestCase):
-    def test_parallel_mutations_to_one_file_reject_the_later_call(self) -> None:
+    def test_same_batch_mutations_to_one_file_both_run(self) -> None:
         calls = [
             {"name": "write_file", "args": {"file_path": "/notes.txt", "content": "first"}, "id": "first"},
             {"name": "edit_file", "args": {"file_path": "/notes.txt", "old_string": "first", "new_string": "second"}, "id": "second"},
         ]
         state = {"messages": [AIMessage(content="", tool_calls=calls)]}
-        middleware = FilesystemMiddleware(tool_token_limit_before_evict=None)
+        middleware = LeanFilesystemMiddleware(tool_token_limit_before_evict=None)
         executed: list[str] = []
 
         def handler(request: ToolCallRequest) -> ToolMessage:
@@ -40,9 +41,8 @@ class DeepAgentsReleaseBehaviorTests(unittest.TestCase):
             middleware.wrap_tool_call(ToolCallRequest(tool_call=call, tool=None, state=state, runtime=None), handler)
             for call in calls
         ]
-        self.assertEqual(executed, ["first"])
-        self.assertEqual(results[1].status, "error")
-        self.assertIn("parallel file mutations", str(results[1].content))
+        self.assertEqual(executed, ["first", "second"])
+        self.assertEqual([item.status for item in results], ["success", "success"])
 
     def test_task_rejects_unknown_arguments_instead_of_losing_instructions(self) -> None:
         with self.assertRaises(ValidationError) as raised:
