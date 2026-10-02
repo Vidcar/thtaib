@@ -477,6 +477,18 @@
           "default": null,
           "title": "Finished At"
         },
+        "fork_checkpoint_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fork Checkpoint Id"
+        },
         "framework_read_paths": {
           "items": {
             "type": "string"
@@ -774,6 +786,11 @@
         },
         "review_observation": {
           "$ref": "#/$defs/ReviewObservation"
+        },
+        "rewind_clear_messages": {
+          "default": false,
+          "title": "Rewind Clear Messages",
+          "type": "boolean"
         },
         "settled_status": {
           "anyOf": [
@@ -2337,6 +2354,18 @@
         "source_run_id": {
           "title": "Source Run Id",
           "type": "string"
+        },
+        "starting_folder": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Starting Folder"
         },
         "thread_id": {
           "anyOf": [

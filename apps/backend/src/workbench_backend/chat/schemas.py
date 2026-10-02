@@ -104,6 +104,9 @@ class ChatStartRequest(BaseModel):
     knowledge_version_refs: list[str] | None = None
     embedding_deployment_id: str | None = None
     retrieval_project_paths: list[str] | None = None
+    # Server-derived checkpoint rewind. The client names the source run only.
+    rewind_source_run_id: str | None = Field(default=None, min_length=1, max_length=200)
+    rewind_mode: Literal["retry", "edit"] | None = None
 
 
 class ChatReadinessRequest(BaseModel):

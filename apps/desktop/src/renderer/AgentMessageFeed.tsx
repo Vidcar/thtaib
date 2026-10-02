@@ -907,7 +907,7 @@ const MessageBubble = memo(function MessageBubble(props: {
   if (!props.incomplete) {
     finishedBubbleRenders += 1;
   }
-  const settled = !props.incomplete;
+  const settled = props.type === "ai" && !props.incomplete;
   return (
     <article className={`bubble bubble-${props.type === "human" ? "user" : props.type === "ai" ? "assistant" : "system"}${settled ? " bubble-settled" : ""}${props.continuation ? " bubble-continuation" : ""}`}>
       <header>
@@ -922,8 +922,10 @@ const MessageBubble = memo(function MessageBubble(props: {
           openStates={props.openStates}
           reasoning={props.reasoning}
         />
-        {props.type === "human" ? (props.answer ? <p className="user-message-text">{props.answer}</p> : null)
-          : props.incomplete ? <StreamingMarkdown text={props.answer} /> : <MarkdownMessage text={props.answer} />}
+        <div className="message-answer" data-markdown-source={props.type === "ai" ? props.answer : undefined}>
+          {props.type === "human" ? (props.answer ? <p className="user-message-text">{props.answer}</p> : null)
+            : props.incomplete ? <StreamingMarkdown text={props.answer} /> : <MarkdownMessage text={props.answer} />}
+        </div>
         <AttachmentList attachments={props.attachments} />
         <ToolBlockList defaultOpen={props.detailedStreams} live={props.toolsLive} waiting={props.waiting} messageKey={props.messageKey} toolScopeKey={props.toolScopeKey} onToggle={props.onToggle} openStates={props.openStates} toolBlocks={props.messageTools} onHelperOpen={props.onHelperOpen} helperName={props.helperName} helperStatus={props.helperStatus} helperRunId={props.helperRunId} />
       </div>

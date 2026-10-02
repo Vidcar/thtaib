@@ -28,10 +28,10 @@
 
 ## 4. Rewind, transcript, and memory
 
-- [ ] 4.1 Remove Regenerate and Branch, and implement Retry and Edit as a public checkpoint rewind on the same chat, and verify a test that an accepted edit removes later messages and waiting follow-ups without creating a second chat or restoring files.
-- [ ] 4.2 Leave messages in place when the rewind cannot start, and verify a running turn disables Retry and Edit with the reason on hover.
-- [ ] 4.3 Download a Markdown transcript of messages, one shown activity line per tool, and retained file names, and verify the file has no thinking text, no full tool output, and a line that it is not a restore, and that advanced JSON export is not offered.
-- [ ] 4.4 Make every memory suggestion wait for Accept or Reject, and verify Full access and an approval card do not write a memory, while an accepted memory still loads through the official memory parameter.
+- [x] 4.1 Remove Regenerate and Branch, and implement Retry and Edit as a public checkpoint rewind on the same chat, and verify a test that an accepted edit removes later messages and waiting follow-ups without creating a second chat or restoring files.
+- [x] 4.2 Leave messages in place when the rewind cannot start, and verify a running turn disables Retry and Edit with the reason on hover.
+- [x] 4.3 Download a Markdown transcript of messages, one shown activity line per tool, and retained file names, and verify the file has no thinking text, no full tool output, and a line that it is not a restore, and that advanced JSON export is not offered.
+- [x] 4.4 Make every memory suggestion wait for Accept or Reject, and verify Full access and an approval card do not write a memory, while an accepted memory still loads through the official memory parameter.
 
 ## 5. Screens
 

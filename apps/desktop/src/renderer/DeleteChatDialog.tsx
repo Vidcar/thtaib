@@ -22,11 +22,11 @@ export function DeleteChatDialog({ conversation, onClose, onDeleted }: { convers
   return (
     <CompactDialog title="Delete chat?" labelledBy="delete-chat-title" busy={busy} onClose={onClose}>
       <p className="delete-chat-name">{conversationTitle(conversation)}</p>
-      <p>This permanently removes this chat and its history. Files created in your project stay.</p>
+      <p>This permanently removes this chat and its history. Project files and model files stay.</p>
       {preview && !preview.can_delete ? <Notice tone="warn">Stop active work before deleting this chat.</Notice> : null}
       {preview && (preview.retained_sessions.length + preview.retained_runs.length + preview.checkpoint_threads_retained.length) > 0 ? <p className="hint">History shared with another chat is kept for that chat.</p> : null}
       {error ? <Notice tone="error" role="alert">{error}</Notice> : null}
-      <footer><button type="button" disabled={busy} onClick={onClose}>Cancel</button><button type="button" className="danger" disabled={!preview?.can_delete || busy} onClick={() => void remove()}>{busy ? "Deleting…" : "Delete chat"}</button></footer>
+      <footer><button type="button" disabled={busy} onClick={onClose}>Cancel</button><button type="button" className="danger" disabled={!preview?.can_delete || busy || Boolean(error)} onClick={() => void remove()}>{busy ? "Deleting…" : "Delete chat"}</button></footer>
     </CompactDialog>
   );
 }

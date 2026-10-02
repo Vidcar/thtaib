@@ -340,6 +340,17 @@ class InteractionService:
             return content
         return "".join(block.get("text", "") for block in content or [] if isinstance(block, dict) and block.get("type") == "text")
 
+    def _take_rewind_drop(self, run_id: str) -> str | None:
+        # A harness without the marker has nothing to drop. Test doubles and a
+        # missing observer harness are that case.
+        harness = self.harness
+        if harness is None:
+            return None
+        drops = getattr(harness, "_rewind_drop_from", None)
+        if not isinstance(drops, dict):
+            return None
+        return drops.pop(run_id, None)
+
     def observe(self, run: AgentRun, raw: dict[str, Any] | None, *, telemetry: bool = False) -> None:
         with self._projection_lock:
             if raw is not None:
@@ -358,6 +369,7 @@ class InteractionService:
                 return
             binding = self.store.interaction_for_graph(run.thread_id or run.id)
             if binding is None:
+                self._take_rewind_drop(run.id)
                 return
             self._flush_thread(binding["id"])
             binding = self.binding(binding["id"])
@@ -371,10 +383,21 @@ class InteractionService:
             snapshot = _copy_public_snapshot(binding["snapshot"])
             outgoing = []
             previous = snapshot.get("workbench", {}).get("run") or {}
+            drop_from = self._take_rewind_drop(run.id)
             snapshot.setdefault("workbench", {}).update({"run": self._stored_run(run), "conversation_id": binding["conversation_id"]})
             if previous.get("id") != run.id:
                 snapshot["workbench"]["run_started_seq"] = binding["seq"]
                 snapshot["workbench"].pop("recovery", None)
+                # Keep the readable prefix. A compacted checkpoint is not the list of rows that stay.
+                if drop_from:
+                    messages = list(snapshot.get("messages", []))
+                    cut = next((index for index, message in enumerate(messages) if message.get("id") == drop_from), None)
+                    if cut is not None:
+                        dropped = [message["id"] for message in messages[cut:] if message.get("id")]
+                        excluded = set(snapshot["workbench"].get("display_excluded_message_ids", []))
+                        excluded.update(dropped)
+                        snapshot["workbench"]["display_excluded_message_ids"] = sorted(excluded)
+                        snapshot["messages"] = messages[:cut]
             if run.input_message_id and snapshot["workbench"].get("display_hidden_run_id") != run.id:
                 snapshot["messages"] = archive_messages(snapshot.get("messages", []), [{
                     "type": "human", "id": run.input_message_id, "content": user_message_content(run.task, run.content_blocks),
@@ -812,7 +835,7 @@ class InteractionService:
             raise invalid("Unknown local assistant.")
         metadata = fields(params.get("metadata", {}), {"workbench"}, "metadata")
         setup = dict(metadata.get("workbench", {}))
-        if {"task", "thread_id", "source_surface", "input_message_id", "resume_checkpoint_id"} & set(setup):
+        if {"task", "thread_id", "source_surface", "input_message_id", "resume_checkpoint_id", "fork_checkpoint_id", "rewind_clear_messages"} & set(setup):
             raise invalid("Thread ownership and message identity are assigned by the local binding.")
         input_value = fields(params.get("input"), {"messages"}, "input")
         messages = input_value.get("messages")

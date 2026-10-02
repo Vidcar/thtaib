@@ -17,9 +17,8 @@ import { MemoryProposalCard } from "./MemoryProposalCard";
 import { CatalogueWorkspace } from "./CatalogueWorkspace";
 import "./WorkspacePanels.css";
 import "./KnowledgePanel.css";
-import { CompactSwitch, SegmentedChoice, SettingRow } from "./CompactControls";
+import { SegmentedChoice, SettingRow } from "./CompactControls";
 import type {
-  KnowledgeConfig,
   KnowledgeEntry,
   KnowledgeKind,
   KnowledgeScope,
@@ -41,11 +40,9 @@ export function KnowledgePanel({ active = true, openEntryId, openRequest }: { ac
   const [selected, setSelected] = useState<KnowledgeEntry | null>(null);
   const [versions, setVersions] = useState<KnowledgeVersion[]>([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
-  const [config, setConfig] = useState<KnowledgeConfig | null>(null);
   const [message, setMessage] = useState("");
   const [loadError, setLoadError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [configError, setConfigError] = useState("");
   const [scopesError, setScopesError] = useState("");
   const [proposalsError, setProposalsError] = useState("");
   const [versionsError, setVersionsError] = useState("");
@@ -59,9 +56,11 @@ export function KnowledgePanel({ active = true, openEntryId, openRequest }: { ac
   const [scopeId, setScopeId] = useState("");
   const [scopes, setScopes] = useState<KnowledgeScopeOption[]>([]);
   const [proposals, setProposals] = useState<KnowledgeProposal[]>([]);
+  const [proposalsLoaded, setProposalsLoaded] = useState(false);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const suggestionsSeeded = useRef(false);
   const [rename, setRename] = useState<string | null>(null);
   const renameDrafts = useRef<Record<string, string>>({});
-  const [policyDestination, setPolicyDestination] = useState("user:");
   const [filterKind, setFilterKind] = useState<KnowledgeKind>("memory");
   const [query, setQuery] = useState("");
   const [drafts, setDrafts] = useState<Record<string, { content: string; description?: string; baseVersion: string; resourceChanges?: SkillResourceChange[] }>>({});
@@ -84,16 +83,12 @@ export function KnowledgePanel({ active = true, openEntryId, openRequest }: { ac
     return nextEntries;
   }
 
-  async function refreshConfig(isCurrent = () => true) {
-    try { const next = await api.knowledgeConfig(); if (isCurrent()) { setConfig(next); setConfigError(""); } }
-    catch (failure) { if (isCurrent()) setConfigError(errorMessage(failure)); }
-  }
   async function refreshScopes(isCurrent = () => true) {
     try { const next = await knowledgeApi.scopes(); if (isCurrent()) { setScopes(next); setScopesError(""); } }
     catch (failure) { if (isCurrent()) setScopesError(errorMessage(failure)); }
   }
   async function refreshProposals(isCurrent = () => true) {
-    try { const next = await knowledgeApi.proposals(); if (isCurrent()) { setProposals(next); setProposalsError(""); } }
+    try { const next = await knowledgeApi.proposals(); if (isCurrent()) { setProposals(next); setProposalsError(""); setProposalsLoaded(true); } }
     catch (failure) { if (isCurrent()) setProposalsError(errorMessage(failure)); }
   }
 
@@ -102,9 +97,15 @@ export function KnowledgePanel({ active = true, openEntryId, openRequest }: { ac
     let cancelled = false;
     const isCurrent = () => !cancelled;
     void refresh(isCurrent).catch((error: unknown) => { if (!cancelled) { setLoadError(errorMessage(error)); setLoading(false); } });
-    void refreshConfig(isCurrent); void refreshScopes(isCurrent); void refreshProposals(isCurrent);
+    void refreshScopes(isCurrent); void refreshProposals(isCurrent);
     return () => { cancelled = true; };
   }, [active]);
+
+  useEffect(() => {
+    if (!proposalsLoaded || suggestionsSeeded.current) return;
+    suggestionsSeeded.current = true;
+    setSuggestionsOpen(proposals.some(proposal => proposal.status === "pending"));
+  }, [proposalsLoaded, proposals]);
 
   useEffect(() => {
     if (!active || !openEntryId || loading) return;
@@ -320,17 +321,11 @@ export function KnowledgePanel({ active = true, openEntryId, openRequest }: { ac
         </div>
       </CatalogueWorkspace>
 
-      <details className="knowledge-secondary" open={proposals.some(proposal => proposal.status === "pending") || undefined}>
+      <details className="knowledge-secondary" open={suggestionsOpen} onToggle={event => { if (suggestionsSeeded.current) setSuggestionsOpen(event.currentTarget.open); }}>
         <summary>Suggested memories <small>{proposalsError ? "Unavailable" : `${proposals.filter(proposal => proposal.status === "pending").length} pending`}</small></summary>
         {proposalsError ? <Notice tone="warn" action={<button type="button" onClick={() => void refreshProposals()}>Retry suggestions</button>}>{proposalsError}</Notice> : null}
         <HoverHelp title="About suggested memories">Review what will be saved and where. Accepting a change checks that its original version is still current.</HoverHelp>
-        {!proposals.length && !proposalsError ? <p className="hint">No suggestions yet.</p> : <ul className="plain-list">{proposals.map(proposal => <MemoryProposalCard key={proposal.id} proposal={proposal} destination={scopes.find(option => option.scope === proposal.scope && (option.scope_id ?? null) === (proposal.scope_id ?? null))?.label ?? "Unavailable destination"} meta={` · ${formatWhen(proposal.created_at)}`} currentContent={proposal.entry_id ? entries.find(entry => entry.id === proposal.entry_id)?.content ?? "Entry unavailable" : undefined} origin={<>{knowledgeActorLabel(proposal.provenance.actor)}{proposal.provenance.run_id ? ` · run ${proposal.provenance.run_id}` : ""}{proposal.base_version ? ` · based on ${proposal.base_version}` : ""}</>} acceptLabel="Accept" rejectLabel="Reject" busy={busy || Boolean(scopesError)} onAccept={() => void action(async () => { await knowledgeApi.review(proposal.id, "accept"); await refresh(); await refreshProposals(); })} onReject={() => void action(async () => { await knowledgeApi.review(proposal.id, "reject"); await refreshProposals(); })} />)}</ul>}
-      </details>
-      <details className="knowledge-secondary">
-        <summary>Automatic memory saving <small>{configError ? "Unavailable" : config ? `${config.automatic_save_policies?.filter(policy => policy.automatic_agent_writes).length ?? 0} destinations on` : "Loading…"}</small></summary>
-        {configError ? <Notice tone="warn" action={<button type="button" onClick={() => void refreshConfig()}>Retry settings</button>}>{configError}</Notice> : null}
-        <SettingRow label="Destination" htmlFor="knowledge-policy-destination" help="Suggestions need review unless automatic saving is allowed for this exact destination. Instructions stay under your control."><select id="knowledge-policy-destination" value={policyDestination} disabled={busy || Boolean(scopesError)} onChange={event => setPolicyDestination(event.target.value)}>{scopes.filter(option => option.active).map(option => <option key={`${option.scope}:${option.scope_id ?? ""}`} value={`${option.scope}:${option.scope_id ?? ""}`}>{option.label}</option>)}</select></SettingRow>
-        <CompactSwitch label="Save automatically" description="Allow agents to save memories to this destination without review." disabled={busy || !config || Boolean(configError) || !scopes.some(option => `${option.scope}:${option.scope_id ?? ""}` === policyDestination)} checked={Boolean(config?.automatic_save_policies?.find(policy => `${policy.scope}:${policy.scope_id ?? ""}` === policyDestination)?.automatic_agent_writes)} onChange={automatic => { const destination = scopes.find(option => `${option.scope}:${option.scope_id ?? ""}` === policyDestination); if (destination) void action(async () => setConfig(await knowledgeApi.automaticPolicy({ scope: destination.scope, scope_id: destination.scope_id, automatic_agent_writes: automatic }))); }} />
+        {!proposals.length && !proposalsError ? <p className="hint">No suggestions yet.</p> : <ul className="plain-list">{proposals.map(proposal => <MemoryProposalCard key={proposal.id} proposal={proposal} destination={scopes.find(option => option.scope === proposal.scope && (option.scope_id ?? null) === (proposal.scope_id ?? null))?.label ?? "Unavailable destination"} meta={` · ${formatWhen(proposal.created_at)}`} currentContent={proposal.entry_id ? entries.find(entry => entry.id === proposal.entry_id)?.content ?? "Entry unavailable" : undefined} origin={<>{knowledgeActorLabel(proposal.provenance.actor)}{proposal.provenance.run_id ? ` · run ${proposal.provenance.run_id}` : ""}{proposal.base_version ? ` · based on ${proposal.base_version}` : ""}</>} acceptLabel="Accept" rejectLabel="Reject" busy={busy || Boolean(scopesError)} onAccept={() => { suggestionsSeeded.current = true; setSuggestionsOpen(true); void action(async () => { await knowledgeApi.review(proposal.id, "accept"); await refresh(); await refreshProposals(); }); }} onReject={() => { suggestionsSeeded.current = true; setSuggestionsOpen(true); void action(async () => { await knowledgeApi.review(proposal.id, "reject"); await refreshProposals(); }); }} />)}</ul>}
       </details>
       {message ? <Notice tone={/fail|error|conflict/i.test(message) ? "error" : "info"}>{message}</Notice> : null}
     </section>

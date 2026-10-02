@@ -577,7 +577,9 @@ class KnowledgeService:
             now = utc_now()
             proposal = KnowledgeProposal(id=new_id("proposal"), entry_id=entry_id, base_version=base_version, scope=scope, scope_id=scope_id, content=content, display_name=display_name, provenance=KnowledgeProvenance(actor="agent", run_id=run_id), created_at=now, updated_at=now)
             self.store.put_proposal(proposal)
-            return self._commit_proposal(proposal, automatic=True) if self._automatic_allowed(scope, scope_id) else proposal
+            # Full access, an approval card, and the automatic-save policy all
+            # leave the proposal pending until a person accepts or rejects it.
+            return proposal
 
     def list_proposals(self, *, run_id: str | None = None) -> list[KnowledgeProposal]:
         return [self._recover_proposal(p) for p in self.store.list_proposals() if run_id is None or p.provenance.run_id == run_id]

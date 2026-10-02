@@ -25,6 +25,7 @@ try {
   const { AnswerActions } = await vite.ssrLoadModule("/src/renderer/AnswerActions.tsx");
   const { PanelResize, usePanelWidth } = await vite.ssrLoadModule("/src/renderer/PanelResize.tsx");
   const { HoverHelp } = await vite.ssrLoadModule("/src/renderer/HoverHelp.tsx");
+  const { MessageTaskActions } = await vite.ssrLoadModule("/src/renderer/MessageTaskActions.tsx");
   const { ChatMeasurements } = await vite.ssrLoadModule("/src/renderer/ChatMeasurements.tsx");
   const { AttentionPanel } = await vite.ssrLoadModule("/src/renderer/AttentionPanel.tsx");
 
@@ -36,6 +37,7 @@ try {
   await checkChatHistoryActions(ChatHistoryActions, AnswerActions);
   await checkPanelResize(PanelResize, usePanelWidth);
   await checkHoverHelp(HoverHelp);
+  await checkMessageTaskActions(MessageTaskActions);
   await checkChatMeasurements(ChatMeasurements);
   await checkAttentionTargets(AttentionPanel);
   await checkBlockedAttentionNavigationPreservesItem(AttentionPanel);
@@ -352,6 +354,59 @@ async function checkHoverHelp(HoverHelp) {
   } finally {
     if (renderer) await act(async () => renderer.unmount());
     Object.assign(globalThis, originals);
+  }
+}
+
+async function checkMessageTaskActions(MessageTaskActions) {
+  const saved = { window: globalThis.window, document: globalThis.document };
+  const events = { addEventListener() {}, removeEventListener() {} };
+  const buttonNode = { getBoundingClientRect: () => ({ left: 40, top: 200, bottom: 228, width: 28, height: 28 }), contains: () => false, matches: () => false };
+  const tooltipNode = { getBoundingClientRect: () => ({ width: 180, height: 28 }), contains: () => false };
+  globalThis.window = { ...saved.window, innerWidth: 800, innerHeight: 600, ...events };
+  globalThis.document = { body: { nodeType: 1, children: [], createNodeMock: () => tooltipNode }, querySelector: () => null, ...events };
+  const calls = { retry: 0, edit: 0 };
+  const held = "Wait until this turn finishes";
+  const render = (reason) => React.createElement(MessageTaskActions, {
+    runId: "run_1",
+    held: reason,
+    onRetry: () => { calls.retry += 1; },
+    onEdit: () => { calls.edit += 1; },
+  });
+  let renderer;
+  try {
+    await act(async () => {
+      renderer = create(render(held), { createNodeMock: (element) => element.type === "button" ? buttonNode : tooltipNode });
+    });
+    const buttons = () => renderer.root.findAllByType("button");
+    assert.equal(buttons().length, 2);
+    for (const node of buttons()) {
+      assert.equal(node.props["aria-disabled"], true);
+      assert.equal(node.props.disabled, undefined);
+      assert.equal(node.props.title, held);
+      assert.equal(node.props["aria-label"] === "Retry" || node.props["aria-label"] === "Edit", true);
+    }
+    assert.equal(buttons().find((node) => node.props["aria-label"] === "Edit").props["data-edit-run"], "run_1");
+    await act(async () => { buttons()[0].props.onClick(); buttons()[1].props.onClick(); });
+    await act(async () => {
+      buttons()[0].props.onKeyDown({ key: "Enter", preventDefault() {}, stopPropagation() {} });
+      buttons()[1].props.onKeyDown({ key: " ", preventDefault() {}, stopPropagation() {} });
+    });
+    assert.equal(calls.retry, 0);
+    assert.equal(calls.edit, 0);
+    await act(async () => renderer.root.findAllByProps({ className: "hover-help" })[0].props.onMouseEnter());
+    const tips = renderer.root.findAllByProps({ role: "tooltip" });
+    assert.equal(tips.length > 0, true);
+    assert.equal(tips[0].props.children, held);
+    await act(async () => { renderer.update(render(null)); });
+    const active = renderer.root.findAllByType("button");
+    for (const node of active) assert.equal(node.props["aria-disabled"], undefined);
+    await act(async () => { active[0].props.onClick(); active[1].props.onClick(); });
+    assert.equal(calls.retry, 1);
+    assert.equal(calls.edit, 1);
+  } finally {
+    if (renderer) await act(async () => renderer.unmount());
+    globalThis.window = saved.window;
+    globalThis.document = saved.document;
   }
 }
 
@@ -682,20 +737,125 @@ async function checkLibraryStalePreviewAndScopedCalls(LibraryPanel) {
   }
 }
 
+function transcriptElement(tag, props = {}, children = []) {
+  const childNodes = children.map((child) => typeof child === "string" ? transcriptText(child) : child);
+  const elements = childNodes.filter((child) => child.nodeType === 1);
+  const node = {
+    nodeType: 1,
+    tag,
+    attrs: props,
+    children: elements,
+    childNodes,
+    get textContent() {
+      return childNodes.map((child) => child.textContent).join("");
+    },
+    getAttribute(name) { return Object.hasOwn(props, name) ? props[name] : null; },
+    classList: { contains: (name) => String(props.class ?? "").split(/\s+/).includes(name) },
+    matches(selector) { return selector.split(",").some((part) => transcriptMatches(node, part.trim())); },
+    querySelector(selector) { return transcriptQuery(node, selector)[0] ?? null; },
+    querySelectorAll(selector) { return transcriptQuery(node, selector); },
+  };
+  return node;
+}
+
+function transcriptText(value) {
+  return { nodeType: 3, textContent: value, children: [], childNodes: [] };
+}
+
+function transcriptMatches(node, selector) {
+  if (selector.startsWith(".")) return node.classList.contains(selector.slice(1));
+  const tag = selector.split("[")[0];
+  if (tag && node.tag !== tag) return false;
+  const attr = selector.match(/\[([^=]+)="([^"]+)"\]/);
+  return attr ? node.getAttribute(attr[1]) === attr[2] : true;
+}
+
+function transcriptQuery(node, selector) {
+  let current = [node];
+  for (const part of selector.split(/\s+/)) {
+    const next = [];
+    for (const parent of current) transcriptCollect(parent, part, next);
+    current = next;
+  }
+  return current;
+}
+
+function transcriptCollect(node, part, into) {
+  for (const child of node.children ?? []) {
+    if (typeof child === "string" || child.nodeType !== 1) continue;
+    if (transcriptMatches(child, part)) into.push(child);
+    transcriptCollect(child, part, into);
+  }
+}
+
+function paintedTranscript() {
+  return transcriptElement("div", { class: "transcript" }, [
+    transcriptElement("article", { class: "bubble bubble-user" }, [
+      transcriptElement("p", { class: "user-message-text" }, ["Do work"]),
+    ]),
+    transcriptElement("article", { class: "bubble bubble-assistant", "data-markdown-source": "**Done**" }, [
+      transcriptElement("p", {}, ["Done"]),
+      transcriptElement("details", { class: "activity-group" }, [
+        transcriptElement("summary", {}, [transcriptElement("span", {}, ["Read 3 files"])]),
+        transcriptElement("span", { class: "activity-line" }, ["Read notes.txt"]),
+        transcriptElement("span", { class: "activity-line" }, ["Read plan.md failed"]),
+      ]),
+      transcriptElement("button", { class: "helper-delegation" }, [
+        transcriptElement("span", { class: "helper-delegation-head" }, [
+          transcriptElement("strong", {}, ["Researcher"]),
+          transcriptElement("span", {}, ["Done"]),
+        ]),
+        transcriptElement("span", { class: "helper-delegation-request" }, ["Find the note"]),
+      ]),
+      transcriptElement("ol", { "aria-label": "Todo list" }, [
+        transcriptElement("li", {}, [
+          transcriptElement("span", { class: "todo-status" }, ["✓"]),
+          transcriptText(" Check the file"),
+        ]),
+      ]),
+      transcriptElement("div", { class: "tool-call-row" }, [
+        transcriptElement("details", { class: "message-tools" }, [
+          transcriptElement("summary", {}, [
+            transcriptElement("span", { class: "activity-line" }, ["Checked the vault"]),
+          ]),
+          transcriptElement("div", { class: "tool-call-details" }, [
+            transcriptElement("section", { "aria-label": "Tool output" }, [
+              transcriptText("UNIQUE-TOOL-OUTPUT-should-not-export"),
+            ]),
+            transcriptElement("details", { class: "tool-raw-arguments" }, [
+              transcriptElement("section", { "aria-label": "Raw tool arguments" }, [
+                transcriptText("UNIQUE-RAW-ARGS-should-not-export"),
+              ]),
+            ]),
+          ]),
+        ]),
+      ]),
+      transcriptElement("div", { class: "message-reasoning" }, [transcriptElement("p", {}, ["secret thought"])]),
+    ]),
+    transcriptElement("div", { class: "tool-message" }, [
+      transcriptElement("span", { class: "activity-line" }, ["Waiting: echo"]),
+    ]),
+    transcriptElement("section", { class: "chat-retained-files" }, [
+      transcriptElement("button", { class: "retained-file-name" }, [
+        transcriptElement("span", {}, ["notes.txt"]),
+        transcriptElement("small", {}, ["12 B"]),
+      ]),
+    ]),
+  ]);
+}
+
 async function checkChatHistoryActions(ChatHistoryActions, AnswerActions) {
   const originalFetch = globalThis.fetch;
   const originalConfirm = globalThis.window.confirm;
   const originalDocument = globalThis.document;
   const originalCreateObjectUrl = globalThis.URL?.createObjectURL;
   const originalRevokeObjectUrl = globalThis.URL?.revokeObjectURL;
-  const created = [];
   const deleted = [];
   const errors = [];
-  const branchRequests = [];
   const downloads = [];
-  let turnCompleted = false;
   let deleteBody = null;
   let confirmCalls = 0;
+  const transcript = paintedTranscript();
   globalThis.window.confirm = () => {
     confirmCalls += 1;
     return true;
@@ -706,45 +866,18 @@ async function checkChatHistoryActions(ChatHistoryActions, AnswerActions) {
   };
   globalThis.URL.revokeObjectURL = () => {};
   globalThis.document = {
-    body: { appendChild: () => {} },
+    body: { appendChild() {} },
+    querySelector: (selector) => transcriptMatches(transcript, selector) ? transcript : transcript.querySelector(selector),
     createElement: () => ({
       href: "",
       download: "",
-      click() {
-        downloads.at(-1).filename = this.download;
-      },
+      click() { downloads.at(-1).filename = this.download; },
       remove() {},
     }),
   };
   globalThis.fetch = async (url, init = {}) => {
     const address = String(url);
-    if (address.includes("/replies/run_done/actions")) {
-      return jsonResponse({
-        branch_available: turnCompleted,
-        retry_available: turnCompleted,
-        regenerate_available: false,
-        branch_reason: turnCompleted ? null : "Wait for the active turn to stop before branching.",
-        retry_reason: turnCompleted ? null : "Wait for the active turn to stop before branching.",
-        regenerate_reason: "This turn has no matching retained project snapshot.",
-      });
-    }
-    if (address.includes("/branches")) {
-      branchRequests.push(JSON.parse(String(init.body)));
-      return jsonResponse({ ...conversationFixture(), id: "chat_branch", source_conversation_id: "chat_source" });
-    }
-    if (address.includes("/export")) {
-      return jsonResponse({
-        schema_version: 1,
-        exported_at: "2026-09-21T00:02:00Z",
-        conversation: conversationFixture(),
-        runs: [{ id: "run_done", task: "Do work" }],
-        retained_assets: [{ filename: "notes.txt" }],
-        note: "Readable export only.",
-      });
-    }
-    if (address.includes("/delete-preview")) {
-      return jsonResponse(deletePreviewFixture());
-    }
+    if (address.includes("/delete-preview")) return jsonResponse(deletePreviewFixture());
     if (init.method === "DELETE" && address.includes("/v1/chat/conversations/chat_source")) {
       deleteBody = JSON.parse(String(init.body));
       return jsonResponse({ ...deletePreviewFixture(), diagnostics_deleted: Boolean(deleteBody.include_diagnostics) });
@@ -754,107 +887,79 @@ async function checkChatHistoryActions(ChatHistoryActions, AnswerActions) {
 
   try {
     let renderer;
-    await act(async () => {
-      renderer = create(React.createElement(ChatHistoryActions, {
-        conversation: { ...conversationFixture(), current_run: { ...conversationFixture().current_run, status: "running" } },
-        onConversationCreated: (next) => created.push(next.id),
-        onDeleted: (id) => deleted.push(id),
-        onError: (message) => errors.push(message),
-      }));
-      await tick();
+    const mount = (conversation) => React.createElement(ChatHistoryActions, {
+      conversation,
+      onDeleted: (id) => deleted.push(id),
+      onError: (message) => errors.push(message),
     });
     await act(async () => {
+      renderer = create(mount({ ...conversationFixture(), current_run: { id: "run_done", status: "running" } }));
       await tick();
     });
-
-    assert.equal(button(renderer, "Retry task").props.disabled, true, "running turn cannot be retried");
-    turnCompleted = true;
-    await act(async () => {
-      renderer.update(React.createElement(ChatHistoryActions, {
-        conversation: { ...conversationFixture(), current_run: { ...conversationFixture().current_run, status: "completed" } },
-        onConversationCreated: (next) => created.push(next.id),
-        onDeleted: (id) => deleted.push(id),
-        onError: (message) => errors.push(message),
-      }));
-      await tick();
-    });
-    assert.equal(button(renderer, "Retry task").props.disabled, false, "terminal hydration refreshes saved reply availability without reopening Chat");
-
-    assert.ok(!textOf(renderer.root).includes("Regenerate answer"), "regenerate stays on the answer, not the conversation menu");
-    assert.ok(!textOf(renderer.root).includes("Branch chat") && !textOf(renderer.root).includes("Branch workspace"), "branch stays on the answer, not the conversation menu");
+    assert.equal(button(renderer, "Download transcript").props.disabled, undefined, "a running turn still downloads a transcript");
+    assert.equal(textOf(renderer.root).includes("Regenerate"), false);
+    assert.equal(textOf(renderer.root).includes("Branch"), false);
+    assert.equal(textOf(renderer.root).includes("JSON"), false);
     let answers;
     await act(async () => {
-      answers = create(React.createElement(AnswerActions, {
-        conversation: conversationFixture(),
-        runId: "run_done",
-        answerText: "Done",
-        onConversationCreated: () => {},
-        onError: (message) => errors.push(message),
-      }));
+      answers = create(React.createElement(AnswerActions, { answerText: "Done" }));
       await tick();
     });
-    const regenerate = answers.root.findByProps({ "aria-label": "Regenerate answer" });
-    assert.equal(regenerate.props.disabled, true, "unsupported regenerate stays disabled");
-    assert.equal(regenerate.props.title, "This turn has no matching retained project snapshot.");
-    assert.equal(answers.root.findByProps({ "aria-label": "Branch workspace" }).props.disabled, false);
     assert.ok(answers.root.findByProps({ "aria-label": "Copy answer" }));
+    assert.equal(answers.root.findAll((node) => node.type === "button" && /Regenerate|Branch/.test(textOf(node))).length, 0);
     await act(async () => { answers.unmount(); });
 
     await act(async () => {
-      button(renderer, "Retry task").props.onClick();
-      await tick();
-    });
-    assert.equal(confirmCalls, 1, "retry must disclose repeated effects before creating a branch");
-    assert.deepEqual(branchRequests.at(-1), {
-      source_run_id: "run_done",
-      mode: "retry",
-      acknowledge_repeated_effects: true,
-    });
-    assert.deepEqual(created, ["chat_branch"]);
-
-    const editBox = renderer.root.findByType("textarea");
-    await act(async () => {
-      editBox.props.onChange({ target: { value: "Do the safer edited task" } });
-    });
-    await act(async () => {
-      button(renderer, "Edit task branch").props.onClick();
-      await tick();
-    });
-    assert.deepEqual(branchRequests.at(-1), {
-      source_run_id: "run_done",
-      mode: "edit",
-      acknowledge_repeated_effects: true,
-      edited_task: "Do the safer edited task",
-    });
-
-    await act(async () => {
-      button(renderer, "Readable export").props.onClick();
+      button(renderer, "Download transcript").props.onClick();
       await tick();
     });
     assert.equal(downloads.at(-1).filename, "Source-chat.md");
-    assert.match(await downloads.at(-1).blob.text(), /# Source chat[\s\S]*## You[\s\S]*Do work[\s\S]*## Assistant[\s\S]*Done/);
+    const transcriptTextBody = await downloads.at(-1).blob.text();
+    assert.match(transcriptTextBody, /# Source chat\n\nExported: .+\nArea: Project\n\nThis file is a transcript\. It is not a restore\.\n\n## You\n\nDo work\n\n## Assistant\n\n\*\*Done\*\*\n\nRead notes\.txt\nRead plan\.md failed\nResearcher Done Find the note\n✓ Check the file\nChecked the vault\nWaiting: echo\n\n## Retained files\n\n- notes\.txt\n/);
+    assert.equal(transcriptTextBody.includes("Read 3 files"), false);
+    assert.equal(transcriptTextBody.includes("secret thought"), false);
+    assert.equal(transcriptTextBody.includes("UNIQUE-TOOL-OUTPUT-should-not-export"), false);
+    assert.equal(transcriptTextBody.includes("UNIQUE-RAW-ARGS-should-not-export"), false);
+    assert.equal(transcriptTextBody.includes("Checked the vault"), true);
+    assert.equal(transcriptTextBody.includes("12 B"), false);
 
     await act(async () => {
-      button(renderer, "Advanced JSON export").props.onClick();
+      renderer.update(mount({ ...conversationFixture(), title: "Café notes", display_title: null }));
       await tick();
     });
-    assert.equal(downloads.at(-1).filename, "Source-chat-structured.json");
-    assert.match(await downloads.at(-1).blob.text(), /"schema_version": 1/);
+    await act(async () => {
+      button(renderer, "Download transcript").props.onClick();
+      await tick();
+    });
+    assert.equal(downloads.at(-1).filename, "Caf-notes.md");
+    await act(async () => {
+      renderer.update(mount({ ...conversationFixture(), title: "", display_title: null }));
+      await tick();
+    });
+    await act(async () => {
+      button(renderer, "Download transcript").props.onClick();
+      await tick();
+    });
+    assert.equal(downloads.at(-1).filename, "New-conversation.md");
 
     await act(async () => {
+      renderer.update(mount(conversationFixture()));
       button(renderer, "Delete").props.onClick();
       await tick();
     });
-    assert.ok(textOf(renderer.root).includes("1 retained asset"));
-    assert.ok(textOf(renderer.root).includes("Project files and model files are retained."));
-
-    assert.equal(renderer.root.findAll((node) => node.type === "input" && node.props.type === "checkbox").length, 0, "chat deletion always removes owned diagnostics without an optional partial-deletion toggle");
+    const dialog = textOf(renderer.root);
+    assert.ok(dialog.includes("This permanently removes this chat and its history. Project files and model files stay."));
+    assert.ok(dialog.includes("History shared with another chat is kept for that chat."));
+    assert.equal(dialog.includes("backup"), false);
+    assert.equal(dialog.includes(deletePreviewFixture().note), false);
+    assert.equal(button(renderer, "Delete chat").props.disabled, false);
     await act(async () => {
-      button(renderer, "Delete conversation").props.onClick();
+      button(renderer, "Delete chat").props.onClick();
       await tick();
     });
     assert.deepEqual(deleteBody, { execute: true, include_diagnostics: true });
     assert.deepEqual(deleted, ["chat_source"]);
+    assert.equal(confirmCalls, 0);
     assert.deepEqual(errors, []);
   } finally {
     globalThis.fetch = originalFetch;

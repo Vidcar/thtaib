@@ -36,6 +36,14 @@ function subscribeLiveMeasurement(listener: () => void): () => void {
   return () => measurementListeners.delete(listener);
 }
 
+export function readLiveMeasurement(): LiveMeasurement | null {
+  return liveMeasurement;
+}
+
+export function useLiveMeasurement(): LiveMeasurement | null {
+  return useSyncExternalStore(subscribeLiveMeasurement, readLiveMeasurement, readLiveMeasurement);
+}
+
 export function ChatMeasurements({ run, ownerKey, starting = false, stopping = false, onInspect }: {
   run?: AgentRun | null;
   ownerKey?: string;
@@ -43,7 +51,7 @@ export function ChatMeasurements({ run, ownerKey, starting = false, stopping = f
   stopping?: boolean;
   onInspect?: () => void;
 }) {
-  const published = useSyncExternalStore(subscribeLiveMeasurement, () => liveMeasurement, () => liveMeasurement);
+  const published = useLiveMeasurement();
   const measurement = ownerKey && published?.ownerKey === ownerKey && published.runId === run?.id ? published : null;
   const generation = measurement ? measurement.generation : run?.generation_observation;
   const history = measurement?.history ?? run?.generation_history ?? [];

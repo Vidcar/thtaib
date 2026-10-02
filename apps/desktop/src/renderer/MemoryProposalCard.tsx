@@ -29,7 +29,6 @@ export function MemoryProposalCard(props: {
       <p className="hint">
         {props.destination}
         {props.meta}
-        {props.proposal.automatic ? " · saved automatically" : ""}
       </p>
       {props.currentContent != null ? (
         <details>

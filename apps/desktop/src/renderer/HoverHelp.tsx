@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
 
 /** Help is available to pointer, keyboard and touch without occupying the page. */
-export function HoverHelp({ title = "About this setting", children, triggerContent, triggerClassName, bubbleClassName, placement = "below", interactive = false, mode = "hover" }: {
+export function HoverHelp({ title = "About this setting", children, triggerContent, triggerClassName, bubbleClassName, placement = "below", interactive = false, mode = "hover", label, held = null, onActivate, editRunId, clearanceSelector, visibleFocusOnly = false }: {
   title?: string;
   children: ReactNode;
   triggerContent?: ReactNode;
@@ -12,6 +12,12 @@ export function HoverHelp({ title = "About this setting", children, triggerConte
   placement?: "above" | "below";
   interactive?: boolean;
   mode?: "hover" | "click";
+  label?: string;
+  held?: string | null;
+  onActivate?: () => void;
+  editRunId?: string;
+  clearanceSelector?: string;
+  visibleFocusOnly?: boolean;
 }) {
   const id = useId();
   const trigger = useRef<HTMLButtonElement>(null);
@@ -20,6 +26,8 @@ export function HoverHelp({ title = "About this setting", children, triggerConte
   const hovered = useRef(false);
   const focused = useRef(false);
   const [open, setOpen] = useState(false);
+  const action = onActivate !== undefined;
+  const suppressed = action && !held;
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
   const clearClose = useCallback(() => {
     if (closeTimer.current !== null) { clearTimeout(closeTimer.current); closeTimer.current = null; }
@@ -40,13 +48,17 @@ export function HoverHelp({ title = "About this setting", children, triggerConte
     if (!anchor || !tip) return;
     const below = anchor.bottom + 8;
     const above = anchor.top - tip.height - 8;
-    const top = placement === "above" && above >= 8 ? above : below + tip.height <= window.innerHeight - 8 ? below : above;
+    const headerBottom = clearanceSelector && typeof document !== "undefined" && typeof document.querySelector === "function"
+      ? document.querySelector(clearanceSelector)?.getBoundingClientRect().bottom
+      : undefined;
+    const floor = Math.max(8, headerBottom ?? 8);
+    const top = placement === "above" && above >= floor ? above : below + tip.height <= window.innerHeight - 8 ? below : above;
     const next = {
       left: Math.max(8, Math.min(anchor.left, window.innerWidth - tip.width - 8)),
       top: Math.max(8, Math.min(top, window.innerHeight - tip.height - 8)),
     };
     setPosition(current => current?.left === next.left && current.top === next.top ? current : next);
-  }, [placement]);
+  }, [placement, clearanceSelector]);
   useLayoutEffect(() => { if (open) locate(); }, [open, children, locate]);
   useEffect(() => {
     if (!open) return;
@@ -69,11 +81,12 @@ export function HoverHelp({ title = "About this setting", children, triggerConte
     };
   }, [open, locate, dismiss]);
   useEffect(() => clearClose, [clearClose]);
-  return <span className="hover-help" onMouseEnter={() => { if (mode === "hover") { hovered.current = true; show(); } }} onMouseLeave={() => { if (mode === "hover") { hovered.current = false; leave(); } }}>
-    <button ref={trigger} type="button" className={triggerClassName ?? "help-icon"} aria-label={title} aria-describedby={open && !interactive ? id : undefined}
+  return <span className="hover-help" onMouseEnter={() => { if (mode === "hover" && !suppressed) { hovered.current = true; show(); } }} onMouseLeave={() => { if (mode === "hover") { hovered.current = false; leave(); } }}>
+    <button ref={trigger} type="button" className={triggerClassName ?? "help-icon"} aria-label={label ?? title} title={action ? held ?? label : undefined} aria-disabled={action && held ? true : undefined} data-edit-run={editRunId} aria-describedby={open && !interactive ? id : undefined}
       aria-haspopup={interactive ? "dialog" : undefined} aria-expanded={interactive ? open : undefined} aria-controls={open && interactive ? id : undefined}
-      onFocus={() => { focused.current = true; if (mode === "hover") show(); }} onBlur={() => { focused.current = false; if (mode === "hover") leave(); }} onClick={() => mode === "click" && open ? dismiss() : show()}
+      onFocus={(event) => { focused.current = true; if (mode !== "hover" || suppressed) return; if (visibleFocusOnly && !event?.currentTarget?.matches?.(":focus-visible")) return; show(); }} onBlur={() => { focused.current = false; if (mode === "hover") leave(); }} onClick={(event) => { if (action) { if (!held && event?.currentTarget?.getAttribute?.("aria-disabled") !== "true") onActivate(); return; } if (mode === "click" && open) dismiss(); else show(); }}
       onKeyDown={(event) => {
+        if (action && (held || event.currentTarget?.getAttribute?.("aria-disabled") === "true") && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); event.stopPropagation(); return; }
         if (open && event.key === "Tab" && !event.shiftKey) {
           const control = bubble.current?.querySelector<HTMLElement>("button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex='0']");
           if (control) { event.preventDefault(); control.focus(); }

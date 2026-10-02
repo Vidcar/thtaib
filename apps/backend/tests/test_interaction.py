@@ -58,28 +58,22 @@ class InteractionApiTests(unittest.TestCase):
         source_run = completed["values"]["workbench"]["run"]
         source = self.client.get(f"/v1/chat/conversations/{conversation_id}").json()
         response = self.client.post(f"/v1/chat/conversations/{conversation_id}/branches", json={"source_run_id": source_run["id"]})
-        self.assertEqual(response.status_code, 200, response.text)
-        branch = response.json()
-        self.assertNotEqual(branch["thread_id"], source["thread_id"])
-        self.assertEqual(Path(branch["project_path"]).resolve(), Path(source["project_path"]).resolve())
-        self.assertEqual(branch["area_id"], source["area_id"])
-        from workbench_backend.state.checkpointer import conversation_state
-        state = conversation_state(self.app.state.manager.paths.checkpoints_db, branch["thread_id"])
-        from workbench_backend.state.checkpointer import open_sqlite_checkpointer
-        saver = open_sqlite_checkpointer(self.app.state.manager.paths.checkpoints_db)
-        saved = saver.get_tuple({"configurable": {"thread_id": branch["thread_id"]}})
-        self.assertIn("Remembered first answer", str(state["messages"]), str(saved))
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["code"], "branch_unavailable")
         self._install_model([AIMessage(content="A separate follow-up")])
-        following = self.client.post(f"/v1/chat/conversations/{branch['id']}/start", json={"task": "Continue", "presented_tools": []})
+        following = self.client.post(f"/v1/chat/conversations/{conversation_id}/start", json={"task": "Continue", "presented_tools": []})
         self.assertEqual(following.status_code, 200, following.text)
         from tests.test_harness import wait_for_run
         finished = wait_for_run(self.client, following.json()["current_run_id"])
         self.assertEqual(finished["status"], "completed", finished)
         self.assertEqual(finished["project_id"], source["project_id"])
         self.assertEqual(Path(finished["project_path"]).resolve(), Path(source["project_path"]).resolve())
+        self.assertEqual(finished["thread_id"], source["thread_id"])
         original = self.client.get(f"/v1/chat/conversations/{conversation_id}").json()
-        self.assertEqual(original["current_run_id"], source_run["id"])
-        self.assertNotIn("A separate follow-up", str(original["transcript"]))
+        self.assertEqual(original["id"], conversation_id)
+        self.assertIn("Remembered first answer", str(original["transcript"]))
+        self.assertIn("A separate follow-up", str(original["transcript"]))
+        self.assertEqual(len(self.client.get("/v1/chat/conversations").json()), 1)
 
     def test_typed_question_resumes_exact_interrupt_without_approval(self) -> None:
         self._install_model([

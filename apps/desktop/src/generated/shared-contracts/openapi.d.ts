@@ -2809,6 +2809,8 @@ export interface components {
             finalization_phase?: "saving_changes" | null;
             /** Finished At */
             finished_at?: string | null;
+            /** Fork Checkpoint Id */
+            fork_checkpoint_id?: string | null;
             /** Framework Read Paths */
             framework_read_paths?: string[];
             /** Generation History */
@@ -2907,6 +2909,11 @@ export interface components {
             retrieved_material?: string[];
             review?: components["schemas"]["ReviewConfiguration"];
             review_observation?: components["schemas"]["ReviewObservation"];
+            /**
+             * Rewind Clear Messages
+             * @default false
+             */
+            rewind_clear_messages: boolean;
             /** Settled Status */
             settled_status?: ("completed" | "failed" | "cancelled") | null;
             /** Settled Stop Reason */
@@ -3061,6 +3068,8 @@ export interface components {
             finalization_phase?: "saving_changes" | null;
             /** Finished At */
             finished_at?: string | null;
+            /** Fork Checkpoint Id */
+            fork_checkpoint_id?: string | null;
             /** Framework Read Paths */
             framework_read_paths?: string[];
             /** Generation History */
@@ -3157,6 +3166,11 @@ export interface components {
             retrieved_material?: string[];
             review?: components["schemas"]["ReviewConfiguration"];
             review_observation?: components["schemas"]["ReviewObservation"];
+            /**
+             * Rewind Clear Messages
+             * @default false
+             */
+            rewind_clear_messages: boolean;
             /** Settled Status */
             settled_status?: ("completed" | "failed" | "cancelled") | null;
             /** Settled Stop Reason */
@@ -3338,6 +3352,8 @@ export interface components {
             desktop_access: "off" | "selected" | "all";
             /** Embedding Deployment Id */
             embedding_deployment_id?: string | null;
+            /** Fork Checkpoint Id */
+            fork_checkpoint_id?: string | null;
             /** Helper Agent Ids */
             helper_agent_ids?: string[];
             /**
@@ -3384,6 +3400,11 @@ export interface components {
             /** Retrieval Project Paths */
             retrieval_project_paths?: string[];
             review?: components["schemas"]["ReviewConfiguration"];
+            /**
+             * Rewind Clear Messages
+             * @default false
+             */
+            rewind_clear_messages: boolean;
             /** Skill Version Refs */
             skill_version_refs?: string[];
             /**
@@ -4606,6 +4627,10 @@ export interface components {
             /** Retrieval Project Paths */
             retrieval_project_paths?: string[] | null;
             review?: components["schemas"]["ReviewConfiguration"] | null;
+            /** Rewind Mode */
+            rewind_mode?: ("retry" | "edit") | null;
+            /** Rewind Source Run Id */
+            rewind_source_run_id?: string | null;
             /** Shortcut Ids */
             shortcut_ids?: string[];
             /** Skill Entry Ids */
@@ -6583,6 +6608,8 @@ export interface components {
             scope: "session" | "always";
             /** Source Run Id */
             source_run_id: string;
+            /** Starting Folder */
+            starting_folder?: string | null;
             /** Thread Id */
             thread_id?: string | null;
         };

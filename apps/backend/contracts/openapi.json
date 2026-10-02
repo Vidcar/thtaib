@@ -512,6 +512,17 @@
             ],
             "title": "Finished At"
           },
+          "fork_checkpoint_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fork Checkpoint Id"
+          },
           "framework_read_paths": {
             "items": {
               "type": "string"
@@ -804,6 +815,11 @@
           },
           "review_observation": {
             "$ref": "#/components/schemas/ReviewObservation"
+          },
+          "rewind_clear_messages": {
+            "default": false,
+            "title": "Rewind Clear Messages",
+            "type": "boolean"
           },
           "settled_status": {
             "anyOf": [
@@ -1329,6 +1345,17 @@
             ],
             "title": "Finished At"
           },
+          "fork_checkpoint_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fork Checkpoint Id"
+          },
           "framework_read_paths": {
             "items": {
               "type": "string"
@@ -1614,6 +1641,11 @@
           },
           "review_observation": {
             "$ref": "#/components/schemas/ReviewObservation"
+          },
+          "rewind_clear_messages": {
+            "default": false,
+            "title": "Rewind Clear Messages",
+            "type": "boolean"
           },
           "settled_status": {
             "anyOf": [
@@ -2186,6 +2218,19 @@
             ],
             "title": "Embedding Deployment Id"
           },
+          "fork_checkpoint_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fork Checkpoint Id"
+          },
           "helper_agent_ids": {
             "items": {
               "type": "string"
@@ -2389,6 +2434,11 @@
           },
           "review": {
             "$ref": "#/components/schemas/ReviewConfiguration"
+          },
+          "rewind_clear_messages": {
+            "default": false,
+            "title": "Rewind Clear Messages",
+            "type": "boolean"
           },
           "skill_version_refs": {
             "items": {
@@ -6379,6 +6429,34 @@
                 "type": "null"
               }
             ]
+          },
+          "rewind_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "retry",
+                  "edit"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rewind Mode"
+          },
+          "rewind_source_run_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rewind Source Run Id"
           },
           "shortcut_ids": {
             "items": {
@@ -11952,6 +12030,17 @@
           "source_run_id": {
             "title": "Source Run Id",
             "type": "string"
+          },
+          "starting_folder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Starting Folder"
           },
           "thread_id": {
             "anyOf": [
