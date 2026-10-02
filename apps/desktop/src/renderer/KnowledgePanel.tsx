@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 
 import { api } from "./api";
-import { formatWhen, shortId } from "./display";
+import { formatWhen } from "./display";
 import { EmptyState } from "./EmptyState";
 import { errorMessage } from "./errors";
 import { HoverHelp } from "./HoverHelp";
 import { Icon } from "./Icon";
-import { knowledgeActorLabel, knowledgeKindLabel, redactionModeLabel } from "./labels";
+import { knowledgeActorLabel, knowledgeKindLabel } from "./labels";
 import { Notice } from "./Notice";
 import { LifecycleAction } from "./LifecycleAction";
 import { StatusBadge } from "./StatusBadge";
@@ -19,13 +19,11 @@ import "./WorkspacePanels.css";
 import "./KnowledgePanel.css";
 import { CompactSwitch, SegmentedChoice, SettingRow } from "./CompactControls";
 import type {
-  ContextCapture,
   KnowledgeConfig,
   KnowledgeEntry,
   KnowledgeKind,
   KnowledgeScope,
   KnowledgeVersion,
-  RedactionMode,
 } from "./types";
 
 const SKILL_STARTER = `---
@@ -44,7 +42,6 @@ export function KnowledgePanel({ active = true, openEntryId, openRequest }: { ac
   const [versions, setVersions] = useState<KnowledgeVersion[]>([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [config, setConfig] = useState<KnowledgeConfig | null>(null);
-  const [capture, setCapture] = useState<ContextCapture | null>(null);
   const [message, setMessage] = useState("");
   const [loadError, setLoadError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -75,9 +72,6 @@ export function KnowledgePanel({ active = true, openEntryId, openRequest }: { ac
   const actionPending = useRef(false);
   const [content, setContent] = useState("");
   const [editContent, setEditContent] = useState("");
-  const [captureText, setCaptureText] = useState("");
-  const [redactionMode, setRedactionMode] = useState<RedactionMode>("redact_secrets");
-  const redactionDirty = useRef(false);
   const [creating, setCreating] = useState(false);
 
   async function refresh(isCurrent = () => true): Promise<KnowledgeEntry[]> {
@@ -91,7 +85,7 @@ export function KnowledgePanel({ active = true, openEntryId, openRequest }: { ac
   }
 
   async function refreshConfig(isCurrent = () => true) {
-    try { const next = await api.knowledgeConfig(); if (isCurrent()) { setConfig(next); if (!redactionDirty.current) setRedactionMode(next.context_captures.redaction_mode); setConfigError(""); } }
+    try { const next = await api.knowledgeConfig(); if (isCurrent()) { setConfig(next); setConfigError(""); } }
     catch (failure) { if (isCurrent()) setConfigError(errorMessage(failure)); }
   }
   async function refreshScopes(isCurrent = () => true) {
@@ -337,19 +331,6 @@ export function KnowledgePanel({ active = true, openEntryId, openRequest }: { ac
         {configError ? <Notice tone="warn" action={<button type="button" onClick={() => void refreshConfig()}>Retry settings</button>}>{configError}</Notice> : null}
         <SettingRow label="Destination" htmlFor="knowledge-policy-destination" help="Suggestions need review unless automatic saving is allowed for this exact destination. Instructions stay under your control."><select id="knowledge-policy-destination" value={policyDestination} disabled={busy || Boolean(scopesError)} onChange={event => setPolicyDestination(event.target.value)}>{scopes.filter(option => option.active).map(option => <option key={`${option.scope}:${option.scope_id ?? ""}`} value={`${option.scope}:${option.scope_id ?? ""}`}>{option.label}</option>)}</select></SettingRow>
         <CompactSwitch label="Save automatically" description="Allow agents to save memories to this destination without review." disabled={busy || !config || Boolean(configError) || !scopes.some(option => `${option.scope}:${option.scope_id ?? ""}` === policyDestination)} checked={Boolean(config?.automatic_save_policies?.find(policy => `${policy.scope}:${policy.scope_id ?? ""}` === policyDestination)?.automatic_agent_writes)} onChange={automatic => { const destination = scopes.find(option => `${option.scope}:${option.scope_id ?? ""}` === policyDestination); if (destination) void action(async () => setConfig(await knowledgeApi.automaticPolicy({ scope: destination.scope, scope_id: destination.scope_id, automatic_agent_writes: automatic }))); }} />
-      </details>
-      <details className="knowledge-secondary">
-        <summary><Icon name="files" size={15} /> Diagnostic captures <small>{configError ? "Unavailable" : config ? redactionModeLabel(config.context_captures.redaction_mode) : "Loading…"}</small></summary>
-        {configError ? <Notice tone="warn" action={<button type="button" onClick={() => void refreshConfig()}>Retry capture settings</button>}>{configError}</Notice> : null}
-        <SegmentedChoice label="Redaction" description="Save request text for troubleshooting. Secrets are redacted by default." value={redactionMode} disabled={busy || !config || Boolean(configError)} options={[{ value: "redact_secrets", label: "Redact" }, { value: "retain", label: "Retain" }, { value: "discard", label: "Discard" }]} onChange={value => { redactionDirty.current = true; setRedactionMode(value as RedactionMode); }} />
-        {redactionMode === "retain" ? <Notice tone="warn">Unredacted captures can include secrets.</Notice> : null}
-        <SettingRow stacked label="Text to capture" htmlFor="knowledge-capture-text"><textarea id="knowledge-capture-text" value={captureText} disabled={busy} onChange={event => setCaptureText(event.target.value)} /></SettingRow>
-        <div className="actions">
-          <button type="button" disabled={busy || !config || Boolean(configError) || redactionMode === config.context_captures.redaction_mode} onClick={() => void action(async () => { const next = await api.updateKnowledgeConfig({ context_captures: { redaction_mode: redactionMode } }); setConfig(next); setRedactionMode(next.context_captures.redaction_mode); redactionDirty.current = false; setMessage(`Capture redaction set to ${redactionModeLabel(next.context_captures.redaction_mode)}.`); })}><Icon name="check" size={14} /> Save setting</button>
-          <button type="button" disabled={busy || !config || Boolean(configError) || !captureText.trim()} onClick={() => void action(async () => { const next = await api.createContextCapture(captureText); setCapture(next); setMessage(next.discarded ? "Capture discarded by the current setting." : next.redacted ? "Capture stored with secrets redacted." : "Capture stored."); })}><Icon name="files" size={14} /> Capture</button>
-        </div>
-        {config ? <p className="hint">{redactionModeLabel(config.context_captures.redaction_mode)} · {config.context_captures.retention_seconds != null ? `Retain ${config.context_captures.retention_seconds}s` : "Retain until deleted"}</p> : null}
-        {capture ? <p className="hint">Last capture {shortId(capture.id)}{capture.redacted ? " · redacted" : ""}{capture.discarded ? " · discarded" : ""}{capture.expired ? " · expired" : ""}</p> : null}
       </details>
       {message ? <Notice tone={/fail|error|conflict/i.test(message) ? "error" : "info"}>{message}</Notice> : null}
     </section>

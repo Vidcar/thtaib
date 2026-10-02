@@ -1687,41 +1687,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/knowledge/captures": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Captures */
-        get: operations["list_captures_v1_knowledge_captures_get"];
-        put?: never;
-        /** Create Capture */
-        post: operations["create_capture_v1_knowledge_captures_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/knowledge/captures/{capture_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Capture */
-        get: operations["get_capture_v1_knowledge_captures__capture_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/knowledge/config": {
         parameters: {
             query?: never;
@@ -4866,15 +4831,6 @@ export interface components {
             /** Url */
             url?: string | null;
         };
-        /** ContextCaptureRequest */
-        ContextCaptureRequest: {
-            /** Content */
-            content: string;
-            /** Run Id */
-            run_id?: string | null;
-            /** Source */
-            source?: string | null;
-        };
         /** ContextCaptureSettings */
         ContextCaptureSettings: {
             /**
@@ -5997,7 +5953,6 @@ export interface components {
         };
         /** KnowledgeConfigUpdateRequest */
         KnowledgeConfigUpdateRequest: {
-            context_captures?: components["schemas"]["ContextCaptureSettings"] | null;
             /** Scope Policies */
             scope_policies?: {
                 [key: string]: components["schemas"]["ScopeWritePolicy"];
@@ -8747,7 +8702,6 @@ export type SchemaConnectionSnapshot = components['schemas']['ConnectionSnapshot
 export type SchemaConnectionTool = components['schemas']['ConnectionTool'];
 export type SchemaConnectionUpdate = components['schemas']['ConnectionUpdate'];
 export type SchemaConnectionWrite = components['schemas']['ConnectionWrite'];
-export type SchemaContextCaptureRequest = components['schemas']['ContextCaptureRequest'];
 export type SchemaContextCaptureSettings = components['schemas']['ContextCaptureSettings'];
 export type SchemaContextObservation = components['schemas']['ContextObservation'];
 export type SchemaCredentialWrite = components['schemas']['CredentialWrite'];
@@ -12580,90 +12534,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["KnowledgeConfig"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_captures_v1_knowledge_captures_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    create_capture_v1_knowledge_captures_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ContextCaptureRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_capture_v1_knowledge_captures__capture_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                capture_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

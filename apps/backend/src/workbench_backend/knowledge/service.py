@@ -1,4 +1,4 @@
-"""STATE-005 knowledge write policy, versions and context-capture retention."""
+"""STATE-005 knowledge write policy and versions."""
 
 from __future__ import annotations
 
@@ -8,15 +8,11 @@ import binascii
 import unicodedata
 from contextlib import contextmanager
 from pathlib import Path
-from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 from workbench_backend.errors import KnowledgeError
 from workbench_backend.inference.ids import new_id, utc_now
-from workbench_backend.knowledge.redaction import apply_redaction
 from workbench_backend.knowledge.schemas import (
-    ContextCapture,
-    ContextCaptureRequest,
     KnowledgeConfig,
     KnowledgeConfigUpdateRequest,
     KnowledgeCreateRequest,
@@ -139,11 +135,6 @@ class KnowledgeService:
         with self._lock:
             current = self.store.read_config()
             payload = current.model_dump()
-            if request.context_captures is not None:
-                payload["context_captures"] = (
-                    current.context_captures.model_dump()
-                    | request.context_captures.model_dump(exclude_unset=True)
-                )
             if request.scope_policies is not None:
                 if any(scope != "user" and policy.automatic_agent_writes for scope, policy in request.scope_policies.items()):
                     raise KnowledgeError("Automatic saving requires one specific project or agent destination.", code="scope_identity_required", status_code=400)
@@ -269,48 +260,6 @@ class KnowledgeService:
                 description=target.description,
                 preserve_description=False,
             )
-
-    def capture(self, request: ContextCaptureRequest) -> ContextCapture:
-        config = self.get_config()
-        settings = config.context_captures
-        stored, redacted, fields = apply_redaction(request.content, settings.redaction_mode)
-        now = datetime.now(timezone.utc).replace(microsecond=0)
-        expires_at = None
-        expired = False
-        if settings.retention_seconds is not None:
-            expires_at = now + timedelta(seconds=settings.retention_seconds)
-            expired = expires_at <= now
-        discarded = settings.redaction_mode == "discard" or expired
-        stored_content = None if discarded else stored
-        record = ContextCapture(
-            id=new_id("kcap"),
-            created_at=now.isoformat(),
-            expires_at=expires_at.isoformat() if expires_at else None,
-            retention_seconds=settings.retention_seconds,
-            redaction_mode=settings.redaction_mode,
-            content=stored_content,
-            retained=stored_content is not None,
-            redacted=False if discarded else redacted,
-            discarded=settings.redaction_mode == "discard",
-            expired=expired,
-            redacted_fields=[] if discarded else fields,
-            run_id=request.run_id,
-            source=request.source,
-        )
-        self.store.put_capture(record)
-        self._expire_captures()
-        return record
-
-    def list_captures(self) -> list[ContextCapture]:
-        self._expire_captures()
-        return self.store.list_captures()
-
-    def get_capture(self, capture_id: str) -> ContextCapture:
-        self._expire_captures()
-        capture = self.store.get_capture(capture_id)
-        if capture is None:
-            raise KnowledgeError("Unknown context capture", code="capture_missing", status_code=404)
-        return capture
 
     def resolve_refs(
         self,
@@ -699,18 +648,4 @@ class KnowledgeService:
         leftovers = [item for item in versions if item.id not in seen]
         leftovers.sort(key=lambda item: (item.created_at, item.id))
         return ordered + leftovers
-
-    def _expire_captures(self) -> None:
-        now = datetime.now(timezone.utc)
-        for capture in self.store.list_captures():
-            if capture.expired or capture.expires_at is None:
-                continue
-            expires = datetime.fromisoformat(capture.expires_at)
-            if expires.tzinfo is None:
-                expires = expires.replace(tzinfo=timezone.utc)
-            if expires <= now:
-                expired = capture.model_copy(
-                    update={"expired": True, "content": None, "retained": False}
-                )
-                self.store.put_capture(expired)
 

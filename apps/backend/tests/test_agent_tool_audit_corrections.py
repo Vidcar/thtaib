@@ -422,9 +422,9 @@ class RetainedReaderTemplateTests(AuditHarnessTests):
             read = self._read(chat, seeded["path"])
             self.assertIn("read_tool_result", read["run"]["presented_tools"])
             self.assertIn("LATE_MARKER", str(read["diagnostic"]))
-            calls = [call.get("name") for request in read["diagnostic"].get("model_requests") or []
-                for message in request.get("messages") or [] for call in message.get("tool_calls") or []]
+            calls = [item.get("name") for item in read["run"]["tool_invocations"]]
             self.assertEqual(calls, ["read_tool_result"])
+            self.assertEqual(read["diagnostic"]["model_requests"], [])
 
     def test_browser_and_windows_templates_compile_the_reader(self) -> None:
         for template_id, codes in (
@@ -544,10 +544,9 @@ class RetainedReaderTemplateTests(AuditHarnessTests):
         off_chat = self._chat(agent_setup_id=off["id"])
         off_run = self._finish(off_chat, task="Tools are off.")
         self.assertEqual(off_run["presented_tools"], [])
-        off_calls = [call.get("name") for request in self.client.get(
-            f"/v1/agent-runs/{off_run['id']}", params={"view": "diagnostic"}).json().get("model_requests") or []
-            for message in request.get("messages") or [] for call in message.get("tool_calls") or []]
-        self.assertEqual(off_calls, [])
+        diagnostic = self.client.get(f"/v1/agent-runs/{off_run['id']}", params={"view": "diagnostic"}).json()
+        self.assertEqual(diagnostic["model_requests"], [])
+        self.assertEqual(off_run["tool_invocations"], [])
 
         owned = self._save("Owner", {"presented_tools": ["read_tool_result"]})
         owner_chat = self._chat(agent_setup_id=owned["id"])

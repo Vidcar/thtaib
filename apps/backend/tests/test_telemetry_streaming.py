@@ -128,8 +128,8 @@ class TelemetryStreamingTests(unittest.TestCase):
             self.assertTrue(count_calls)
             self.assertTrue(all(call["stream"] is False for call in count_calls))
             self.assertEqual(final["context_observation"]["counting_basis"], "native")
-            self.assertEqual(len(final["model_requests"]), 2,
-                "Native input counting must not create extra generation captures")
+            self.assertEqual(final["model_requests"], [],
+                "Native input counting must not store a model request")
             self.assertEqual(app.state.app_store.get_interaction(conversation_id)["snapshot"]["workbench"]["run"]["generation_observation"], final["generation_observation"])
         finally:
             for gate in (release_first, start_second, release_second):

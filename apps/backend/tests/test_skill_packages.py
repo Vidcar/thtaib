@@ -228,6 +228,7 @@ class SkillPackageTests(unittest.TestCase):
                 (self.package / 'references' / 'checklist.txt').write_text(expected)
                 changed = self.import_package(entry_id=imported['id'], base_version=imported['current_version_id'])
                 version = changed['current_version_id']
+            reset_received_prompts()
             start = self.client.post(f'/v1/chat/conversations/{chat["id"]}/start', json={'task': 'Read the skill resource', 'skill_version_refs': [version], 'presented_tools': ['read_file']})
             self.assertEqual(start.status_code, 200, start.text)
             finished = wait_for_chat(self.client, chat['id'])
@@ -235,11 +236,13 @@ class SkillPackageTests(unittest.TestCase):
             self.assertNotIn('model_requests', finished['current_run'])
             diagnostic = self.client.get(f'/v1/agent-runs/{finished["current_run_id"]}', params={'view': 'diagnostic'})
             self.assertEqual(diagnostic.status_code, 200, diagnostic.text)
-            self.assertIn(expected, str(diagnostic.json()['model_requests'][-1]['messages']))
+            self.assertEqual(diagnostic.json()['model_requests'], [])
+            self.assertIn(expected, '\n'.join(RECEIVED_PROMPTS))
             self.assertEqual(finished['thread_id'], chat['thread_id'])
         scratch = harness_scratch_root(self.app.state.manager.paths, chat['thread_id'])
         (scratch / 'conversation_history' / 'keep.txt').write_text('framework history')
         (scratch / 'large_tool_results' / 'keep.txt').write_text('framework offload')
+        reset_received_prompts()
         cleared = self.client.post(f'/v1/chat/conversations/{chat["id"]}/start', json={'task': 'Continue without skills', 'skill_version_refs': [], 'presented_tools': []})
         self.assertEqual(cleared.status_code, 200, cleared.text)
         finished = wait_for_chat(self.client, chat['id'])
@@ -251,7 +254,8 @@ class SkillPackageTests(unittest.TestCase):
         self.assertNotIn('model_requests', finished['current_run'])
         diagnostic = self.client.get(f'/v1/agent-runs/{finished["current_run_id"]}', params={'view': 'diagnostic'})
         self.assertEqual(diagnostic.status_code, 200, diagnostic.text)
-        self.assertNotIn(slug, diagnostic.json()['model_requests'][-1]['instructions'])
+        self.assertEqual(diagnostic.json()['model_requests'], [])
+        self.assertNotIn(slug, '\n'.join(RECEIVED_PROMPTS))
 
     def test_memory_version_changes_explicitly_on_next_turn_and_can_be_deselected(self):
         reset_received_prompts()

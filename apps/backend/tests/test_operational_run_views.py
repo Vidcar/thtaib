@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 import sqlite3
 import tempfile
-import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -27,7 +26,6 @@ from workbench_backend.inference.adapter import image_model_profile
 from workbench_backend.inference.capabilities import setup_fingerprint
 from workbench_backend.inference.schemas import Deployment, SettingsBag, SettingsBags
 from workbench_backend.inference.service import ModelManager
-from workbench_backend.knowledge.diagnostics import apply_capture_policy
 from workbench_backend.knowledge.schemas import ContextCaptureSettings
 from workbench_backend.knowledge.store import KnowledgeStore
 from workbench_backend.paths import WorkbenchPaths
@@ -54,17 +52,31 @@ class OperationalRunViewsTests(unittest.TestCase):
         ))
         with self.store._lock:
             self.saved = self.store._conn.execute("SELECT payload FROM runs WHERE id = ?", (self.run.id,)).fetchone()[0]
-            self.saved_diagnostics = self.store._diagnostic_rows_locked(self.run.id)
         self.assertNotIn("model_requests", json.loads(self.saved))
         self.assertLess(len(self.saved.encode()), 20 * 1024)
         self.assertGreaterEqual(len(self.run.model_requests), 50)
         self.assertGreaterEqual(len(json.dumps([capture.model_dump(mode="json") for capture in self.run.model_requests]).encode()), 10 * 1024 * 1024)
+        self.assertEqual(self._capture_count(self.run.id), 0)
+        self.assertEqual(self.store.get_run(self.run.id).model_requests, [])
+
+    def _capture_count(self, run_id: str | None = None) -> int:
+        with self.store._lock:
+            present = self.store._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'run_diagnostic_captures'"
+            ).fetchone()
+            if present is None:
+                return 0
+            if run_id is None:
+                row = self.store._conn.execute("SELECT COUNT(*) FROM run_diagnostic_captures").fetchone()
+            else:
+                row = self.store._conn.execute(
+                    "SELECT COUNT(*) FROM run_diagnostic_captures WHERE run_id = ?", (run_id,),
+                ).fetchone()
+        return int(row[0])
 
     def _reject_diagnostic_work(self):
         stack = []
         for target in (
-            "workbench_backend.state.store.apply_run_diagnostic_policy",
-            "workbench_backend.state.store.apply_capture_policy",
             "workbench_backend.agents.schemas.ModelRequestCapture.model_validate",
             "workbench_backend.agents.schemas.ModelRequestCapture.model_validate_json",
         ):
@@ -95,7 +107,7 @@ class OperationalRunViewsTests(unittest.TestCase):
             browser.browser_control = "user"
         with self.store._lock:
             after = self.store._conn.execute("SELECT payload FROM runs WHERE id = ?", (self.run.id,)).fetchone()[0]
-            self.assertEqual(self.store._diagnostic_rows_locked(self.run.id), self.saved_diagnostics)
+            self.assertEqual(self._capture_count(self.run.id), 0)
         self.assertEqual(after, self.saved)
 
     def test_projection_cannot_be_persisted_as_a_complete_run(self) -> None:
@@ -108,7 +120,7 @@ class OperationalRunViewsTests(unittest.TestCase):
                 self.store.put_execution_run(view)
         with self.store._lock:
             after = self.store._conn.execute("SELECT payload FROM runs WHERE id = ?", (self.run.id,)).fetchone()[0]
-            self.assertEqual(self.store._diagnostic_rows_locked(self.run.id), self.saved_diagnostics)
+            self.assertEqual(self._capture_count(self.run.id), 0)
         self.assertEqual(after, self.saved)
 
     def test_browser_projection_preserves_exact_verified_screenshot_capability(self) -> None:
@@ -139,101 +151,61 @@ class OperationalRunViewsTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             projected_bag.applied = {}
 
-    def test_execution_updates_preserve_diagnostic_expiry_and_append_only_new_captures(self) -> None:
-        knowledge = KnowledgeStore(self.paths)
-        settings = ContextCaptureSettings(retention_seconds=0)
-        knowledge.write_config(knowledge.read_config().model_copy(update={"context_captures": settings}))
-        normalized = self.store.normalize_run_diagnostics(self.run.id)
-        self.assertTrue(all(item.expired and item.instructions is None for item in normalized))
+    def test_execution_updates_do_not_store_request_bodies(self) -> None:
         self.run.status = type(self.run.status).completed
         self.run.events.append(AgentEvent(at=utc_now(), kind="assistant_message", detail={"content": "Finished"}))
-        self.run.model_requests.append(apply_capture_policy(ModelRequestCapture(at=utc_now(), instructions="new synthetic capture"), settings))
-        with patch("workbench_backend.state.store.apply_capture_policy", side_effect=AssertionError("Execution rewrote old diagnostic bodies")):
-            self.store.put_execution_run(self.run)
+        self.run.model_requests.append(ModelRequestCapture(at=utc_now(), instructions="new synthetic capture"))
+        remembered = len(self.run.model_requests)
+        self.store.put_execution_run(self.run)
         persisted = self.store.get_execution_run(self.run.id)
         self.assertEqual(persisted.status, "completed")
-        self.assertEqual(len(persisted.model_requests), 51)
-        self.assertTrue(all(item.expired and item.instructions is None for item in persisted.model_requests))
+        self.assertEqual(persisted.model_requests, [])
+        self.assertTrue(any(event.kind == "assistant_message" for event in persisted.events))
+        self.assertEqual(len(self.run.model_requests), remembered)
         self.run.model_requests = []
         self.store.put_execution_run(self.run)
-        self.assertEqual(len(self.store.get_execution_run(self.run.id).model_requests), 51)
+        self.assertEqual(self.store.get_execution_run(self.run.id).model_requests, [])
+        self.assertEqual(self._capture_count(self.run.id), 0)
 
-    def test_diagnostic_cas_serializes_only_one_changed_capture_among_large_history(self) -> None:
-        changed_index = 7
-        marker = "Altered synthetic capture"
+    def test_normalize_does_not_read_a_leftover_request_body(self) -> None:
         synthetic_secret = "wb_synthetic_changed_credential_1234"
         with self.store._lock:
             self.store._conn.execute(
-                "UPDATE run_diagnostic_captures SET payload = json_set(payload, '$.instructions', ?) WHERE run_id = ? AND position = ?",
-                (f"{marker}: API_KEY={synthetic_secret}", self.run.id, changed_index),
+                """
+                CREATE TABLE run_diagnostic_captures (
+                    run_id TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    payload TEXT NOT NULL,
+                    PRIMARY KEY (run_id, position)
+                )
+                """
             )
-            self.store._conn.commit()
-            before = [json.loads(payload) for _, payload in self.store._diagnostic_rows_locked(self.run.id)]
-        dump = ModelRequestCapture.model_dump
-        serialize = ModelRequestCapture.model_dump_json
-        serialized = []
-
-        def require_changed(capture):
-            self.assertTrue((capture.instructions or "").startswith(marker), "Persistence serialized an unchanged diagnostic capture")
-
-        def guarded_dump(capture, *args, **kwargs):
-            # Content fingerprinting must inspect every current capture to
-            # detect nested edits. Persistence may copy only changed entries.
-            if kwargs.get("exclude") != {"privacy_fingerprint"}:
-                require_changed(capture)
-            return dump(capture, *args, **kwargs)
-
-        def guarded_serialize(capture, *args, **kwargs):
-            require_changed(capture)
-            serialized.append(capture)
-            return serialize(capture, *args, **kwargs)
-
-        with patch.object(ModelRequestCapture, "model_dump", guarded_dump), patch.object(ModelRequestCapture, "model_dump_json", guarded_serialize):
-            result = self.store.normalize_run_diagnostics(self.run.id)
-        self.assertEqual(len(serialized), 1)
-        self.assertEqual(len(result), 50)
-        self.assertNotIn(synthetic_secret, result[changed_index].instructions)
-        with self.store._lock:
-            after = [json.loads(payload) for _, payload in self.store._diagnostic_rows_locked(self.run.id)]
-        for index in range(50):
-            if index != changed_index:
-                self.assertEqual(after[index], before[index])
-        self.assertNotEqual(after[changed_index]["privacy_fingerprint"], before[changed_index]["privacy_fingerprint"])
-        self.assertNotIn(synthetic_secret, json.dumps(after[changed_index]))
-
-    def test_failed_diagnostic_batch_rolls_back_all_changed_indices_before_retry(self) -> None:
-        knowledge = KnowledgeStore(self.paths)
-        settings = ContextCaptureSettings(redaction_mode="discard")
-        knowledge.write_config(knowledge.read_config().model_copy(update={"context_captures": settings}))
-        with self.store._lock:
-            # Batch 1 changes indices 0..24. Reject batch 2 only after that
-            # first actual SQLite update, rather than failing before mutation.
             self.store._conn.execute(
-                """CREATE TRIGGER reject_second_diagnostic_batch BEFORE UPDATE OF payload ON run_diagnostic_captures
-                WHEN NEW.run_id = 'run_large' AND NEW.position = 25 AND json_extract(NEW.payload, '$.discarded') = 1
-                BEGIN SELECT RAISE(ABORT, 'Synthetic second diagnostic batch failure'); END"""
+                "INSERT INTO run_diagnostic_captures (run_id, position, payload) VALUES (?, 0, ?)",
+                (self.run.id, json.dumps({"instructions": f"API_KEY={synthetic_secret}"})),
             )
             self.store._conn.commit()
-        try:
-            with self.assertRaisesRegex(sqlite3.IntegrityError, "Synthetic second diagnostic batch failure"):
-                self.store.normalize_run_diagnostics(self.run.id)
-            self.assertFalse(self.store._conn.in_transaction)
-            self.store.put_execution_run(synthetic_large_run("unrelated_diagnostic_write", model_requests=[]))
-            with self.store._lock:
-                after = self.store._conn.execute("SELECT payload FROM runs WHERE id = ?", (self.run.id,)).fetchone()[0]
-                self.assertEqual(self.store._diagnostic_rows_locked(self.run.id), self.saved_diagnostics)
-            self.assertEqual(after, self.saved)
-        finally:
-            with self.store._lock:
-                self.store._conn.execute("DROP TRIGGER reject_second_diagnostic_batch")
-                self.store._conn.commit()
+        with patch.object(ModelRequestCapture, "model_validate_json", side_effect=AssertionError("decoded a stored request")):
+            result = self.store.normalize_run_diagnostics(self.run.id)
+        self.assertEqual(result, [])
+        self.assertNotIn(synthetic_secret, self.store.get_run(self.run.id).model_dump_json())
+        self.assertNotIn(synthetic_secret, self.store.get_execution_run(self.run.id).model_dump_json())
+        with self.store._lock:
+            payload = self.store._conn.execute("SELECT payload FROM runs WHERE id = ?", (self.run.id,)).fetchone()[0]
+        self.assertEqual(payload, self.saved)
+        self.assertNotIn(synthetic_secret, payload)
+
+    def test_normalize_does_not_rewrite_the_run(self) -> None:
         result = self.store.normalize_run_diagnostics(self.run.id)
-        self.assertEqual(len(result), 50)
-        self.assertTrue(all(capture.discarded and capture.instructions is None for capture in result))
+        self.assertEqual(result, [])
+        self.store.put_execution_run(synthetic_large_run("unrelated_diagnostic_write", model_requests=[]))
+        with self.store._lock:
+            after = self.store._conn.execute("SELECT payload FROM runs WHERE id = ?", (self.run.id,)).fetchone()[0]
+        self.assertEqual(after, self.saved)
+        self.assertEqual(self._capture_count(), 0)
         persisted = self.store.get_execution_run(self.run.id)
         self.assertEqual(persisted.status, "running")
-        self.assertEqual(len(persisted.model_requests), 50)
-        self.assertTrue(all(capture.discarded for capture in persisted.model_requests))
+        self.assertEqual(persisted.model_requests, [])
         self.assertEqual(set(persisted.checkpoint_ids), {"checkpoint_a", "checkpoint_b"})
 
     def test_failed_execution_write_rolls_back_capture_batches_linkage_and_chat_before_retry(self) -> None:
@@ -254,7 +226,6 @@ class OperationalRunViewsTests(unittest.TestCase):
                 observer.execute("SELECT checkpoint_id FROM run_checkpoints WHERE run_id = ? ORDER BY checkpoint_id", (self.run.id,)).fetchall(),
                 observer.execute("SELECT path, kind FROM run_files WHERE run_id = ? ORDER BY path", (self.run.id,)).fetchall(),
                 observer.execute("SELECT payload FROM conversations WHERE id = ?", (conversation.id,)).fetchone(),
-                observer.execute("SELECT position, payload FROM run_diagnostic_captures WHERE run_id = ? ORDER BY position", (self.run.id,)).fetchall(),
             )
 
         before = snapshot()
@@ -263,100 +234,45 @@ class OperationalRunViewsTests(unittest.TestCase):
         self.run.checkpoint_ids = ["checkpoint_retry"]
         self.run.related_files = [RelatedFile(path="synthetic-output.txt", kind="written_file")]
         self.run.model_requests.extend(
-            apply_capture_policy(ModelRequestCapture(at=utc_now(), instructions=f"New synthetic capture {index}"), ContextCaptureSettings())
-            for index in range(26)
+            ModelRequestCapture(at=utc_now(), instructions=f"New synthetic capture {index}") for index in range(26)
         )
-        serialize = ModelRequestCapture.model_dump_json
-        serialized = 0
-
-        def fail_second_batch(capture, *args, **kwargs):
-            nonlocal serialized
-            serialized += 1
-            if serialized == 26:
-                raise MemoryError("Synthetic second capture batch failure")
-            return serialize(capture, *args, **kwargs)
-
+        remembered = len(self.run.model_requests)
         reconcile = self.store._reconcile_chat_completion_locked
 
         def fail_after_chat_update(run):
             reconcile(run)
             raise MemoryError("Synthetic failure after Chat completion update")
 
-        faults = (
-            ("capture_batch", patch.object(ModelRequestCapture, "model_dump_json", fail_second_batch)),
-            ("chat_update", patch.object(self.store, "_reconcile_chat_completion_locked", fail_after_chat_update)),
-        )
-        for stage, fault in faults:
-            with self.subTest(stage=stage):
-                with fault, self.assertRaises(MemoryError):
-                    self.store.put_execution_run(self.run)
-                self.assertFalse(self.store._conn.in_transaction)
-                self.assertEqual(snapshot(), before)
-                # An unrelated successful commit must not publish the failed
-                # run's partial capture tail, linkage or assistant message.
-                self.store.put_execution_run(synthetic_large_run(
-                    f"unrelated_{stage}", thread_id=f"thread_{stage}", model_requests=[],
-                ))
-                self.assertEqual(snapshot(), before)
+        with patch.object(self.store, "_reconcile_chat_completion_locked", fail_after_chat_update), self.assertRaises(MemoryError):
+            self.store.put_execution_run(self.run)
+        self.assertFalse(self.store._conn.in_transaction)
+        self.assertEqual(snapshot(), before)
+        self.store.put_execution_run(synthetic_large_run(
+            "unrelated_chat_update", thread_id="thread_chat_update", model_requests=[],
+        ))
+        self.assertEqual(snapshot(), before)
 
         self.store.put_execution_run(self.run)
         self.store.put_execution_run(self.run)
         persisted = self.store.get_execution_run(self.run.id)
         self.assertEqual(persisted.status, "completed")
-        self.assertEqual(len(persisted.model_requests), 76)
+        self.assertEqual(persisted.model_requests, [])
+        self.assertEqual(len(self.run.model_requests), remembered)
         self.assertEqual(persisted.checkpoint_ids, ["checkpoint_retry"])
         self.assertEqual(persisted.related_files, self.run.related_files)
-        self.assertEqual(
-            [capture.model_dump() for capture in persisted.model_requests[:50]],
-            [capture.model_dump() for capture in self.run.model_requests[:50]],
-        )
+        self.assertEqual(self._capture_count(self.run.id), 0)
         transcript = json.loads(snapshot()[3][0])["transcript"]
         self.assertEqual([item["content"] for item in transcript if item["role"] == "assistant"], ["Finished"])
 
-    def test_diagnostic_cas_keeps_concurrent_operational_and_capture_updates(self) -> None:
-        knowledge = KnowledgeStore(self.paths)
-        settings = ContextCaptureSettings(redaction_mode="discard")
-        knowledge.write_config(knowledge.read_config().model_copy(update={"context_captures": settings}))
-        entered, release = threading.Event(), threading.Event()
-        self.addCleanup(release.set)
-        result, failures = [], []
-        first = True
-
-        def gated(capture, config):
-            nonlocal first
-            if first:
-                first = False
-                entered.set()
-                if not release.wait(5):
-                    raise AssertionError("Diagnostic fixture was not released")
-            return apply_capture_policy(capture, config)
-
-        def inspect():
-            try:
-                result.append(self.store.normalize_run_diagnostics(self.run.id))
-            except BaseException as exc:
-                failures.append(exc)
-
-        with patch("workbench_backend.state.store.apply_capture_policy", side_effect=gated):
-            worker = threading.Thread(target=inspect)
-            worker.start()
-            try:
-                self.assertTrue(entered.wait(5))
-                # This completes while expensive inspection is blocked, proving
-                # the store lock is free and the eventual CAS cannot lose work.
-                self.run.status = type(self.run.status).cancel_requested
-                self.run.model_requests.append(apply_capture_policy(ModelRequestCapture(at=utc_now(), instructions="new fixture"), settings))
-                self.store.put_execution_run(self.run)
-            finally:
-                release.set()
-                worker.join(10)
-            self.assertFalse(worker.is_alive())
-        self.assertFalse(failures)
-        self.assertEqual(len(result[0]), 51)
+    def test_execution_status_survives_without_a_stored_request_body(self) -> None:
+        self.run.status = type(self.run.status).cancel_requested
+        self.run.model_requests.append(ModelRequestCapture(at=utc_now(), instructions="new fixture"))
+        self.store.put_execution_run(self.run)
+        self.assertEqual(self.store.normalize_run_diagnostics(self.run.id), [])
         persisted = self.store.get_execution_run(self.run.id)
         self.assertEqual(persisted.status, "cancel_requested")
-        self.assertEqual(len(persisted.model_requests), 51)
-        self.assertTrue(all(capture.discarded for capture in persisted.model_requests))
+        self.assertEqual(persisted.model_requests, [])
+        self.assertEqual(self._capture_count(self.run.id), 0)
 
     def test_actual_operational_api_attention_and_work_use_capture_free_store(self) -> None:
         self._reject_diagnostic_work()
@@ -436,46 +352,19 @@ class OperationalRunViewsTests(unittest.TestCase):
                 "SELECT COUNT(*) FROM runs WHERE id = ?", (self.run.id,),
             ).fetchone()[0]
         self.assertEqual(remaining, 0)
-        with self.store._lock:
-            self.assertEqual(self.store._diagnostic_rows_locked(self.run.id), [])
+        self.assertEqual(self._capture_count(self.run.id), 0)
 
-    def test_diagnostic_processing_rechecks_settings_changed_during_inspection(self) -> None:
+    def test_redaction_setting_does_not_create_a_stored_request_policy(self) -> None:
         knowledge = KnowledgeStore(self.paths)
-        entered, release = threading.Event(), threading.Event()
-        self.addCleanup(release.set)
-        result, failures = [], []
-        first = True
-
-        def gated(capture, config):
-            nonlocal first
-            if first:
-                first = False
-                entered.set()
-                if not release.wait(5):
-                    raise AssertionError("Diagnostic fixture was not released")
-            return apply_capture_policy(capture, config)
-
-        def inspect():
-            try:
-                result.append(self.store.normalize_run_diagnostics(self.run.id))
-            except BaseException as exc:
-                failures.append(exc)
-
-        with patch("workbench_backend.state.store.apply_capture_policy", side_effect=gated):
-            worker = threading.Thread(target=inspect)
-            worker.start()
-            try:
-                self.assertTrue(entered.wait(5))
-                settings = ContextCaptureSettings(redaction_mode="discard")
-                knowledge.write_config(knowledge.read_config().model_copy(update={"context_captures": settings}))
-            finally:
-                release.set()
-                worker.join(10)
-            self.assertFalse(worker.is_alive())
-        self.assertFalse(failures)
-        self.assertTrue(all(item.discarded and item.instructions is None for item in result[0]))
-        persisted = self.store.get_execution_run(self.run.id)
-        self.assertTrue(all(item.discarded and item.instructions is None for item in persisted.model_requests))
+        knowledge.write_config(knowledge.read_config().model_copy(update={
+            "context_captures": ContextCaptureSettings(redaction_mode="discard", retention_seconds=0),
+        }))
+        stored = knowledge.read_config().context_captures
+        self.assertEqual(stored.redaction_mode, "redact_secrets")
+        self.assertIsNone(stored.retention_seconds)
+        self.assertEqual(self.store.normalize_run_diagnostics(self.run.id), [])
+        self.assertEqual(self.store.get_execution_run(self.run.id).model_requests, [])
+        self.assertEqual(self._capture_count(self.run.id), 0)
 
 
 if __name__ == "__main__":

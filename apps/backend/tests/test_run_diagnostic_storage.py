@@ -1,4 +1,4 @@
-"""Capture storage migration and writes keep substantial history off hot paths."""
+"""Stored model-request copies are discarded. Runs and chats stay."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from workbench_backend.agents.schemas import ModelRequestCapture
+from workbench_backend.chat.schemas import ChatConversation
 from workbench_backend.paths import WorkbenchPaths
 from workbench_backend.state.store import ApplicationStore, SCHEMA_VERSION
 
@@ -31,11 +32,35 @@ class DiagnosticStorageTests(unittest.TestCase):
         store = ApplicationStore(self.paths)
         try:
             store.put_execution_run(run)
+            store.put_conversation(ChatConversation(
+                id="scratch-chat",
+                deployment_id=run.deployment_id,
+                created_at="2026-01-01T00:00:00Z",
+                updated_at="2026-01-01T00:00:00Z",
+            ))
+            with store._lock:
+                self.kept_tables = {
+                    str(row[0])
+                    for row in store._conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+                }
         finally:
             close_workbench_sqlite(store)
         conn = sqlite3.connect(self.paths.application_db)
         try:
-            conn.execute("DROP TABLE run_diagnostic_captures")
+            conn.execute(
+                """
+                CREATE TABLE run_diagnostic_captures (
+                    run_id TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    payload TEXT NOT NULL,
+                    PRIMARY KEY (run_id, position)
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO run_diagnostic_captures (run_id, position, payload) VALUES (?, 0, ?)",
+                (run.id, json.dumps({"instructions": "API_KEY=wb_synthetic_legacy_credential_1234"})),
+            )
             conn.execute("UPDATE runs SET payload = ? WHERE id = ?", (payload, run.id))
             conn.execute("UPDATE schema_meta SET value = '2' WHERE key = 'schema_version'")
             conn.commit()
@@ -43,39 +68,31 @@ class DiagnosticStorageTests(unittest.TestCase):
             conn.close()
         return run, payload
 
-    def test_large_legacy_history_migrates_once_without_python_inspection(self) -> None:
+    def test_legacy_request_bodies_are_discarded_without_being_read(self) -> None:
         legacy, _payload = self._legacy_store()
-        with patch("workbench_backend.state.store.apply_capture_policy", side_effect=AssertionError("Migration redacted diagnostic content")), \
-             patch("workbench_backend.state.store.apply_run_diagnostic_policy", side_effect=AssertionError("Migration normalized a full run")), \
-             patch.object(ModelRequestCapture, "model_validate_json", side_effect=AssertionError("Migration decoded diagnostic history")):
+        with patch.object(ModelRequestCapture, "model_validate_json", side_effect=AssertionError("Migration decoded diagnostic history")):
             store = ApplicationStore(self.paths)
             self.addCleanup(close_workbench_sqlite, store)
             with store._lock:
                 payload = store._conn.execute("SELECT payload FROM runs WHERE id = ?", (legacy.id,)).fetchone()[0]
-                saved = store._diagnostic_rows_locked(legacy.id)
+                table = store._conn.execute("SELECT name FROM sqlite_master WHERE name = 'run_diagnostic_captures'").fetchone()
                 version = store._conn.execute("SELECT value FROM schema_meta WHERE key = 'schema_version'").fetchone()[0]
+                chat = store._conn.execute("SELECT payload FROM conversations WHERE id = 'scratch-chat'").fetchone()[0]
+                names = {str(row[0]) for row in store._conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()}
             self.assertEqual(version, SCHEMA_VERSION)
             self.assertNotIn("model_requests", json.loads(payload))
-            self.assertLess(len(payload.encode()), 20 * 1024)
-            self.assertEqual([position for position, _ in saved], list(range(50)))
-            self.assertEqual([json.loads(value) for _, value in saved], [capture.model_dump(mode="json") for capture in legacy.model_requests])
+            self.assertNotIn("wb_synthetic_legacy_credential_1234", payload)
+            self.assertIsNone(table)
+            self.assertIn("scratch-chat", chat)
+            self.assertEqual(names, self.kept_tables)
+            self.assertIsNotNone(store.get_run_operational(legacy.id))
             self.assertNotIn("model_requests", store.get_run_operational(legacy.id).model_dump())
-        close_workbench_sqlite(store)
-        with patch.object(ApplicationStore, "_migrate_run_diagnostics", side_effect=AssertionError("Capture migration repeated")):
-            reopened = ApplicationStore(self.paths)
-            self.addCleanup(close_workbench_sqlite, reopened)
-        execution = reopened.get_execution_run(legacy.id)
-        self.assertEqual(len(execution.model_requests), 50)
-        self.assertIn("wb_synthetic_legacy_credential_1234", execution.model_requests[7].instructions)
-        diagnostic = reopened.get_run(legacy.id)
-        self.assertNotIn("wb_synthetic_legacy_credential_1234", diagnostic.model_requests[7].instructions)
-        with reopened._lock:
-            # Run deletion cascades all diagnostic rows in this same database.
-            reopened._conn.execute("DELETE FROM runs WHERE id = ?", (legacy.id,))
-            reopened._conn.commit()
-            self.assertEqual(reopened._diagnostic_rows_locked(legacy.id), [])
+        execution = store.get_execution_run(legacy.id)
+        self.assertEqual(execution.model_requests, [])
+        self.assertEqual(store.get_run(legacy.id).model_requests, [])
+        self.assertEqual(execution.id, legacy.id)
 
-    def test_failed_legacy_migration_rolls_back_captures_payload_and_version(self) -> None:
+    def test_failed_legacy_cutover_rolls_back_without_a_readable_copy(self) -> None:
         legacy, payload = self._legacy_store()
         conn = sqlite3.connect(self.paths.application_db)
         try:
@@ -89,46 +106,53 @@ class DiagnosticStorageTests(unittest.TestCase):
                 ApplicationStore(self.paths)
             self.assertEqual(conn.execute("SELECT value FROM schema_meta WHERE key = 'schema_version'").fetchone()[0], "2")
             self.assertEqual(conn.execute("SELECT payload FROM runs WHERE id = ?", (legacy.id,)).fetchone()[0], payload)
-            self.assertIsNone(conn.execute("SELECT name FROM sqlite_master WHERE name = 'run_diagnostic_captures'").fetchone())
+            self.assertIsNotNone(conn.execute("SELECT name FROM sqlite_master WHERE name = 'run_diagnostic_captures'").fetchone())
+            self.assertIn("scratch-chat", conn.execute("SELECT payload FROM conversations WHERE id = 'scratch-chat'").fetchone()[0])
             conn.execute("DROP TRIGGER reject_capture_cutover")
             conn.commit()
         finally:
             conn.close()
         migrated = ApplicationStore(self.paths)
         self.addCleanup(close_workbench_sqlite, migrated)
-        self.assertEqual(len(migrated.get_execution_run(legacy.id).model_requests), 50)
+        restored = migrated.get_execution_run(legacy.id)
+        self.assertEqual(restored.model_requests, [])
+        self.assertEqual(restored.id, legacy.id)
+        with migrated._lock:
+            table = migrated._conn.execute("SELECT name FROM sqlite_master WHERE name = 'run_diagnostic_captures'").fetchone()
+            chat = migrated._conn.execute("SELECT payload FROM conversations WHERE id = 'scratch-chat'").fetchone()[0]
+            names = {str(row[0]) for row in migrated._conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()}
+        self.assertIsNone(table)
+        self.assertIn("scratch-chat", chat)
+        self.assertEqual(names, self.kept_tables)
 
-    def test_operational_updates_never_read_copy_or_write_saved_capture_bodies(self) -> None:
+    def test_run_writes_do_not_store_request_bodies(self) -> None:
         store = ApplicationStore(self.paths)
         self.addCleanup(close_workbench_sqlite, store)
         run = store.put_run(synthetic_large_run())
+        self.assertGreaterEqual(len(run.model_requests), 50)
         with store._lock:
-            diagnostics = store._diagnostic_rows_locked(run.id)
-            self.assertGreater(sum(len(payload.encode()) for _, payload in diagnostics), 10 * 1024 * 1024)
+            table = store._conn.execute("SELECT name FROM sqlite_master WHERE name = 'run_diagnostic_captures'").fetchone()
+            payload = store._conn.execute("SELECT payload FROM runs WHERE id = ?", (run.id,)).fetchone()[0]
+        self.assertIsNone(table)
+        self.assertNotIn("model_requests", json.loads(payload))
+        self.assertLess(len(payload.encode()), 20 * 1024)
         statements = []
         store._conn.set_trace_callback(statements.append)
         try:
-            with patch.object(ModelRequestCapture, "model_dump_json", side_effect=AssertionError("Operational update serialized saved diagnostics")), \
-                 patch("workbench_backend.state.store.apply_capture_policy", side_effect=AssertionError("Operational update inspected saved diagnostics")):
-                run.model_requests = []  # A shortened execution cache cannot erase saved history.
-                for index in range(5):
-                    run.task = f"Small operational update {index}"
-                    store.put_execution_run(run)
-                    store.get_run_browser(run.id)
-                    store.list_run_attention({"running"})
-                    store.get_run_lifecycle(run.id, details=False)
-                    store.get_run_operational(run.id)
+            for index in range(5):
+                run.task = f"Small operational update {index}"
+                store.put_execution_run(run)
+                store.get_run_browser(run.id)
+                store.list_run_attention({"running"})
+                store.get_run_lifecycle(run.id, details=False)
+                store.get_run_operational(run.id)
         finally:
             store._conn.set_trace_callback(None)
-        capture_statements = [sql for sql in statements if "run_diagnostic_captures" in sql]
-        self.assertEqual(len(capture_statements), 5)
-        self.assertTrue(all("SELECT COALESCE(MAX(position) + 1, 0)" in sql for sql in capture_statements))
-        with store._lock:
-            payload = store._conn.execute("SELECT payload FROM runs WHERE id = ?", (run.id,)).fetchone()[0]
-            self.assertEqual(store._diagnostic_rows_locked(run.id), diagnostics)
-        self.assertLess(len(payload.encode()), 20 * 1024)
-        self.assertNotIn("model_requests", json.loads(payload))
-        self.assertEqual(len(store.get_run(run.id).model_requests), 50)
+        touched = [sql for sql in statements if "run_diagnostic_captures" in sql]
+        self.assertEqual(touched, [])
+        self.assertEqual(store.get_run(run.id).model_requests, [])
+        self.assertEqual(store.get_execution_run(run.id).model_requests, [])
+        self.assertEqual(len(run.model_requests), 50)
 
 
 if __name__ == "__main__":

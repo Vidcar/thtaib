@@ -146,10 +146,8 @@ export async function checkKnowledgeSavedActions(Component) {
     await change(renderer.root, "Content", "textarea", "Unsaved fact"); await click(renderer.root, "Discard edits and reload");
     assert.equal(field(renderer.root, "Content", "textarea").props.value, "Original fact");
     await click(renderer.root, "Reject"); assert.equal(proposals[0].status, "rejected");
-    await settle(() => segmented(renderer.root, "Redaction", "discard").props.onChange()); await click(renderer.root, "Save setting");
-    await change(renderer.root, "Text to capture", "textarea", "Fixture request text"); await click(renderer.root, "Capture");
-    assert.deepEqual(calls.find(call => call.path.endsWith("/captures")).body, { content: "Fixture request text", source: "desktop" });
-    assert.match(text(renderer.root), /Capture discarded by the current setting/);
+    assert.equal(renderer.root.findAll(node => node.props?.label === "Redaction").length, 0);
+    assert.equal(calls.some(call => String(call.path).includes("/captures")), false, "knowledge editing does not paste a request capture");
     await settle(() => renderer.root.findAllByType("button").find(item => text(item).startsWith("Skills ")).props.onClick());
     let importForm = renderer.root.findByType("form");
     await change(importForm, "Package path", "input", "D:/isolated-skill/SKILL.md");

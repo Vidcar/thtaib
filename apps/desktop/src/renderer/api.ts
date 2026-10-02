@@ -5,7 +5,6 @@ import type {
   BundleConfigurationOptions,
   ChatConversation,
   ChatMessage,
-  ContextCapture,
   Deployment,
   DeletePreview,
   DeploymentProfileChanges,
@@ -21,7 +20,6 @@ import type {
   ModelStorageSummary,
   PathsInfo,
   PresentationSettings,
-  RedactionMode,
   RunProfile,
   ResponseRecipeOrigin,
   RuntimeManifest,
@@ -288,7 +286,6 @@ export const api = {
       }),
     }),
   agentRun: (id: string) => request<AgentRunOperational>(`/v1/agent-runs/${id}?view=operational`),
-  agentRunInputs: (id: string) => request<AgentRun>(`/v1/agent-runs/${id}?view=diagnostic`),
   cancelAgentRun: (id: string) => request<AgentRun>(`/v1/agent-runs/${id}/cancel`, { method: "POST" }),
   decideAgentRunInterrupt: (id: string, type: "approve" | "reject") =>
     request<AgentRun>(`/v1/agent-runs/${id}/interrupt-decision`, {
@@ -358,7 +355,6 @@ export const api = {
     }),
   knowledgeConfig: () => request<KnowledgeConfig>("/v1/knowledge/config"),
   updateKnowledgeConfig: (payload: {
-    context_captures?: { retention_seconds?: number | null; redaction_mode?: RedactionMode };
     scope_policies?: Partial<Record<KnowledgeScope, { automatic_agent_writes: boolean }>>;
   }) =>
     request<KnowledgeConfig>("/v1/knowledge/config", {
@@ -389,9 +385,4 @@ export const api = {
     }),
   knowledgeVersions: (id: string) => request<KnowledgeVersion[]>(`/v1/knowledge/entries/${id}/versions`),
   knowledgeVersion: (id: string) => request<KnowledgeVersion>(`/v1/knowledge/versions/${id}`),
-  createContextCapture: (content: string) =>
-    request<ContextCapture>("/v1/knowledge/captures", {
-      method: "POST",
-      body: JSON.stringify({ content, source: "desktop" }),
-    }),
 };

@@ -5,7 +5,6 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 
 from workbench_backend.knowledge.schemas import (
-    ContextCaptureRequest,
     KnowledgeConfigUpdateRequest,
     KnowledgeCreateRequest,
     KnowledgeEditRequest,
@@ -130,18 +129,3 @@ def proposals(request: Request, run_id: str | None = None):
 @router.post("/proposals/{proposal_id}/review", response_model=KnowledgeProposal)
 def review_proposal(request: Request, proposal_id: str, body: KnowledgeProposalReview):
     return get_knowledge(request).review_proposal(proposal_id, body.decision)
-
-
-@router.post("/captures")
-def create_capture(request: Request, body: ContextCaptureRequest) -> object:
-    return get_knowledge(request).capture(body)
-
-
-@router.get("/captures")
-def list_captures(request: Request) -> object:
-    return get_knowledge(request).list_captures()
-
-
-@router.get("/captures/{capture_id}")
-def get_capture(request: Request, capture_id: str) -> object:
-    return get_knowledge(request).get_capture(capture_id)

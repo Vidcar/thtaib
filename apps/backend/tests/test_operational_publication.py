@@ -30,8 +30,6 @@ def forbid_diagnostic_processing():
         for target in (
             "workbench_backend.knowledge.diagnostics.apply_run_diagnostic_policy",
             "workbench_backend.knowledge.diagnostics.redact_structured",
-            "workbench_backend.state.store.apply_run_diagnostic_policy",
-            "workbench_backend.state.store.apply_capture_policy",
         ):
             stack.enter_context(patch(target, side_effect=AssertionError("operational observation enforced diagnostic policy")))
         yield
@@ -126,10 +124,13 @@ class OperationalPublicationTests(unittest.TestCase):
 
     def test_cold_archived_registration_and_state_never_hydrate_diagnostics(self):
         archived = synthetic_large_run(id="cold_archived", status="completed", thread_id="cold_graph")
+        self.assertGreaterEqual(len(archived.model_requests), 50)
         self.store.put_run(archived)
-        rows = self.store._diagnostic_rows_locked(archived.id)
-        self.assertEqual(len(rows), 50)
-        self.assertGreater(sum(len(payload.encode("utf-8")) for _, payload in rows), 10 * 1024 * 1024)
+        with self.store._lock:
+            stored = self.store._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'run_diagnostic_captures'"
+            ).fetchone()
+        self.assertIsNone(stored)
         self.harness._runs.clear()
         with forbid_diagnostic_processing(), \
                 patch.object(self.store, "get_execution_run", side_effect=AssertionError("observation hydrated captures")), \
@@ -149,7 +150,11 @@ class OperationalPublicationTests(unittest.TestCase):
             self.assertEqual(state["values"]["workbench"]["run"]["status"], "completed")
             self.assert_capture_free(state["values"]["workbench"]["run"])
             self.assertEqual(self.harness._runs, {}, "observation must not create an execution owner")
-        self.assertEqual(self.store._diagnostic_rows_locked(archived.id), rows)
+        with self.store._lock:
+            remaining = self.store._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'run_diagnostic_captures'"
+            ).fetchone()
+        self.assertIsNone(remaining)
 
     def test_run_read_lock_keeps_missing_run_error_without_hydration(self):
         with patch.object(self.store, "get_execution_run", side_effect=AssertionError("observation hydrated captures")):

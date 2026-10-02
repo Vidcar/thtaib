@@ -108,7 +108,7 @@ class RetrievalHarnessTests(unittest.TestCase):
         body = wait_for_run(self.client, started.json()["id"])
         self.assertNotIn(SEARCH_KNOWLEDGE_TOOL_NAME, body["presented_tools"])
         self.assertIn("no retrieval", " ".join(body["effective_setup"]["gaps"]))
-        self.assertEqual(body["model_requests"][0]["retrieved_material"], [])
+        self.assertEqual(body["model_requests"], [])
 
     def test_missing_embedding_deployment_fails_closed(self) -> None:
         memory = self._knowledge()
@@ -203,8 +203,7 @@ class RetrievalHarnessTests(unittest.TestCase):
         names = [item["name"] for item in body["tool_invocations"]]
         self.assertIn(SEARCH_KNOWLEDGE_TOOL_NAME, names)
         self.assertTrue(body["retrieved_material"])
-        captures = [item["retrieved_material"] for item in body["model_requests"]]
-        self.assertTrue(any(item for item in captures))
+        self.assertEqual(body["model_requests"], [])
         thread_id = body["thread_id"]
         scratch = harness_scratch_root(self.manager.paths, thread_id)
         retrieved_files = list((scratch / "retrieved").rglob("chunk_*.md"))

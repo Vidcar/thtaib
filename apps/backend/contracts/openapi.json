@@ -7038,41 +7038,6 @@
         "title": "ConnectionWrite",
         "type": "object"
       },
-      "ContextCaptureRequest": {
-        "properties": {
-          "content": {
-            "title": "Content",
-            "type": "string"
-          },
-          "run_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Run Id"
-          },
-          "source": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Source"
-          }
-        },
-        "required": [
-          "content"
-        ],
-        "title": "ContextCaptureRequest",
-        "type": "object"
-      },
       "ContextCaptureSettings": {
         "properties": {
           "redaction_mode": {
@@ -10268,16 +10233,6 @@
       },
       "KnowledgeConfigUpdateRequest": {
         "properties": {
-          "context_captures": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ContextCaptureSettings"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "scope_policies": {
             "anyOf": [
               {
@@ -22545,99 +22500,6 @@
           }
         },
         "summary": "Automatic Save Policy"
-      }
-    },
-    "/v1/knowledge/captures": {
-      "get": {
-        "operationId": "list_captures_v1_knowledge_captures_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "title": "Response List Captures V1 Knowledge Captures Get"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "List Captures"
-      },
-      "post": {
-        "operationId": "create_capture_v1_knowledge_captures_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ContextCaptureRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "title": "Response Create Capture V1 Knowledge Captures Post"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Create Capture"
-      }
-    },
-    "/v1/knowledge/captures/{capture_id}": {
-      "get": {
-        "operationId": "get_capture_v1_knowledge_captures__capture_id__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "capture_id",
-            "required": true,
-            "schema": {
-              "title": "Capture Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "title": "Response Get Capture V1 Knowledge Captures  Capture Id  Get"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Capture"
       }
     },
     "/v1/knowledge/config": {
