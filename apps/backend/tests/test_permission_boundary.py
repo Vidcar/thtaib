@@ -588,6 +588,78 @@ class FileOrderTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([item.status for item in nested_results], ["success", "success"])
             self.assertEqual((project / "dir" / "child.txt").read_text(encoding="utf-8"), "after")
 
+    async def test_paused_directory_delete_holds_the_nested_write(self):
+        from langgraph.errors import GraphInterrupt
+
+        with tempfile.TemporaryDirectory() as area:
+            project = Path(area)
+            folder = project / "dir"
+            folder.mkdir()
+            (folder / "child.txt").write_text("before", encoding="utf-8")
+            run = _run(project_path=str(project), id="pause-order")
+            middleware = WorkbenchHarnessMiddleware(run)
+            resume = asyncio.Event()
+            saw_directory = []
+
+            async def effect(request):
+                name = request.tool_call["name"]
+                args = request.tool_call["args"]
+                if name == "delete":
+                    if not resume.is_set():
+                        raise GraphInterrupt(())
+
+                    def remove():
+                        import shutil
+                        shutil.rmtree(project / "dir")
+
+                    await asyncio.to_thread(remove)
+                    return ToolMessage(content="removed", name=name, tool_call_id=request.tool_call["id"])
+
+                def observe():
+                    saw_directory.append((project / "dir").exists())
+                    target = project / "dir" / "child.txt"
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(args["content"], encoding="utf-8")
+
+                await asyncio.to_thread(observe)
+                return ToolMessage(content="wrote", name=name, tool_call_id=request.tool_call["id"])
+
+            calls = [
+                {"name": "delete", "args": {"file_path": "dir"}, "id": "remove", "type": "tool_call"},
+                {"name": "write_file", "args": {"file_path": "dir/child.txt", "content": "after"}, "id": "rewrite", "type": "tool_call"},
+            ]
+            state = {"messages": [AIMessage(content="", tool_calls=calls)]}
+            requests = [SimpleNamespace(tool_call=call, runtime=SimpleNamespace(state=state)) for call in calls]
+            delete_task = asyncio.create_task(middleware.awrap_tool_call(requests[0], effect))
+            write_task = asyncio.create_task(middleware.awrap_tool_call(requests[1], effect))
+            resumed = written = None
+            try:
+                await self._until(lambda: getattr(run.tool_outcomes.get("remove"), "outcome", None) == "not_dispatched")
+                await self._until(lambda: "remove" in middleware._call_settled or saw_directory)
+                await asyncio.sleep(0.05)
+                self.assertEqual(run.tool_outcomes["remove"].outcome, "not_dispatched")
+                self.assertFalse(middleware._call_settled["remove"].is_set())
+                self.assertFalse(write_task.done())
+                self.assertEqual(saw_directory, [])
+                self.assertEqual((project / "dir" / "child.txt").read_text(encoding="utf-8"), "before")
+                resume.set()
+                resumed = await asyncio.wait_for(middleware.awrap_tool_call(requests[0], effect), 5)
+                with self.assertRaises(GraphInterrupt):
+                    await asyncio.wait_for(delete_task, 5)
+                written = await asyncio.wait_for(write_task, 5)
+            finally:
+                resume.set()
+                for task in (delete_task, write_task):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(delete_task, write_task, return_exceptions=True)
+            self.assertEqual(getattr(resumed, "status", None), "success")
+            self.assertEqual(run.tool_outcomes["remove"].outcome, "succeeded")
+            self.assertEqual(saw_directory, [False])
+            self.assertEqual(getattr(written, "status", None), "success")
+            self.assertEqual(run.tool_outcomes["rewrite"].outcome, "succeeded")
+            self.assertEqual((project / "dir" / "child.txt").read_text(encoding="utf-8"), "after")
+
     async def _until(self, predicate, timeout: float = 5) -> None:
         deadline = asyncio.get_running_loop().time() + timeout
         while asyncio.get_running_loop().time() < deadline:

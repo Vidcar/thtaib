@@ -117,6 +117,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         self._outline_initialized = "snapshot_text" in (run.project_outline or {})
         self._outline_text = (run.project_outline or {}).get("snapshot_text", "")
         self._call_settled: dict[str, asyncio.Event] = {}
+        self._file_attempts: dict[str, int] = {}
 
     def wrap_model_call(
         self,
@@ -372,18 +373,29 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             return earlier
         return []
 
+    def _approval_pause(self, outcome) -> bool:
+        return outcome is not None and outcome.outcome == "not_dispatched" and outcome.recovery_action == "none"
+
+    def _claim_file_attempt(self, name: str, call_id: str) -> int | None:
+        """The newest entry of a file call owns its effect. An older entry steps aside."""
+        if not call_id or name not in _FILE_ORDER_TOOLS:
+            return None
+        attempt = self._file_attempts.get(call_id, 0) + 1
+        self._file_attempts[call_id] = attempt
+        return attempt
+
     def _settled_event(self, call_id: str) -> asyncio.Event:
         event = self._call_settled.get(call_id)
         if event is None:
             event = asyncio.Event()
             previous = self.run.tool_outcomes.get(call_id)
-            if previous is not None and previous.outcome != "running":
+            if previous is not None and previous.outcome != "running" and not self._approval_pause(previous):
                 event.set()
             self._call_settled[call_id] = event
         return event
 
     def _mark_call_settled(self, call_id: str) -> None:
-        if not call_id:
+        if not call_id or self._approval_pause(self.run.tool_outcomes.get(call_id)):
             return
         event = self._call_settled.get(call_id)
         if event is None:
@@ -392,10 +404,11 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         event.set()
 
     async def _wait_for_earlier_file_calls(self, request) -> None:
-        # Arrival order is not call order. Overlapping paths wait off the worker.
+        # Arrival order is not call order. An approval pause stays open until
+        # that call's effect is recorded as succeeded or failed.
         for earlier in self._earlier_conflict_ids(request):
             previous = self.run.tool_outcomes.get(earlier)
-            if previous is not None and previous.outcome != "running":
+            if previous is not None and previous.outcome in {"succeeded", "failed"}:
                 continue
             await self._settled_event(earlier).wait()
 
@@ -490,6 +503,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         handler: Callable[[ToolCallRequest], Any],
     ) -> ToolMessage | Any:
         call_id = ""
+        attempt = None
         try:
             self._require_dispatch_allowed()
             name, _, call_id = _tool_call_parts(request)
@@ -497,10 +511,13 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             if blocked is not None:
                 self._record_tool_result(request, blocked)
                 return blocked
+            attempt = self._claim_file_attempt(name, call_id)
+            await self._wait_for_earlier_file_calls(request)
+            if attempt is not None and self._file_attempts.get(call_id) != attempt:
+                return None
             with self.execution_control.tool_dispatch(self.run, call_id, name) as dispatch:
                 if not dispatch:
                     return self._browser_action_reconsidered(request)
-                await self._wait_for_earlier_file_calls(request)
                 await asyncio.to_thread(self._begin_tool, request)
                 try:
                     async with self._amutation_lease(request):
@@ -529,7 +546,8 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 self._record_tool_result(request, result)
                 return self._authorization_result(await asyncio.to_thread(self._offload_read_file_image, result))
         finally:
-            self._mark_call_settled(call_id)
+            if attempt is None or self._file_attempts.get(call_id) == attempt:
+                self._mark_call_settled(call_id)
 
     def _offload_read_file_image(self, result: ToolMessage | Any) -> ToolMessage | Any:
         """Replace a successful native image result with a durable asset path."""

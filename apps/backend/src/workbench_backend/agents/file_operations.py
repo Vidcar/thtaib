@@ -139,20 +139,6 @@ class ProjectMutationLease:
         if not future.done():
             future.set_result(True)
 
-    def __enter__(self):
-        if ADMITTED_PROJECT_MUTATION.get() is self:
-            return self
-        if not self.acquire():
-            raise HarnessError("This file is already being changed. Retry after that change finishes.",
-                code="file_order_busy", status_code=409)
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        if ADMITTED_PROJECT_MUTATION.get() is self:
-            return False
-        self.release()
-        return False
-
 
 class ExactEdit(BaseModel):
     old_string: str = Field(min_length=1, description="Exact text in the original file; every edit is matched against that same original.")
