@@ -945,7 +945,13 @@ class FileOrderTests(unittest.IsolatedAsyncioTestCase):
                     await release_hold.wait()
                     return ToolMessage(content="held", name=name, tool_call_id=call_id)
                 if name == "delete":
-                    await release_old.wait()
+                    if not release_old.is_set():
+                        await release_old.wait()
+                        return ToolMessage(content="old", name=name, tool_call_id=call_id)
+                    def remove():
+                        import shutil
+                        shutil.rmtree(project / "dir")
+                    await asyncio.to_thread(remove)
                     return ToolMessage(content="removed", name=name, tool_call_id=call_id)
 
                 def observe():
@@ -979,15 +985,30 @@ class FileOrderTests(unittest.IsolatedAsyncioTestCase):
                 write_task = asyncio.create_task(middleware.awrap_tool_call(
                     SimpleNamespace(tool_call=write_call, runtime=SimpleNamespace(state=state)), effect))
                 release_old.set()
-                await asyncio.wait_for(older, 5)
+                stepped = await asyncio.wait_for(older, 5)
+                self.assertIsInstance(stepped, ToolMessage)
+                self.assertEqual(stepped.status, "error")
+                self.assertEqual(stepped.tool_call_id, "call_1")
                 await asyncio.sleep(0.2)
                 self.assertFalse(newer.done())
                 self.assertFalse(write_task.done())
                 self.assertEqual(saw_directory, [])
                 self.assertNotEqual(run.tool_outcomes["call_1"].outcome, "succeeded")
+                self.assertNotEqual(getattr(run.tool_outcomes["call_1"], "result", None), stepped.content)
                 self.assertNotEqual(middleware._outcome_attempt.get("call_1"), middleware._file_attempts.get("call_1"))
                 self.assertEqual((folder / "child.txt").read_text(encoding="utf-8"), "before")
                 self.assertEqual((folder / "keep.txt").read_text(encoding="utf-8"), "keep")
+                release_hold.set()
+                await asyncio.wait_for(hold, 5)
+                owned = await asyncio.wait_for(newer, 5)
+                written = await asyncio.wait_for(write_task, 5)
+                self.assertEqual(getattr(owned, "status", None), "success")
+                self.assertEqual(run.tool_outcomes["call_1"].outcome, "succeeded")
+                self.assertEqual(middleware._outcome_attempt.get("call_1"), middleware._file_attempts.get("call_1"))
+                self.assertEqual(saw_directory, [False])
+                self.assertEqual(getattr(written, "status", None), "success")
+                self.assertEqual((project / "dir" / "child.txt").read_text(encoding="utf-8"), "after")
+                self.assertFalse((folder / "keep.txt").exists())
             finally:
                 release_old.set()
                 release_hold.set()

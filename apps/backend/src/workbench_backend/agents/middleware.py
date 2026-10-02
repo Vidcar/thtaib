@@ -58,7 +58,8 @@ from workbench_backend.inference.image_validation import (
 )
 from workbench_backend.knowledge.diagnostics import apply_capture_policy
 from workbench_backend.knowledge.schemas import ContextCaptureSettings
-from workbench_backend.agents.execution_policy import ExecutionControl, plan_tool_names, CURRENT_TOOL_CALL
+from workbench_backend.agents.execution_policy import (
+    CURRENT_TOOL_CALL, ExecutionControl, ToolReservationReleased, plan_tool_names)
 from workbench_backend.state.preferences import tool_authorization_metadata
 
 log = logging.getLogger(__name__)
@@ -410,10 +411,8 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         return attempt is None or self._file_attempts.get(call_id) == attempt
 
     def _owns_file_attempt(self, call_id: str, attempt: int | None) -> bool:
-        if attempt is None:
-            return True
         with self._attempt_lock:
-            return self._file_attempts.get(call_id) == attempt
+            return self._still_owns(call_id, attempt)
 
     def _note_file_batch(self, request, call_id: str, attempt: int | None = None) -> None:
         if not call_id:
@@ -460,7 +459,11 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         if not call_id:
             return
         with self._attempt_lock:
-            if not self._still_owns(call_id, attempt) or self._approval_pause(self.run.tool_outcomes.get(call_id)):
+            previous = self.run.tool_outcomes.get(call_id)
+            if not self._still_owns(call_id, attempt) or self._approval_pause(previous):
+                return
+            if attempt is not None and (previous is None or self._outcome_attempt.get(call_id) != attempt
+                    or previous.outcome not in {"succeeded", "failed", "uncertain"}):
                 return
             event = self._call_settled.get(call_id)
             if event is None:
@@ -659,52 +662,66 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             attempt = self._claim_file_attempt(name, call_id)
             await self._wait_for_earlier_file_calls(request)
             if not self._owns_file_attempt(call_id, attempt):
-                return None
-            with self.execution_control.tool_dispatch(self.run, call_id, name) as dispatch:
-                if not dispatch:
-                    return self._browser_action_reconsidered(request)
-                if not self._owns_file_attempt(call_id, attempt):
-                    return None
-                await asyncio.to_thread(self._begin_tool, request, attempt)
-                if not self._owns_file_attempt(call_id, attempt):
-                    return None
-                try:
-                    async with self._amutation_lease(request):
-                        self._require_dispatch_allowed()
-                        if not self._owns_file_attempt(call_id, attempt):
-                            return None
-                        await asyncio.to_thread(self._before_tool_effect, request, attempt)
-                        if not self._owns_file_attempt(call_id, attempt):
-                            return None
-                        try:
-                            result = await self._awrap_tool_call(request, handler, attempt)
-                        finally:
-                            # Shield the post-effect inspection too: the mutation
-                            # lease stays owned until its final evidence settles.
-                            inspection = asyncio.create_task(asyncio.to_thread(self._capture_delete_after, request, attempt))
-                            _, interrupted = await _settle_owned_task(inspection)
-                            if interrupted is not None:
-                                raise interrupted
-                        if not self._owns_file_attempt(call_id, attempt):
-                            return None
-                except BaseException as exc:
-                    previous = self.run.tool_outcomes.get(_tool_call_parts(request)[2])
-                    # Shielded Windows work may have settled while cancellation was
-                    # waiting. Keep its returned result and process-stop evidence;
-                    # interrupted command effects still require inspection.
-                    if (isinstance(exc, asyncio.CancelledError) and previous is not None
-                        and (previous.outcome in {"succeeded", "failed"} or previous.outcome == "uncertain" and previous.result is not None)):
-                        raise
+                return ToolMessage(content="A later file call owns this attempt. This result was not recorded.",
+                    name=name or "tool", tool_call_id=call_id, status="error")
+            try:
+                with self.execution_control.tool_dispatch(self.run, call_id, name) as dispatch:
+                    if not dispatch:
+                        return self._browser_action_reconsidered(request)
                     if not self._owns_file_attempt(call_id, attempt):
-                        raise
-                    result = self._handle_tool_failure(request, exc, attempt)
-                    if result is None:
-                        raise
-                if not self._owns_file_attempt(call_id, attempt):
-                    return None
-                self._record_tool_result(request, result, attempt)
-                return self._authorization_result(await asyncio.to_thread(self._offload_read_file_image, result))
+                        raise ToolReservationReleased()
+                    await asyncio.to_thread(self._begin_tool, request, attempt)
+                    if not self._owns_file_attempt(call_id, attempt):
+                        raise ToolReservationReleased()
+                    try:
+                        async with self._amutation_lease(request):
+                            self._require_dispatch_allowed()
+                            if not self._owns_file_attempt(call_id, attempt):
+                                raise ToolReservationReleased()
+                            await asyncio.to_thread(self._before_tool_effect, request, attempt)
+                            if not self._owns_file_attempt(call_id, attempt):
+                                raise ToolReservationReleased()
+                            try:
+                                result = await self._awrap_tool_call(request, handler, attempt)
+                            finally:
+                                # Shield the post-effect inspection too: the mutation
+                                # lease stays owned until its final evidence settles.
+                                inspection = asyncio.create_task(asyncio.to_thread(self._capture_delete_after, request, attempt))
+                                _, interrupted = await _settle_owned_task(inspection)
+                                if interrupted is not None:
+                                    raise interrupted
+                            if not self._owns_file_attempt(call_id, attempt):
+                                raise ToolReservationReleased()
+                    except BaseException as exc:
+                        previous = self.run.tool_outcomes.get(_tool_call_parts(request)[2])
+                        # Shielded Windows work may have settled while cancellation was
+                        # waiting. Keep its returned result and process-stop evidence;
+                        # interrupted command effects still require inspection.
+                        if (isinstance(exc, asyncio.CancelledError) and previous is not None
+                            and (previous.outcome in {"succeeded", "failed"} or previous.outcome == "uncertain" and previous.result is not None)):
+                            raise
+                        if isinstance(exc, ToolReservationReleased):
+                            raise
+                        if not self._owns_file_attempt(call_id, attempt):
+                            raise ToolReservationReleased() from exc
+                        result = self._handle_tool_failure(request, exc, attempt)
+                        if result is None:
+                            raise
+                    if not self._owns_file_attempt(call_id, attempt):
+                        raise ToolReservationReleased()
+                    self._record_tool_result(request, result, attempt)
+                    return self._authorization_result(await asyncio.to_thread(self._offload_read_file_image, result))
+            except ToolReservationReleased:
+                return ToolMessage(content="A later file call owns this attempt. This result was not recorded.",
+                    name=name or "tool", tool_call_id=call_id, status="error")
         finally:
+            if call_id and attempt is not None and self._owns_file_attempt(call_id, attempt):
+                previous = self.run.tool_outcomes.get(call_id)
+                recorded = (previous is not None and self._outcome_attempt.get(call_id) == attempt
+                    and previous.outcome in {"succeeded", "failed", "uncertain", "not_dispatched"})
+                if not recorded:
+                    self._record_tool_result(request, ToolMessage(
+                        content="This file call did not run.", name=name or "tool", tool_call_id=call_id, status="error"), attempt)
             self._mark_call_settled(call_id, attempt)
 
     def _offload_read_file_image(self, result: ToolMessage | Any) -> ToolMessage | Any:

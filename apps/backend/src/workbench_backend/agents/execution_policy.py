@@ -10,6 +10,10 @@ from typing import Any
 from workbench_backend.errors import HarnessError
 
 
+class ToolReservationReleased(Exception):
+    """A superseded file call is leaving the shared dispatch id for its owner."""
+
+
 PLAN_TOOLS = frozenset({"ls", "read_file", "glob", "grep", "read_attachment", "read_reference", "read_tool_result", "find_tools", "search_knowledge", "write_todos", "ask_user", "echo", "time_now", "task"})
 PLAN_INSTRUCTIONS = "Plan mode: investigate and produce a plan. Read-only tools, questions and the checklist are available. Do not modify files, run shell commands, save memory or perform external actions. Switching Access does not permit implementation in Plan mode."
 CURRENT_TOOL_CALL: ContextVar[str] = ContextVar("workbench_current_tool_call", default="")
@@ -211,8 +215,8 @@ class ExecutionControl:
         completed = True
         try:
             yield not self.stale_browser_action(run, call_id, name)
-        except GraphInterrupt:
-            # Native approval resumes the same action identity and reservation.
+        except (GraphInterrupt, ToolReservationReleased):
+            # Approval resumes this id. A superseded file call leaves it for the owner.
             completed = False
             raise
         finally:
