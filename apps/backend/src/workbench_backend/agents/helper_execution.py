@@ -54,8 +54,9 @@ def _narrow_child_access(parent, config):
     approval = min((parent.approval_mode, config.approval_mode or parent.approval_mode), key=rank.__getitem__)
     parent_window = "selected" if parent.desktop_access == "selected" else "off"
     requested = config.desktop_access or parent_window
+    # A stored every-window helper keeps the parent's one window, or off when the parent has none.
     if requested == "all":
-        requested = "off"
+        requested = parent_window
     desktop_access = "selected" if parent_window == "selected" and requested == "selected" else "off"
     return approval, desktop_access
 

@@ -618,15 +618,15 @@ class DeferredWindowsTests(unittest.IsolatedAsyncioTestCase):
             config = {"configurable": {"thread_id": "runtime-missing-all"}}
             paused = await graph.ainvoke({"messages": [{"role": "user", "content": "inspect every window"}]}, config)
             pending = pending_interrupt_from_raw(paused["__interrupt__"][0])
-            self.assertEqual(pending.action_requests[0].setup.code, "desktop_runtime_unavailable")
+            self.assertEqual(pending.action_requests[0].setup.code, "desktop_invalid_arguments")
+            self.assertTrue(pending.action_requests[0].setup.requires_new_input)
             self.assertEqual(self.commands, [])
             self.service.runtime = original_runtime
-            asked = await graph.ainvoke(Command(resume={"decisions": [{"type": "respond", "message": "continue"}]}), config)
-            pending = pending_interrupt_from_raw(asked["__interrupt__"][0])
-            self.assertEqual(pending.action_requests[0].setup.code, "desktop_window_required")
-            self.assertTrue(pending.action_requests[0].setup.requires_new_input)
+            with self.assertRaises(HarnessError) as repaired:
+                await graph.ainvoke(Command(resume={"decisions": [{"type": "respond", "message": "continue"}]}), config)
+            self.assertEqual(repaired.exception.code, "setup_new_input_required")
             self.assertIsNone(broad.desktop_window)
-            self.assertFalse(any(args[1] == "inspect" for args, _ in self.commands))
+            self.assertFalse(any(args[1] == "inspect" or args[1] == "list-windows" for args, _ in self.commands))
 
     async def test_selected_scope_repairs_once_and_binds_exact_target(self):
         from workbench_backend.desktop_automation.service import DESKTOP_TOOL_NAMES

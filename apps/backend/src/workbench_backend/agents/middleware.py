@@ -297,13 +297,11 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         if self.fixture_bank is not None:
             return
         from langchain_core.tools import ToolException
-        from workbench_backend.agents.file_operations import validate_delete_target, validate_mutation_batch
+        from workbench_backend.agents.file_operations import validate_delete_target
         from workbench_backend.agents.host_shell import recheck_saved_authorization
         name, args, call_id = _tool_call_parts(request)
         recheck_saved_authorization(self.run, name, args, call_id, self.grants)
         try:
-            if name in {"write_file", "edit_file", "delete", "apply_edits"}:
-                validate_mutation_batch(self.run, request)
             if name == "delete":
                 evidence = validate_delete_target(self.run, args)
                 previous = self.run.tool_outcomes[call_id]
@@ -319,11 +317,12 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         value = args.get("file_path") if isinstance(args.get("file_path"), str) else args.get("path")
         if not isinstance(value, str) or not value.strip():
             return None
+        from langchain_core.tools import ToolException
         from workbench_backend.agents.file_operations import file_order_lock, file_order_path
         try:
             return file_order_lock(file_order_path(Path(self.run.project_path), value))
-        except (OSError, RuntimeError, ValueError):
-            return None
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise ToolException("Choose a path inside this project.") from exc
 
     def _capture_delete_after(self, request):
         name, args, call_id = _tool_call_parts(request)
@@ -349,8 +348,10 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         if lock is None:
             yield
             return
+        from langchain_core.tools import ToolException
         from workbench_backend.agents.file_operations import ADMITTED_PROJECT_MUTATION
-        lock.acquire()
+        if not lock.acquire(blocking=False):
+            raise ToolException("This file is already being changed. Retry after that change finishes.")
         token = ADMITTED_PROJECT_MUTATION.set(lock)
         try:
             yield

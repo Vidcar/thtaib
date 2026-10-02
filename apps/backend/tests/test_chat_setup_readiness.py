@@ -188,22 +188,27 @@ class ChatSetupReadinessTests(unittest.TestCase):
         presented, *_ = resolve_presented_tools(None, project_bound=True)
         self.assertIn("read_file", presented)
         self.assertNotIn("execute", presented)
-        self.app.state.harness._model_factory = lambda *_args: ScriptedChatModel([AIMessage(content="Sent before a window.")])
         chat = self.client.post("/v1/chat/conversations", json={
             "deployment_id": self.first.id, "desktop_access": "all",
             "input_policy": {"pinned_tools": ["desktop_list_windows"]},
             "presented_tools": ["desktop_list_windows"]}).json()
         url = f"/v1/chat/conversations/{chat['id']}/readiness"
-        with patch.object(self.app.state.harness.desktop_automation.runtime, "command_path", return_value=self.root / "winapp.exe"):
+        calls = []
+
+        def command_path():
+            calls.append("command")
+            return self.root / "winapp.exe"
+
+        with patch.object(self.app.state.harness.desktop_automation.runtime, "command_path", side_effect=command_path):
             missing = self.client.post(url, json={})
             self.assertEqual(missing.status_code, 200, missing.text)
-            self.assertTrue(missing.json()["can_send"], missing.text)
-            self.assertNotIn("desktop_grant_required", [issue["code"] for issue in missing.json()["issues"]])
+            self.assertFalse(missing.json()["can_send"], missing.text)
+            self.assertIn("desktop_invalid_arguments", [issue["code"] for issue in missing.json()["issues"]])
             started = self.client.post(f"/v1/chat/conversations/{chat['id']}/start", json={"task": "Inspect the window"})
-            self.assertEqual(started.status_code, 200, started.text)
-        finished = wait_for_chat(self.client, chat["id"])
-        self.assertEqual(finished["current_run"]["status"], "completed", finished["current_run"].get("error"))
-        self.assertTrue(any(item["role"] == "user" for item in finished["transcript"]))
+            self.assertEqual(started.status_code, 409, started.text)
+            self.assertEqual(started.json()["code"], "desktop_invalid_arguments")
+        self.assertEqual(calls, [])
+        self.assertEqual(self.client.get(f"/v1/chat/conversations/{chat['id']}").json()["transcript"], [])
 
     def test_browser_worker_and_lost_session_block_readiness_and_send_before_saving_message(self):
         chat = self.client.post("/v1/chat/conversations", json={

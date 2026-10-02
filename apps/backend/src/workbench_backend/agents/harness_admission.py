@@ -302,6 +302,8 @@ def desktop_scope_snapshot(
 
     if not set(presented).intersection(DESKTOP_TOOL_NAMES):
         return "off", None
+    if str(request.desktop_access) == "all":
+        raise HarnessError("One window does not grant every window.", code="desktop_invalid_arguments", status_code=409)
     essential = set(essential_tools) | (set(request.input_policy.pinned_tools) if request.input_policy is not None else set())
     desktop_essential = bool(essential.intersection(DESKTOP_TOOL_NAMES))
     if (desktop_automation is None or request.source_surface != "chat"
@@ -325,7 +327,7 @@ def desktop_scope_snapshot(
             "process_id": identity.process_id,
             "process_created_at": identity.process_created_at,
         }
-    if str(request.desktop_access) in {"selected", "all"}:
+    if str(request.desktop_access) == "selected":
         return "selected", None
     return "off", None
 

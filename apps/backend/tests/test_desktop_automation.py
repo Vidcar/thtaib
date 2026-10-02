@@ -258,10 +258,12 @@ class DesktopAutomationTests(unittest.TestCase):
 
         self.service.set_scope("thread-one", "selected", hwnd=101)
         broad_run = self._run(desktop_access="all", desktop_window=None)
-        tools = {item.name: item for item in self.service.tools_for_run(broad_run)}
-        result = json.loads(tools["desktop_list_windows"].invoke({}))
-        self.assertEqual(result["scope"], "selected")
-        self.assertEqual([item["hwnd"] for item in result["windows"]], [101])
+        before = len(self.commands)
+        self.assertEqual(self.service.tools_for_run(broad_run), [])
+        with self.assertRaises(DesktopAutomationError) as denied_all:
+            self.service._effective_scope(broad_run.thread_id, SimpleNamespace(scope=DesktopAccessScope.all, selected=None))
+        self.assertEqual(denied_all.exception.code, "desktop_invalid_arguments")
+        self.assertEqual(len(self.commands), before)
 
     def test_controlled_cli_args_do_not_allow_global_input_switch(self):
         self.service.set_scope("thread-one", "selected", hwnd=101)

@@ -40,7 +40,7 @@ from workbench_backend.agents.evidence import build_completion
 from workbench_backend.agents.context import ContextObservation, SummaryDispatchModel, observe_context, observe_payload, token_counter_for_model, validate_retained_messages
 from workbench_backend.agents.tool_outcomes import reconcile_effects, failure_for_run, result_outcome
 from workbench_backend.agents.harness_backend import build_run_backend, is_reserved_framework_path, harness_scratch_root, canonical_root, roots_overlap
-from workbench_backend.agents.project_admission import holds_project, project_blocker_locked, root_runs
+from workbench_backend.agents.project_admission import holds_project, root_runs
 from workbench_backend.agents.harness_profile import ensure_ordinary_chat_profile
 from workbench_backend.agents.memory_skills import (
     KnowledgeMaterializePlan,
@@ -362,11 +362,8 @@ class HarnessService:
             self._start_cancel_guards.pop((thread_id, input_message_id), None)
 
     def project_blocker(self, project_path: str | None) -> dict[str, Any] | None:
-        self._reconcile_startup_once()
-        if not project_path:
-            return None
-        with self._lock:
-            return project_blocker_locked(self._project_admissions, self.store, self._runs, project_path)
+        del project_path
+        return None
 
     @contextmanager
     def project_admission(self, project_path: str | None):

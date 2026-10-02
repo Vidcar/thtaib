@@ -172,18 +172,29 @@ def _process_is_elevated(pid: int) -> bool:
         kernel32.CloseHandle(process)
 
 
-def _default_own_process_ids() -> set[int]:
-    """This process, its parent, and that parent's children. Names are not a match."""
-    found = {os.getpid()}
-    try:
-        current = psutil.Process()
-        found.add(current.pid)
-        parent = current.parent()
-        if parent is not None:
-            found.add(parent.pid)
-            found.update(child.pid for child in parent.children(recursive=True))
-    except (psutil.Error, OSError):
-        pass
+def _default_own_process_ids(paths: WorkbenchPaths | None = None) -> set[int]:
+    """This process tree plus the recorded desktop process. Names are not a match.
+
+    A lookup failure propagates. Callers refuse the window list instead of
+    hiding only this backend process.
+    """
+    found: set[int] = set()
+    current = psutil.Process()
+    found.add(current.pid)
+    parent = current.parent()
+    if parent is not None:
+        found.add(parent.pid)
+        found.update(child.pid for child in parent.children(recursive=True))
+    if paths is not None:
+        record = paths.state / "desktop-process.json"
+        if record.is_file():
+            payload = json.loads(record.read_text(encoding="utf-8"))
+            pid = payload.get("pid") if isinstance(payload, dict) else None
+            if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+                raise ValueError("The desktop process record is not a process id.")
+            desktop = psutil.Process(pid)
+            found.add(desktop.pid)
+            found.update(child.pid for child in desktop.children(recursive=True))
     return found
 
 
@@ -217,7 +228,7 @@ class DesktopAutomationService:
         self.capture_sink = capture_sink
         self._identity_lookup = identity_lookup or _windows_identity
         self._command_runner = command_runner
-        self._own_process_ids = own_process_ids or _default_own_process_ids
+        self._own_process_ids = own_process_ids or (lambda: _default_own_process_ids(self.paths))
         self._elevated_check = elevated_check or _process_is_elevated
         self._scopes: dict[str, _ScopeState] = {}
         self._lock = threading.RLock()
@@ -273,8 +284,10 @@ class DesktopAutomationService:
             requested = DesktopAccessScope(desired)
         except ValueError as exc:
             raise DesktopAutomationError("Unknown desktop access scope.", code="desktop_invalid_arguments") from exc
+        if requested is DesktopAccessScope.all:
+            raise DesktopAutomationError("One window does not grant every window.", code="desktop_invalid_arguments")
         # A missing or refused window must not block sending. The tool asks later.
-        if requested is DesktopAccessScope.off or requested is DesktopAccessScope.all:
+        if requested is DesktopAccessScope.off:
             return DesktopAccessScope.off, None
         _current, identity = self.scope_for_thread(thread_id)
         if identity is None:
@@ -579,15 +592,10 @@ class DesktopAutomationService:
     def _effective_scope(self, thread_id: str,
                          bound: _ScopeState | None = None) -> tuple[DesktopAccessScope, WindowIdentity | None]:
         thread_scope, thread_selected = self.scope_for_thread(thread_id)
-        if thread_scope is DesktopAccessScope.all:
-            thread_scope, thread_selected = DesktopAccessScope.off, None
+        if thread_scope is DesktopAccessScope.all or (bound is not None and bound.scope is DesktopAccessScope.all):
+            raise DesktopAutomationError("One window does not grant every window.", code="desktop_invalid_arguments")
         if bound is None:
             return thread_scope, thread_selected
-        # A run stored as every-window keeps only this thread's one window.
-        if bound.scope is DesktopAccessScope.all:
-            if thread_scope is DesktopAccessScope.selected and thread_selected is not None:
-                return DesktopAccessScope.selected, thread_selected
-            return DesktopAccessScope.off, None
         if thread_scope is DesktopAccessScope.off or bound.scope is DesktopAccessScope.off:
             return DesktopAccessScope.off, None
         if thread_scope is DesktopAccessScope.selected and bound.scope is DesktopAccessScope.selected:
@@ -605,11 +613,7 @@ class DesktopAutomationService:
         return DesktopAccessScope.off, None
 
     def _refusal_reason(self, window: DesktopWindow) -> str | None:
-        try:
-            own = self._own_process_ids()
-        except (psutil.Error, OSError):
-            own = {os.getpid()}
-        if window.process_id in own:
+        if window.process_id in self._own_process_ids():
             return "Local AI Workbench does not use its own windows."
         try:
             elevated = bool(self._elevated_check(window.process_id))
@@ -619,7 +623,17 @@ class DesktopAutomationService:
             return "Local AI Workbench does not use administrator windows."
         return None
 
+    def _refuse_unlisted_own_processes(self) -> None:
+        try:
+            self._own_process_ids()
+        except (psutil.Error, OSError, ValueError) as exc:
+            raise DesktopAutomationError(
+                "Local AI Workbench could not check its own windows.",
+                code="desktop_window_refused",
+            ) from exc
+
     def _find_window(self, hwnd: int) -> DesktopWindow:
+        self._refuse_unlisted_own_processes()
         window = next((candidate for candidate in self._collect_windows() if candidate.hwnd == hwnd), None)
         if window is None:
             raise DesktopAutomationError("The window is not in the current visible window list.", code="desktop_window_changed")
@@ -629,6 +643,7 @@ class DesktopAutomationService:
         return window
 
     def _windows(self) -> list[DesktopWindow]:
+        self._refuse_unlisted_own_processes()
         return [window for window in self._collect_windows() if self._refusal_reason(window) is None]
 
     def _collect_windows(self) -> list[DesktopWindow]:

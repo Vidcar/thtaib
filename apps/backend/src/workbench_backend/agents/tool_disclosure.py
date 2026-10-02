@@ -653,6 +653,9 @@ class DeferredToolCollection(list):
         from workbench_backend.desktop_automation.service import DesktopAutomationError, DesktopAccessScope, WindowIdentity, _ScopeState
         from workbench_backend.desktop_automation.runtime import WinAppRuntimeError
         access = self.run.desktop_access
+        if access == "all":
+            raise HarnessError("One window does not grant every window.",
+                code="desktop_invalid_arguments", status_code=409)
         if access == "off":
             raise HarnessError("Choose one window. Local AI Workbench will not take a window over.",
                 code="desktop_selection_required", status_code=409)
@@ -662,7 +665,7 @@ class DeferredToolCollection(list):
             await asyncio.to_thread(self.desktop.runtime.command_path)
         except WinAppRuntimeError as exc:
             raise HarnessError(str(exc), code="desktop_runtime_unavailable", status_code=409) from exc
-        frozen = self.run.desktop_window if access != "all" else None
+        frozen = self.run.desktop_window
         if not isinstance(frozen, dict):
             raise HarnessError("Choose one window. Local AI Workbench will not take a window over.",
                 code="desktop_window_required", status_code=409)
@@ -741,7 +744,7 @@ def _setup_request(run: Any, name: str, error: HarnessError):
     capability = "skill" if skill_id else "connection" if connection else "browser" if name in BROWSER_TOOL_NAMES else "windows" if name in DESKTOP_TOOL_NAMES else "tool"
     project_required = error.code in {"filesystem_requires_project", "shell_requires_project"}
     target = "project" if project_required else "knowledge" if skill_id else "settings" if connection else "windows" if capability == "windows" else "browser" if capability == "browser" else "agent"
-    requires_new_input = project_required or error.code in {"connection_changed", "connection_schema_changed", "connection_manifest_required", "connection_disabled", "credential_missing", "skill_selection_required", "desktop_selection_required", "desktop_window_changed", "desktop_window_required", "desktop_window_refused", "browser_thread_required"}
+    requires_new_input = project_required or error.code in {"connection_changed", "connection_schema_changed", "connection_manifest_required", "connection_disabled", "credential_missing", "skill_selection_required", "desktop_selection_required", "desktop_invalid_arguments", "desktop_window_changed", "desktop_window_required", "desktop_window_refused", "browser_thread_required"}
     return CapabilitySetupRequest(capability=capability, id=skill_id or (connection.id if connection else name),
         tool_names=[name], code=error.code, message=str(error),
         action="Update the selection, then start a new message." if requires_new_input else "Repair the selected feature, then continue.",

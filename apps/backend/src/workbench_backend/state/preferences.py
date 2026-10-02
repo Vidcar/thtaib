@@ -219,19 +219,18 @@ class PreferenceStore:
         return self.matching_grant(run, name, arguments) is not None
 
     def excluded_file_edit(self, run, name: str, arguments: dict) -> bool:
-        """One edit outside the standing grant. Saving it must not widen that grant."""
+        """One edit of a path the standing project grant already excludes."""
         if name not in _EXCLUDED_EDIT_TOOLS or not isinstance(arguments, dict):
             return False
         key = arguments.get("file_path")
         if not isinstance(key, str) or not key.strip():
             return False
-        patterns = list(PROJECT_FILE_EXCLUSIONS)
         standing = self._standing_project_grants(run)
-        if standing:
-            for grant in standing:
-                patterns.extend(grant.excluded_paths)
-        else:
-            patterns.extend(DEFAULT_SECRET_EXCLUSIONS)
+        if not standing:
+            return False
+        patterns = list(PROJECT_FILE_EXCLUSIONS)
+        for grant in standing:
+            patterns.extend(grant.excluded_paths)
         return _path_is_excluded(getattr(run, "project_path", None), key, patterns)
 
     def matching_grant(self, run, name: str, arguments: dict) -> PermissionGrant | None:
@@ -241,7 +240,7 @@ class PreferenceStore:
         if self.excluded_file_edit(run, name, arguments):
             return None
         if name == "execute":
-            return self._matching_execute_grant(run, arguments)
+            return next((grant for grant in self.grants() if self._execute_grant_matches(grant, run, arguments)), None)
         grants = self.grants()
         exact = next((grant for grant in grants if grant.kind == "exact_action" and grant.action == name and grant.arguments == arguments
             and grant.project_path == _project(run.project_path)
@@ -249,13 +248,6 @@ class PreferenceStore:
         if exact is not None:
             return exact
         return next((grant for grant in grants if self._project_file_match(grant, run, name, arguments)), None)
-
-    def _matching_execute_grant(self, run, arguments: dict) -> PermissionGrant | None:
-        # Another chat's Always allow does not apply until this chat confirms.
-        thread_id = chat_confirmation_thread(run)
-        if thread_id is not None and not self.host_shell_confirmed(thread_id):
-            return None
-        return next((grant for grant in self.grants() if self._execute_grant_matches(grant, run, arguments)), None)
 
     def _execute_grant_matches(self, grant, run, arguments) -> bool:
         if grant.kind != "exact_action" or grant.action != "execute":

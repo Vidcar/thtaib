@@ -39,11 +39,11 @@ class _MutationWaiter:
 
 
 class ProjectMutationLease:
-    """Per-path gate whose asynchronous waiters do not occupy worker threads.
+    """Per-path gate. Async waiters park on a Future and do not occupy a worker.
 
-    The mutex covers only the queue. An async waiter parks on a Future and a
-    synchronous caller parks on an Event. Release transfers ownership in FIFO
-    order and leaves the gate held, so cancelling one waiter cannot admit two.
+    A synchronous caller takes the lease or fails. It does not block a pool
+    thread that the in-progress write needs. Release transfers ownership in
+    FIFO order and leaves the gate held, so cancelling one waiter cannot admit two.
     """
 
     def __init__(self) -> None:
@@ -56,34 +56,13 @@ class ProjectMutationLease:
             return len(self._waiters)
 
     def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
-        if not blocking:
-            with self._mutex:
-                if self._held or self._waiters:
-                    return False
-                self._held = True
-                return True
-        waiter = None
+        # A blocked pool thread can stall the write it is waiting to follow.
+        del blocking, timeout
         with self._mutex:
-            if not self._held:
-                self._held = True
-                return True
-            event = threading.Event()
-            waiter = _MutationWaiter("sync", event)
-            self._waiters.append(waiter)
-        if timeout is None or timeout < 0:
-            event.wait()
-            return True
-        if event.wait(timeout):
-            return True
-        with self._mutex:
-            if not waiter.admitted:
-                try:
-                    self._waiters.remove(waiter)
-                except ValueError:
-                    pass
+            if self._held or self._waiters:
                 return False
-        self.release()
-        return False
+            self._held = True
+            return True
 
     async def acquire_async(self) -> None:
         loop = asyncio.get_running_loop()
@@ -139,7 +118,9 @@ class ProjectMutationLease:
     def __enter__(self):
         if ADMITTED_PROJECT_MUTATION.get() is self:
             return self
-        self.acquire()
+        if not self.acquire(blocking=False):
+            raise HarnessError("This file is already being changed. Retry after that change finishes.",
+                code="file_order_busy", status_code=409)
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -161,18 +142,23 @@ class ApplyEditsInput(BaseModel):
     base_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$", description="Omit for a read-only preview and original hash. Supply that unchanged original-byte hash to apply atomically.")
 
 
-def project_mutation_lock(project: Path) -> ProjectMutationLease:
-    """Lease for one canonical path. Callers order a file, not a whole folder."""
-    return file_order_lock(project)
-
-
 def file_order_path(project: Path, file_path: str):
-    """Canonical key for one project-relative file. The folder itself is not a key."""
-    normalized = str(file_path).replace("\\", "/").lstrip("/")
-    parts = PurePosixPath(normalized).parts
-    if not parts or any(part in {".", ".."} for part in parts):
+    """Canonical key for one project-relative file. `.` collapses; `..` is refused."""
+    normalized = str(file_path).replace("\\", "/").strip()
+    if not normalized or normalized.startswith("//"):
         raise ValueError("File order needs one project-relative path.")
-    return canonical_root(Path(project).resolve().joinpath(*parts))
+    parts = []
+    for part in PurePosixPath(normalized).parts:
+        if part in {"/", "."}:
+            continue
+        if part == ".." or ":" in part or part != part.strip():
+            raise ValueError("File order needs one project-relative path.")
+        parts.append(part)
+    root = Path(project).resolve()
+    # `/` and a collapsed `.` are the project root. Deletion still refuses it.
+    if not parts:
+        return canonical_root(root)
+    return canonical_root(root.joinpath(*parts))
 
 
 def file_order_lock(path: Path) -> ProjectMutationLease:
@@ -267,7 +253,7 @@ def apply_edits_tool(run, *, cancel_requested=None):
                 raise ToolException(str(error)) from error
             raise
     return StructuredTool.from_function(name="apply_edits", func=validated_apply, args_schema=ApplyEditsInput, handle_tool_error=True,
-        description="Preview or apply a group of exact edits against one original UTF-8 project file. Omit base_sha256 to preview; supply the returned hash to atomically apply. Overlapping, unmatched or stale edits change no bytes. Never combine with another mutation of that file in one tool-call batch.")
+        description="Preview or apply a group of exact edits against one original UTF-8 project file. Omit base_sha256 to preview; supply the returned hash to atomically apply. Overlapping, unmatched or stale edits change no bytes.")
 
 
 def validate_delete_target(run, args: dict) -> dict:
@@ -307,25 +293,3 @@ def validate_delete_target(run, args: dict) -> dict:
             raise HarnessError("The deletion subtree contains an unsupported file kind.", code="delete_kind", status_code=403)
     return {"path": normalized, "before_exists": target.exists(), "before_entries": found if target.exists() else 0,
         "before_files": files, "before_bytes": total_bytes, "expected_absent": True}
-
-
-def validate_mutation_batch(run, request) -> None:
-    """Include structured edits and delete ancestors in the native batch boundary."""
-    messages = getattr(getattr(request, "runtime", None), "state", {}).get("messages", [])
-    calls = next((getattr(message, "tool_calls", []) for message in reversed(messages)
-        if getattr(message, "type", None) == "ai"), [])
-    paths = []
-    for call in calls:
-        name, args = call.get("name"), call.get("args", {})
-        if name not in {"write_file", "edit_file", "delete", "apply_edits"} or name == "apply_edits" and args.get("base_sha256") is None:
-            continue
-        value = args.get("file_path")
-        if isinstance(value, str):
-            normalized = value.replace("\\", "/").lstrip("/")
-            path = canonical_root(Path(run.project_path) / normalized) if run.project_path else None
-            if path is not None:
-                paths.append((name, path))
-    for index, (name, path) in enumerate(paths):
-        for other_name, other_path in paths[index + 1:]:
-            if path == other_path or name == "delete" and other_path.is_relative_to(path) or other_name == "delete" and path.is_relative_to(other_path):
-                raise HarnessError("Competing mutations of the same file or deletion subtree cannot share one tool-call batch. Run dependent changes in later batches.", code="file_mutation_conflict", status_code=400)

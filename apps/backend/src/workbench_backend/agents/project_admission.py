@@ -1,7 +1,5 @@
 """Shared-folder admission. File order is per path, not a project owner."""
 
-from typing import Any
-
 from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
 
 
@@ -17,9 +15,3 @@ def root_runs(runs):
     # actual inline child records share their parent's reservation.
     children = {activity.run_id for run in runs for activity in run.child_runs}
     return [run for run in runs if run.id not in children]
-
-
-def project_blocker_locked(admissions, store, runs, project_path: str) -> dict[str, Any] | None:
-    """The folder is shared. Order is per file, so no chat owns the folder."""
-    del admissions, store, runs, project_path
-    return None

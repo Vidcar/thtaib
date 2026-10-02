@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -44,6 +45,7 @@ from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.schemas import ConnectedDeploymentRequest
 from workbench_backend.paths import WorkbenchPaths
 from workbench_backend.state.preferences import (
+    DEFAULT_SECRET_EXCLUSIONS,
     PROJECT_FILE_EXCLUSIONS,
     PermissionGrant,
     PreferenceStore,
@@ -229,15 +231,21 @@ class ExcludedEditTests(unittest.TestCase):
                 ])
                 self.assertFalse(prefs.host_shell_confirmed("edits"))
                 saved = {(grant.action, grant.arguments.get("file_path"), grant.scope) for grant in prefs.grants()}
-                self.assertEqual(saved, {("write_file", "/notes.txt", "session"), ("delete", "/.env", "always")})
+                self.assertEqual(saved, {
+                    ("edit_file", "/.git/HEAD", "session"),
+                    ("apply_edits", "/.env.local", "always"),
+                    ("write_file", "/notes.txt", "session"),
+                    ("delete", "/.env", "always"),
+                })
                 for name, args in (
                     ("write_file", {"file_path": "/.env", "content": "SECRET"}),
                     ("edit_file", {"file_path": "/.git/HEAD", "old_string": "a", "new_string": "b"}),
                     ("apply_edits", {"file_path": "/.env.local", "base_sha256": "a" * 64, "edits": [{"old_string": "a", "new_string": "b"}]}),
                 ):
-                    self.assertTrue(prefs.excluded_file_edit(run, name, args))
-                    self.assertIsNone(prefs.matching_grant(run, name, args))
-                    self.assertTrue(_pauses(run, prefs, name, args))
+                    self.assertFalse(prefs.excluded_file_edit(run, name, args))
+                self.assertTrue(_pauses(run, prefs, "write_file", {"file_path": "/.env", "content": "SECRET"}))
+                self.assertFalse(_pauses(run, prefs, "edit_file", {"file_path": "/.git/HEAD", "old_string": "a", "new_string": "b"}))
+                self.assertFalse(_pauses(run, prefs, "apply_edits", {"file_path": "/.env.local", "base_sha256": "a" * 64, "edits": [{"old_string": "a", "new_string": "b"}]}))
                 self.assertFalse(_pauses(run, prefs, "write_file", {"file_path": "/notes.txt", "content": "ok"}))
                 self.assertFalse(_pauses(run, prefs, "delete", {"file_path": "/.env"}))
                 self.assertTrue(_pauses(run, prefs, "delete", {"file_path": "/.env.again"}))
@@ -263,6 +271,33 @@ class ExcludedEditTests(unittest.TestCase):
                 self.assertNotIn("/.git/config", paths_saved)
                 self.assertEqual(len(prefs.grants()), before + 1)
                 self.assertTrue(_pauses(widened, prefs, "write_file", {"file_path": "/.git/config", "content": "no"}))
+
+                secrets = PermissionGrant(
+                    id="grant-secrets", kind="project_files", scope="always", project_path=str(Path(root).resolve()),
+                    action="project_files", arguments={}, created_at=utc_now(), source_run_id="settings",
+                    operations=["write_file", "edit_file"], excluded_paths=list(DEFAULT_SECRET_EXCLUSIONS))
+                with store._lock, store._conn:
+                    store._conn.execute("INSERT INTO permission_grants VALUES(?, ?)", (secrets.id, secrets.model_dump_json()))
+                self.assertTrue(prefs.excluded_file_edit(run, "write_file", {"file_path": "/.env"}))
+                self.assertTrue(prefs.excluded_file_edit(run, "apply_edits", {"file_path": "/.env.local"}))
+                held = len(prefs.grants())
+                parked.resume(harness, _run(project_path=root, thread_id="secret-edit", id="secret-run"), [
+                    PendingInterruptAction(name="write_file", args={"file_path": "/.env", "content": "SECRET"}),
+                    PendingInterruptAction(name="edit_file", args={"file_path": "/.git/HEAD", "old_string": "a", "new_string": "b"}),
+                    PendingInterruptAction(name="apply_edits", args={"file_path": "/.env.local", "base_sha256": "a" * 64, "edits": [{"old_string": "a", "new_string": "b"}]}),
+                ], [
+                    {"type": "approve", "scope": "once"},
+                    {"type": "approve", "scope": "session"},
+                    {"type": "approve", "scope": "always"},
+                ])
+                self.assertEqual(len(prefs.grants()), held)
+                for name, args in (
+                    ("write_file", {"file_path": "/.env", "content": "SECRET"}),
+                    ("edit_file", {"file_path": "/.git/HEAD", "old_string": "a", "new_string": "b"}),
+                    ("apply_edits", {"file_path": "/.env.local", "base_sha256": "a" * 64, "edits": [{"old_string": "a", "new_string": "b"}]}),
+                ):
+                    self.assertIsNone(prefs.matching_grant(run, name, args))
+                    self.assertTrue(_pauses(run, prefs, name, args))
             finally:
                 parked.close()
                 store.close()
@@ -452,6 +487,37 @@ class FileOrderTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), 5)
             executor.shutdown(wait=True, cancel_futures=True)
 
+    def test_dot_segment_shares_the_lease_and_an_illegal_path_is_refused(self):
+        from workbench_backend.agents.file_operations import file_order_lock, file_order_path
+
+        with tempfile.TemporaryDirectory() as area:
+            project = Path(area)
+            notes = file_order_path(project, "notes.txt")
+            self.assertEqual(notes, file_order_path(project, "./notes.txt"))
+            self.assertEqual(notes, file_order_path(project, "/notes.txt"))
+            self.assertEqual(file_order_path(project, "nested/notes.txt"), file_order_path(project, "nested/./notes.txt"))
+            self.assertIs(file_order_lock(notes), file_order_lock(file_order_path(project, "./notes.txt")))
+            for illegal in ("../notes.txt", "nested/../../notes.txt", "C:/outside.txt", "//host/share"):
+                with self.assertRaises(ValueError, msg=illegal):
+                    file_order_path(project, illegal)
+            run = _run(project_path=str(project), id="illegal-path", enabled_tools=["write_file"], presented_tools=["write_file"])
+            middleware = WorkbenchHarnessMiddleware(run)
+            called = []
+            message = AIMessage(content="", tool_calls=[
+                {"name": "write_file", "args": {"file_path": "notes.txt", "content": "one"}, "id": "1", "type": "tool_call"},
+                {"name": "write_file", "args": {"file_path": "./notes.txt", "content": "two"}, "id": "2", "type": "tool_call"},
+                {"name": "delete", "args": {"file_path": "notes.txt"}, "id": "3", "type": "tool_call"},
+            ])
+            middleware._before_tool_effect(SimpleNamespace(
+                tool_call={"name": "write_file", "args": {"file_path": "./notes.txt", "content": "two"}, "id": "2"},
+                runtime=SimpleNamespace(state={"messages": [message]})))
+            refused = middleware.wrap_tool_call(SimpleNamespace(
+                tool_call={"name": "write_file", "args": {"file_path": "../notes.txt", "content": "no"}, "id": "bad"},
+                runtime=SimpleNamespace(state={"messages": []})), lambda _request: called.append(True))
+            self.assertEqual(called, [])
+            self.assertEqual(refused.status, "error")
+            self.assertIn("inside this project", refused.content)
+
     async def _until(self, predicate, timeout: float = 5) -> None:
         deadline = asyncio.get_running_loop().time() + timeout
         while asyncio.get_running_loop().time() < deadline:
@@ -459,6 +525,24 @@ class FileOrderTests(unittest.IsolatedAsyncioTestCase):
                 return
             await asyncio.sleep(0.02)
         raise AssertionError("timed out waiting for a file-order waiter")
+
+
+class OwnQueueTests(unittest.TestCase):
+    def test_this_chats_queue_is_not_waiting_for_project(self):
+        from workbench_backend.chat.schemas import ChatConversation, ChatQueueItem
+        from workbench_backend.chat.service import ChatService
+
+        now = utc_now()
+        queued = [
+            ChatQueueItem(id="one", task="first", created_at=now, updated_at=now, wait_reason="project_order", queue_position=9),
+            ChatQueueItem(id="two", task="second", created_at=now, updated_at=now, wait_reason="project_busy"),
+        ]
+        conversation = ChatConversation(
+            id="chat", deployment_id="model", project_path="D:/work", created_at=now, updated_at=now, queue=queued)
+        viewed = ChatService._view_queue_progress(None, conversation)
+        self.assertEqual([item.wait_reason for item in viewed.queue], [None, None])
+        self.assertEqual([item.queue_position for item in viewed.queue], [1, 2])
+        self.assertIsNone(viewed.queue[1].waiting_run_id)
 
 
 class _WindowRuntime:
@@ -511,6 +595,42 @@ class OneWindowTests(unittest.TestCase):
             with self.assertRaises(DesktopAutomationError) as authorized:
                 service._authorize_window("thread", 303)
             self.assertEqual(authorized.exception.code, "desktop_window_refused")
+
+    def test_recorded_desktop_process_is_hidden_and_lookup_failure_refuses_the_list(self):
+        with tempfile.TemporaryDirectory() as root:
+            paths = WorkbenchPaths(Path(root)).ensure()
+            child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+            calls = []
+            try:
+                (paths.state / "desktop-process.json").write_text(json.dumps({"pid": child.pid}), encoding="utf-8")
+                identities = {
+                    404: WindowIdentity(404, child.pid, 1.0),
+                    303: WindowIdentity(303, 30, 3000.0),
+                }
+
+                def runner(args, timeout):
+                    calls.append(args)
+                    payload = [
+                        {"hwnd": 404, "processId": child.pid, "processName": "electron", "title": "Local AI Workbench", "width": 800, "height": 600, "ownerHwnd": 0, "className": "TestWindow", "isForeground": False},
+                        {"hwnd": 303, "processId": 30, "processName": "notes", "title": "Notes", "width": 800, "height": 600, "ownerHwnd": 0, "className": "TestWindow", "isForeground": True},
+                    ]
+                    return CompletedProcess(args=args, returncode=0, stdout=json.dumps(payload), stderr="")
+
+                service = DesktopAutomationService(
+                    paths, runtime=_WindowRuntime(), identity_lookup=lambda hwnd: identities[hwnd], command_runner=runner)
+                self.assertEqual([item.hwnd for item in service.picker_windows()], [303])
+                with self.assertRaises(DesktopAutomationError) as refused:
+                    service.set_scope("thread", "selected", hwnd=404)
+                self.assertEqual(refused.exception.code, "desktop_window_refused")
+            finally:
+                child.kill()
+                child.wait(timeout=5)
+            (paths.state / "desktop-process.json").write_text("{", encoding="utf-8")
+            calls.clear()
+            with self.assertRaises(DesktopAutomationError) as broken:
+                service.picker_windows()
+            self.assertEqual(broken.exception.code, "desktop_window_refused")
+            self.assertEqual(calls, [])
 
     def test_message_sends_before_a_window_is_picked(self):
         with tempfile.TemporaryDirectory() as root:
@@ -565,8 +685,10 @@ class HelperInheritanceTests(unittest.TestCase):
             explicit = SetupConfiguration(presented_tools=["read_file", "execute"], desktop_access="all", approval_mode="full_access")
             _selected_all, presented_all, _work = _narrow_presented_tools(parent, explicit, None)
             _approval, desktop_all = _narrow_child_access(parent, explicit)
-            self.assertEqual(desktop_all, "off")
+            self.assertEqual(desktop_all, "selected")
             self.assertEqual(presented_all, ["read_file"])
+            parent_off = parent.model_copy(update={"desktop_access": "off", "desktop_window": None})
+            self.assertEqual(_narrow_child_access(parent_off, explicit)[1], "off")
 
             setup = EffectiveSetup(selected_deployment_id="model", loaded_deployment_id="model", system_prompt="Help.")
             refs = SimpleNamespace(memory_version_refs=[], skill_version_refs=[], protected_instruction_version_refs=[])
@@ -587,7 +709,7 @@ class HelperInheritanceTests(unittest.TestCase):
             self.assertEqual(child.thread_id, "parent-chat")
             self.assertEqual(child.desktop_window, window)
             self.assertEqual(child.desktop_access, "selected")
-            self.assertEqual(broad.desktop_access, "off")
+            self.assertEqual(broad.desktop_access, "selected")
             self.assertEqual(broad.desktop_window, window)
             self.assertEqual(broad.project_path, parent.project_path)
             self.assertEqual(broad.enabled_tools, list(presented_all))

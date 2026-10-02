@@ -178,12 +178,13 @@ class AgentUpgradeIntegrationTests(unittest.TestCase):
                 other = run.model_copy(update={"id": "structured-owner"})
                 atomic = pool.submit(apply_edits_tool(other).invoke, {"file_path": "/file.txt",
                     "edits": [{"old_string": "original", "new_string": "structured"}], "base_sha256": hashlib.sha256(b"original").hexdigest()})
-                with self.assertRaises(TimeoutError):
-                    atomic.result(timeout=0.1)
+                # The sync tool fails at once. It does not park a pool thread behind the write.
+                refused = atomic.result(timeout=2)
+                self.assertIn("already being changed", refused.lower())
+                self.assertEqual(target.read_text(encoding="utf-8"), "original")
             finally:
                 release.set()
             self.assertEqual(native.result(timeout=5).status, "success")
-            self.assertIn("changed", atomic.result(timeout=5).lower())
         self.assertEqual(target.read_text(encoding="utf-8"), "native")
 
     def test_partial_native_delete_records_remaining_effects_before_retry(self):

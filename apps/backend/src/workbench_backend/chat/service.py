@@ -1741,6 +1741,8 @@ class ChatService:
             from workbench_backend.desktop_automation.service import DESKTOP_TOOL_NAMES, DesktopAutomationError
 
             if set(_presented).intersection(DESKTOP_TOOL_NAMES).intersection(pinned if defer_optional else _presented):
+                if str(conversation.desktop_access) == "all":
+                    raise ChatError("One window does not grant every window.", code="desktop_invalid_arguments", status_code=409)
                 desktop = self.harness.desktop_automation
                 if desktop is None:
                     raise ChatError("Windows control is unavailable.", code="desktop_unavailable", status_code=409)
@@ -2615,7 +2617,8 @@ class ChatService:
                 if item.status != "queued":
                     continue
                 item.queue_position = positions.get(item.id)
-                item.wait_reason = "project_order" if item.queue_position and item.queue_position > 1 else None
+                # This chat's own follow-ups are not waiting on another chat's folder.
+                item.wait_reason = None
                 item.waiting_run_id = None
                 item.waiting_thread_id = None
                 item.waiting_owner_title = None
