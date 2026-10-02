@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 from tests.test_capability_probes import make_deployment
 from workbench_backend.errors import ManagerError
@@ -175,8 +175,39 @@ class CapabilityCheckTests(unittest.TestCase):
         history = copy.deepcopy(current)
         history.settings.per_request.applied.update(reasoning_preserve=False)
         for name in names:
-            expected = "untested" if name == "reasoning_replay" else "passed"
-            self.assertEqual(capability_support(history, name), expected, name)
+            self.assertEqual(capability_support(history, name), "passed", name)
+
+    def test_only_missing_reruns_thinking_after_a_saved_thinking_change(self):
+        original = self.manager.get_deployment(self.deployment.id)
+        reasoning = self.record(original, "reasoning")
+        replay = self.record(original, "reasoning_replay")
+        stream = self.record(original, "text_stream")
+        current = self.manager.get_deployment(original.id)
+        current.settings.per_request.applied.update(reasoning="on", reasoning_effort="low")
+        self.store.put_deployment(current)
+        calls = []
+
+        class Answer:
+            def invoke(self, _messages):
+                calls.append("invoke")
+                return AIMessage(content="391", additional_kwargs={"reasoning_content": "worked"})
+
+            def stream(self, _messages):
+                calls.append("stream")
+                yield AIMessageChunk(content="READY")
+
+        kept = run_capability_probe(self.manager, current.id, CapabilityProbeRequest(capability="text_stream"),
+            model_factory=lambda *_args, **_kwargs: Answer(), only_missing=True)
+        self.assertEqual(kept.id, stream.id)
+        self.assertEqual(calls, [])
+        rerun = run_capability_probe(self.manager, current.id, CapabilityProbeRequest(capability="reasoning"),
+            model_factory=lambda *_args, **_kwargs: Answer(), only_missing=True)
+        self.assertNotEqual(rerun.id, reasoning.id)
+        self.assertEqual(calls, ["invoke"])
+        replayed = run_capability_probe(self.manager, current.id, CapabilityProbeRequest(capability="reasoning_replay"),
+            model_factory=lambda *_args, **_kwargs: Answer(), only_missing=True)
+        self.assertNotEqual(replayed.id, replay.id)
+        self.assertGreater(len(calls), 1)
 
     def test_external_template_bytes_invalidate_without_rehashing_weights(self):
         template = Path(self.temporary.name) / "template.jinja"

@@ -97,14 +97,15 @@ _PROOF_IGNORED_STARTUP = frozenset({
     "host", "port", "alias", "threads", "threads_batch", "batch_size", "ubatch_size",
     "op_offload", "mmproj_use_gpu", "load_mode",
 })
-# Sampling and the answer-length ceiling do not change what the ten checks observed.
+# Sampling, the answer-length ceiling, and preserved thinking do not change
+# what the ten checks observed. A saved Thinking change still drops only the
+# two thinking checks, via _THINKING_REQUEST_KEYS below.
 _PROOF_IGNORED_REQUEST = frozenset({
     "temperature", "top_k", "top_p", "min_p", "repeat_penalty",
     "presence_penalty", "frequency_penalty", "max_tokens",
+    "reasoning_preserve",
 })
-# A saved Thinking change drops only the two thinking checks.
 _THINKING_REQUEST_KEYS = frozenset({"reasoning", "reasoning_effort"})
-_THINKING_HISTORY_KEYS = frozenset({"reasoning_preserve"})
 
 
 def _external_template_identity(startup: dict[str, Any]) -> dict[str, Any] | None:
@@ -181,8 +182,6 @@ def proof_scope(identity: dict[str, Any], *, capability: str | None = None) -> d
     request = scoped.get("request")
     if isinstance(request, dict):
         drop = set(_PROOF_IGNORED_REQUEST)
-        if capability != "reasoning_replay":
-            drop |= _THINKING_HISTORY_KEYS
         if capability not in {"reasoning", "reasoning_replay"}:
             drop |= _THINKING_REQUEST_KEYS
         scoped["request"] = {key: value for key, value in request.items() if key not in drop}

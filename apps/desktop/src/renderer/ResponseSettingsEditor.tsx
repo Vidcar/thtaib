@@ -3,12 +3,10 @@ import { defaultSettingDisplay, effectiveSettingDisplay, type EffectiveSetting }
 import type { BundleConfigurationOptions } from "./types";
 
 /** Render resolved values without writing an override merely to display them. */
-export function ResponseSettingsEditor({ value, onChange, facts, presentationFacts, options, disabled = false, inheritance = "layer", loading = false, part = "thinking", layout = "default", showReadout = true }: {
+export function ResponseSettingsEditor({ value, onChange, facts, presentationFacts, options, disabled = false, inheritance = "layer", loading = false, part = "thinking", layout = "default" }: {
   value: Record<string, unknown>; onChange: (value: Record<string, unknown>) => void;
   facts: Record<string, EffectiveSetting>; presentationFacts?: Record<string, EffectiveSetting>; options: BundleConfigurationOptions | null; disabled?: boolean; inheritance?: "layer" | "model"; loading?: boolean;
   part?: "thinking" | "thinking-only" | "sampling"; layout?: SettingLayout;
-  /** Models keeps the source line. Chat shows the value only. */
-  showReadout?: boolean;
 }) {
   const patch = (key: string, next: unknown) => onChange({ ...value, [key]: next });
   const follow = (key: string) => { const next = { ...value }; delete next[key]; onChange(next); };
@@ -21,7 +19,7 @@ export function ResponseSettingsEditor({ value, onChange, facts, presentationFac
   const reset = (key: string) => ({ onReset: Object.hasOwn(value, key) && !disabled ? () => follow(key) : undefined, resetLabel: "Reset", resetTitle: target(key).title });
   const supported = (key: string) => descriptor(key)?.supported !== false;
   const readout = (key: string) => {
-    if (!showReadout) return undefined;
+    if (part === "thinking-only") return undefined;
     const shown = Object.hasOwn(value, key) ? { value: value[key], source: "Set value", known: true, inherited: false, requires_reload: false } : presentation(key);
     const display = effectiveSettingDisplay(shown, false, key);
     return <span className="model-effective-readout"><strong>{display.value}</strong>{display.source ? ` · ${loading && !Object.hasOwn(value, key) ? "Last checked" : display.source}` : ""}</span>;

@@ -708,8 +708,8 @@ class ModelManager:
             wanted = resolve_bags(startup=startup, startup_defaults=initial_startup,
                 per_request_defaults=response_defaults, per_request=profile.bags.per_request.requested if profile else {},
                 agent=profile.bags.agent.requested if profile else {})
-            from workbench_backend.inference.deployments import _require_valid_managed_startup
-            _require_valid_managed_startup(wanted.startup)
+            from workbench_backend.inference.deployments import _model_context_length, _require_valid_managed_startup
+            _require_valid_managed_startup(wanted.startup, context_length=_model_context_length(self.store, bundle))
             invalid_response = [key for key in wanted.per_request.unsupported if key in PER_REQUEST_KEYS]
             if invalid_response:
                 raise ManagerError("Correct invalid response controls before preparing this setup.", code="configuration_values_invalid", status_code=422,

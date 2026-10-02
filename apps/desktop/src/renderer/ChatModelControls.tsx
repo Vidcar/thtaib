@@ -24,6 +24,9 @@ function thinkingSettings(configuration: SetupConfiguration): Record<string, unk
 function remembered(configuration: SetupConfiguration): Record<string, ModelOverride> {
   return (configuration as SetupConfiguration & { model_overrides?: Record<string, ModelOverride> }).model_overrides ?? {};
 }
+function loadableContextSize(value: number | null, maximum: number | null): value is number {
+  return value !== null && maximum !== null && Number.isSafeInteger(maximum) && Number.isSafeInteger(value) && value >= 1 && value <= maximum;
+}
 export function chatTuningCandidate(configuration: SetupConfiguration, thinking: Record<string, unknown>, context: number | null): SetupConfiguration {
   const startup = { ...(configuration.startup_overrides ?? {}) };
   if (context === null) delete startup.ctx_size; else startup.ctx_size = context;
@@ -131,7 +134,6 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
     pending.current = null; setBusy(false); setLoadingChoice("");
     if (queued) void commitContext(queued.value);
   }
-  const latest = useRef({ configuration, onApply, onReloaded, runtimeBusy, selectedProfile: undefined as RunProfile | undefined, selectedDeployment: undefined as Deployment | undefined, selectedBundleId: undefined as string | undefined });
   const incomingThinking = JSON.stringify(thinkingSettings(configuration));
   const incomingContext = typeof configuration.startup_overrides?.ctx_size === "number" ? configuration.startup_overrides.ctx_size : null;
   useEffect(() => {
@@ -146,7 +148,9 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
 
   const selectedProfile = profiles.find(item => item.id === (configuration.model_configuration_id ?? selectedConfigurationId));
   const selectedDeployment = deployments.find(item => item.id === selectedDeploymentId);
-  const selectedBundleId = selectedProfile?.bundle_id ?? selectedDeployment?.bundle_id ?? undefined;
+  const selectedBundleId = selectedProfile?.bundle_id ?? selectedDeployment?.bundle_id;
+  const latest = useRef({ configuration, onApply, onReloaded, runtimeBusy, selectedProfile, selectedDeployment, selectedBundleId });
+  const contextLimit = useRef<number | null>(null);
   const selectedBundle = availableBundles.find(item => item.id === selectedBundleId);
   const selectedName = selectedBundle ? modelLabel(selectedBundle, availableBundles) : selectedDeployment?.display_name.replace(/^(managed|connected):/, "") ?? "Choose model";
   const savedRevision = `${selectedProfile?.id ?? ""}:${selectedProfile?.revision ?? 0}`;
@@ -166,7 +170,6 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
     return { tone: "idle", label: "Idle" };
   }
   const selectedState = observed(selectedProfile ?? null, selectedDeployment?.scope === "connected" ? selectedDeployment : null);
-  latest.current = { configuration, onApply, onReloaded, runtimeBusy, selectedProfile, selectedDeployment, selectedBundleId };
   const previewConfiguration = chatTuningCandidate(configuration, thinking, context);
   const preview = useSetupPreview(previewConfiguration, projectId, agentSetupVersionId, "conversation", savedRevision, pickerOpen);
   const facts = preview.data?.effective_values ?? {};
@@ -250,16 +253,6 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
     } finally { finishOperation(operation); }
   }
 
-  function loadedContextSize(deployment?: Deployment): number | null {
-    const reported = deployment?.server_props?.n_ctx;
-    if (typeof reported === "number") return reported;
-    const requested = deployment?.settings?.startup?.requested?.ctx_size;
-    return typeof requested === "number" ? requested : null;
-  }
-  function savedContextSize(profile?: RunProfile): number | null {
-    const requested = profile?.bags.startup.requested.ctx_size;
-    return typeof requested === "number" ? requested : null;
-  }
   function rememberChoice(current: SetupConfiguration, next: SetupConfiguration) {
     const key = latest.current.selectedBundleId ?? latest.current.selectedDeployment?.id;
     if (!key) return next;
@@ -267,7 +260,8 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   }
   async function applyThinking(nextThinking: Record<string, unknown>) {
     // A context reload must not drop or delay the next message's Thinking change.
-    if (thinkingPending.current || disabled) return;
+    // Chat echoes that reload's busy state back through disabled.
+    if (thinkingPending.current || (disabled && !busy)) return;
     const operation = {}; thinkingPending.current = operation; acceptedThinking.current = nextThinking; setThinking(nextThinking); setError("");
     try {
       const current = latest.current.configuration;
@@ -283,15 +277,29 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
     } finally { if (thinkingPending.current === operation) thinkingPending.current = null; }
   }
   async function commitContext(nextContext: number | null) {
-    if (disabled) return;
+    // Parent disabled echoes this control's own busy state and an in-flight send.
+    // Queue the latest choice; do not drop it.
     if (pending.current) { contextQueued.current = { value: nextContext }; return; }
+    const maximum = contextLimit.current;
+    if (nextContext !== null && !loadableContextSize(nextContext, maximum)) return;
     const profile = latest.current.selectedProfile;
     const deployment = latest.current.selectedDeployment;
     const accepted = typeof latest.current.configuration.startup_overrides?.ctx_size === "number" ? latest.current.configuration.startup_overrides.ctx_size : null;
-    const target = nextContext ?? savedContextSize(profile);
-    const loadedSize = loadedContextSize(deployment);
-    // Only a healthy running model reloads. A stopped model would cold-start; active work waits.
-    const reload = !latest.current.runtimeBusy && Boolean(profile?.bundle_id) && deployment?.status === "running" && Boolean(deployment.health?.healthy) && typeof target === "number" && loadedSize !== null && target !== loadedSize;
+    const savedRequested = profile?.bags.startup.requested.ctx_size;
+    const saved = typeof savedRequested === "number" ? savedRequested : null;
+    const reported = deployment?.server_props?.n_ctx;
+    const requestedLoaded = deployment?.settings?.startup?.requested?.ctx_size;
+    const loadedSize = typeof reported === "number" ? reported : typeof requestedLoaded === "number" ? requestedLoaded : null;
+    const effective = nextContext ?? saved;
+    // 0 is the saved full-context sentinel. Any other explicit size must fit the model.
+    const effectiveLoadable = effective === null || effective === 0 || loadableContextSize(effective, maximum);
+    const healthy = !latest.current.runtimeBusy && Boolean(profile?.bundle_id) && deployment?.status === "running" && Boolean(deployment.health?.healthy) && loadedSize !== null;
+    if (healthy && effective !== loadedSize && !effectiveLoadable) {
+      setError("Context must be a whole number of tokens from 1 through this model's maximum.");
+      return;
+    }
+    // A cleared context with no numeric saved size still differs from a loaded n_ctx.
+    const reload = healthy && effective !== loadedSize && effectiveLoadable;
     if (nextContext === accepted && !reload) return;
     const operation = {}; pending.current = operation; setBusy(true); setError("");
     let loadedId: string | undefined;
@@ -333,17 +341,20 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
     </button>;
   }
   const baseContext = facts["startup.ctx_size"]?.inherited_value;
-  const contextSupported = Boolean(selectedProfile?.bundle_id) && options?.context_size.supported !== false;
+  const contextMaximum = typeof options?.context_size.maximum === "number" && Number.isSafeInteger(options.context_size.maximum) && options.context_size.maximum >= 1 ? options.context_size.maximum : null;
+  const contextSupported = Boolean(selectedProfile?.bundle_id) && options?.context_size.supported !== false && contextMaximum !== null;
   const contextDefault = defaultSettingDisplay(facts["startup.ctx_size"], "configuration", "ctx_size");
   const thinkingFacts = residency.data?.effective_values ?? facts;
   const selectedContext = typeof baseContext === "number" ? baseContext : selectedProfile?.bags.startup.requested.ctx_size;
-  const contextMaximum = options?.context_size.maximum;
-  const displayedContext = context === 0 ? contextMaximum ?? null : context ?? (selectedContext === 0 ? contextMaximum ?? null : typeof selectedContext === "number" ? selectedContext : null);
+  const displayedContext = context === 0 ? contextMaximum : context ?? (selectedContext === 0 ? contextMaximum : typeof selectedContext === "number" ? selectedContext : null);
   const contextReason = selectedDeployment?.scope === "connected" && !selectedProfile?.bundle_id ? "Context is managed by this connection." : options?.context_size.supported === false ? "Context control unavailable." : "";
   const contextHelp = contextReason || (runtimeBusy ? "A context change waits for the next message." : "A context change reloads the model.");
+  latest.current = { configuration, onApply, onReloaded, runtimeBusy, selectedProfile, selectedDeployment, selectedBundleId };
+  contextLimit.current = contextMaximum;
   useEffect(() => {
-    if (!pickerOpen || !selectedBundleId) return;
+    if (!pickerOpen || !selectedBundleId) { setMemory("Unknown"); return; }
     const controller = new AbortController();
+    setMemory("Unknown");
     const startup = mergedStartup(selectedProfile?.bags.startup.requested ?? {}, previewConfiguration.startup_overrides ?? {});
     void estimateModel({ bundle_id: selectedBundleId, startup }, false, controller.signal).then(data => {
       if (controller.signal.aborted) return;
@@ -391,10 +402,10 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
           {!availableBundles.length && !deployments.length ? <p className="hint">Add a model in Models.</p> : null}
         </div>
         <div className="chat-model-settings">
-          <ResponseSettingsEditor part="thinking-only" value={thinking} facts={facts} presentationFacts={thinkingFacts} options={options} loading={preview.loading} disabled={disabled} showReadout={false} onChange={next => void applyThinking(next)} />
+          <ResponseSettingsEditor part="thinking-only" value={thinking} facts={facts} presentationFacts={thinkingFacts} options={options} loading={preview.loading} disabled={disabled} onChange={next => void applyThinking(next)} />
           <SettingRow label="Context" help={contextHelp} onReset={context !== null && !busy ? () => { stageContext(null); void commitContext(null); } : undefined} resetLabel="Reset" resetTitle={contextDefault.title}>
             <div className="chat-context-line">
-              <ContextSlider label="Chat context" value={displayedContext} maximum={contextMaximum ?? null} disabled={Boolean(contextReason) || !contextSupported} title={contextHelp} onChange={next => { stageContext(next); void commitContext(next); }} />
+              <ContextSlider label="Chat context" value={displayedContext} maximum={contextMaximum} disabled={Boolean(contextReason) || !contextSupported} title={contextHelp} onChange={next => { if (!loadableContextSize(next, contextMaximum)) return; stageContext(next); void commitContext(next); }} />
               <span className="chat-context-memory">{memory}</span>
             </div>
           </SettingRow>
