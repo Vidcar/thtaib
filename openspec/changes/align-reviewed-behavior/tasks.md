@@ -15,7 +15,7 @@
 - [x] 2.3 Keep project file tools as the Deep Agents filesystem tools, keep the exact multi-hunk tool beside edit, and keep delete as the upstream delete tool, and verify a harness test registers no second tool of the same name.
 - [x] 2.4 Keep the shell as LocalShellBackend, with the existing job tools beside it, and verify a project-free This-computer command starts in the resolved user profile and a skill script without a project fails.
 - [x] 2.5 Keep the thin middleware and shell subclasses under their library names, and verify the harness test still sees FilesystemMiddleware, MemoryMiddleware, SkillsMiddleware, and LocalShellBackend rather than a second copy.
-- [ ] 2.6 Send Thinking and sampling through the existing llama.cpp request fields, and verify a chat Thinking change does not reload the model or change the saved setup.
+- [x] 2.6 Send Thinking and sampling through the existing llama.cpp request fields, and verify a chat Thinking change does not reload the model or change the saved setup.
 
 ## 3. Permissions, windows, and file order
 
@@ -35,11 +35,11 @@
 
 ## 5. Screens
 
-- [ ] 5.1 Use one model menu on Chat and the one-task page, with the model's Thinking levels and a context slider, and verify the desktop check shows no tuning icon and no Apply or Stage button.
-- [ ] 5.2 Show a known quantization token even when a dot precedes it, and verify `Qwen3.5-0.8B.Q4_K_M.gguf` displays that token and an unknown name stays unknown.
-- [ ] 5.3 Keep the ten named checks, retest only the clicked check, and leave all ten results in place when sampling or answer length changes, and verify a saved Thinking change drops only Thinking and Thinking history.
+- [x] 5.1 Use one model menu on Chat and the one-task page, with the model's Thinking levels and a context slider, and verify the desktop check shows no tuning icon and no Apply or Stage button.
+- [x] 5.2 Show a known quantization token even when a dot precedes it, and verify `Qwen3.5-0.8B.Q4_K_M.gguf` displays that token and an unknown name stays unknown.
+- [x] 5.3 Keep the ten named checks, retest only the clicked check, and leave all ten results in place when sampling or answer length changes, and verify a saved Thinking change drops only Thinking and Thinking history.
 - [x] 5.4 Say a resources-only connection is ready and has no tools, and verify the connections screen does not say "0 tools ready".
-- [ ] 5.5 Apply the short label-and-value rule on the changed screens, with explanation on hover or focus, and verify Chat, the one-task page, Settings, and the project-edit screen in the desktop check.
+- [x] 5.5 Apply the short label-and-value rule on the changed screens, with explanation on hover or focus, and verify Chat, the one-task page, Settings, and the project-edit screen in the desktop check.
 - [x] 5.6 Keep Lab and Workflows on the primary sidebar, do not name Lab Measurements or a future suite, and verify the desktop check shows that.
 
 ## 6. Delivery check
