@@ -340,6 +340,17 @@ class InteractionService:
             return content
         return "".join(block.get("text", "") for block in content or [] if isinstance(block, dict) and block.get("type") == "text")
 
+    def _take_rewind_drop(self, run_id: str) -> str | None:
+        # A harness without the marker has nothing to drop. Test doubles and a
+        # missing observer harness are that case.
+        harness = self.harness
+        if harness is None:
+            return None
+        drops = getattr(harness, "_rewind_drop_from", None)
+        if not isinstance(drops, dict):
+            return None
+        return drops.pop(run_id, None)
+
     def observe(self, run: AgentRun, raw: dict[str, Any] | None, *, telemetry: bool = False) -> None:
         with self._projection_lock:
             if raw is not None:
@@ -358,7 +369,7 @@ class InteractionService:
                 return
             binding = self.store.interaction_for_graph(run.thread_id or run.id)
             if binding is None:
-                self.harness._rewind_drop_from.pop(run.id, None)
+                self._take_rewind_drop(run.id)
                 return
             self._flush_thread(binding["id"])
             binding = self.binding(binding["id"])
@@ -372,7 +383,7 @@ class InteractionService:
             snapshot = _copy_public_snapshot(binding["snapshot"])
             outgoing = []
             previous = snapshot.get("workbench", {}).get("run") or {}
-            drop_from = self.harness._rewind_drop_from.pop(run.id, None)
+            drop_from = self._take_rewind_drop(run.id)
             snapshot.setdefault("workbench", {}).update({"run": self._stored_run(run), "conversation_id": binding["conversation_id"]})
             if previous.get("id") != run.id:
                 snapshot["workbench"]["run_started_seq"] = binding["seq"]

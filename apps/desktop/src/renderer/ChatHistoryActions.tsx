@@ -110,7 +110,7 @@ function walkTranscript(node: Element, lines: string[], retained: string[]): boo
     return saw;
   }
   if (node.matches("article") && node.classList.contains("bubble-assistant")) {
-    lines.push("## Assistant", "", node.getAttribute("data-markdown-source") ?? "", "");
+    lines.push("## Assistant", "", node.getAttribute("data-markdown-source") ?? node.querySelector("[data-markdown-source]")?.getAttribute("data-markdown-source") ?? "", "");
     let saw = true;
     for (const child of Array.from(node.children)) saw = walkTranscript(child, lines, retained) || saw;
     return saw;

@@ -451,9 +451,38 @@ class HarnessService:
             self._runs[run_id] = updated
             return self._expose_run(updated)
 
+    def require_direct_run_project_effects(self, request: AgentStartRequest, project_path: str | None) -> None:
+        """A stopped direct task keeps its folder until its effects are acknowledged.
+
+        Chats and Lab may share that folder. A live task does not hold it.
+        """
+        if request.source_surface != "agent-run" or not project_path:
+            return
+        self._reconcile_startup_once()
+        with self._lock:
+            stored = {item.id: item for item in self.store.list_run_lifecycle(roots_only=True)}
+            stored.update(self._runs)
+            for run in root_runs(list(stored.values())):
+                if request.thread_id and run.thread_id == request.thread_id:
+                    continue
+                if is_run_lifecycle_live(run.status) or run.finalization_phase is not None:
+                    continue
+                if not run.project_path or not roots_overlap(project_path, run.project_path):
+                    continue
+                uncertain = [ident for ident, item in run.tool_outcomes.items()
+                    if item.outcome in {"running", "uncertain"} and not item.evidence.get("acknowledged_at")]
+                if uncertain:
+                    raise HarnessError(
+                        "An earlier action in this project has unconfirmed effects. Inspect and acknowledge it before continuing; it will not be repeated automatically.",
+                        code="effects_unconfirmed", status_code=409,
+                        details={"run_id": run.id, "thread_id": run.thread_id,
+                            "call_ids": uncertain, "recovery_action": "inspect_effects"})
+
     def start(self, request: AgentStartRequest, *, instruction_snapshot: list[InstructionLayer] | None = None, helper_snapshot: list[FrozenHelperSelection] | None = None, execution_snapshot: FrozenExecutionSelection | None = None) -> AgentRun:
         self.require_thread_effects_confirmed(request.thread_id)
-        with self.project_admission(self._request_project_path(request)):
+        project_path = self._request_project_path(request)
+        self.require_direct_run_project_effects(request, project_path)
+        with self.project_admission(project_path):
             return self._start_admitted(request, instruction_snapshot=instruction_snapshot,
                 helper_snapshot=helper_snapshot, execution_snapshot=execution_snapshot)
 

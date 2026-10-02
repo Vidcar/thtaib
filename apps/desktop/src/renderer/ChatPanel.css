@@ -51,6 +51,7 @@
 .message-state {border: var(--line-hairline) solid var(--border); border-radius: var(--radius-pill); padding: var(--pad-tight) var(--pad-tight); color: var(--muted); font-size: var(--text-small); text-transform: uppercase;}
 .message-feed {display: grid; align-content: start; gap: var(--space-compact); min-width: 0;}
 .message-body {display: grid;}
+.message-answer {display: contents;}
 .user-message-text {white-space: pre-wrap; overflow-wrap: anywhere;}
 .message-body :is(p, ul, ol, blockquote, pre, table) {margin: 0;}
 .message-body ul, .message-body ol {padding-left: var(--pad-section);}

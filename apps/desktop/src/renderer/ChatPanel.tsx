@@ -2161,7 +2161,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             />
           ) : (
             transcript.map((item, index) => (
-              <article key={`${item.at}-${item.role}-${index}`} className={`bubble bubble-${item.role}${item.role === "user" ? " bubble-user" : item.role === "assistant" ? " bubble-assistant" : ""}`} data-markdown-source={item.role === "assistant" ? item.content : undefined}>
+              <article key={`${item.at}-${item.role}-${index}`} className={`bubble bubble-${item.role}`} data-markdown-source={item.role === "assistant" ? item.content : undefined}>
                 <header>
                   <strong>{messageRoleLabel(item.role)}</strong>
                   <time>{formatWhen(item.at)}</time>

@@ -21,6 +21,7 @@ from workbench_backend.inference.adapter import chat_model_for_deployment
 from workbench_backend.inference.capabilities import (
     CapabilityEvidence,
     CapabilityProbeRequest,
+    _identity_fingerprint,
     capability_support,
     proof_fingerprint,
     proof_scope,
@@ -104,6 +105,33 @@ def _image_fixture(colour: str = "red") -> str:
     return "data:image/png;base64," + base64.b64encode(data).decode()
 
 
+def _image_proof_covers_temperature(deployment: Any, per_request: Any, asked: Any) -> bool:
+    """The ten-check record ignores sampling. A screenshot still needs proof at its own temperature."""
+    evidence = getattr(deployment, "capability_evidence", None) or []
+    identity = setup_identity(deployment, per_request)
+    exact = _identity_fingerprint(identity)
+    for capability in ("image", "tool_image"):
+        scoped = _identity_fingerprint(proof_scope(identity, capability=capability))
+        covered = False
+        matched = False
+        for raw in reversed(evidence):
+            if not isinstance(raw, dict) or raw.get("capability") != capability or raw.get("status") != "passed":
+                continue
+            setup = raw.get("setup")
+            same = raw.get("fingerprint") == exact or (
+                isinstance(setup, dict) and _identity_fingerprint(proof_scope(setup, capability=capability)) == scoped)
+            if not same:
+                continue
+            matched = True
+            request = setup.get("request") if isinstance(setup, dict) else None
+            if not isinstance(request, dict) or "temperature" not in request or request.get("temperature") == asked:
+                covered = True
+                break
+        if matched and not covered:
+            return False
+    return True
+
+
 def ensure_tool_image_support(manager: Any, deployment_id: str, per_request: Any = None, *, probe=None) -> bool:
     """Run the image checks once when a vision setup has never been tested.
 
@@ -120,6 +148,10 @@ def ensure_tool_image_support(manager: Any, deployment_id: str, per_request: Any
 
     image = current("image")
     tool_image = current("tool_image")
+    asked = settings.get("temperature") if isinstance(settings, dict) and "temperature" in settings else None
+    if asked is not None and image == "passed" and tool_image == "passed" and not _image_proof_covers_temperature(deployment, per_request, asked):
+        image = "untested"
+        tool_image = "untested"
     if image == "passed" and tool_image == "passed":
         return True
     if image in {"failed", "inconclusive"} or tool_image in {"failed", "inconclusive"}:
@@ -141,7 +173,7 @@ def ensure_tool_image_support(manager: Any, deployment_id: str, per_request: Any
         probe(manager, deployment_id, CapabilityProbeRequest(capability="image", per_request=settings))
         if current("image") != "passed":
             return False
-    if current("tool_image") == "untested":
+    if tool_image != "passed" or current("tool_image") == "untested":
         probe(manager, deployment_id, CapabilityProbeRequest(capability="tool_image", per_request=settings))
     return current("tool_image") == "passed"
 
