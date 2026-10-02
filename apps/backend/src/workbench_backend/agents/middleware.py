@@ -422,6 +422,36 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 raise ToolReservationReleased()
             return self._carried_effect.pop(call_id, None)
 
+    def _attempt_effect_kept(self, call_id: str, attempt: int | None) -> bool:
+        """This attempt already has its own terminal row. An older attempt's row does not count."""
+        with self._attempt_lock:
+            previous = self.run.tool_outcomes.get(call_id)
+            return (self._still_owns(call_id, attempt) and previous is not None
+                and self._outcome_attempt.get(call_id) == attempt
+                and previous.outcome in {"succeeded", "failed", "uncertain"})
+
+    def _kept_effect_message(self, request) -> ToolMessage:
+        name, _, call_id = _tool_call_parts(request)
+        previous = self.run.tool_outcomes[call_id]
+        content = previous.result if previous.result is not None else (previous.detail or "")
+        return ToolMessage(content=content, name=name or previous.name or "tool", tool_call_id=call_id,
+            status="error" if previous.outcome in {"failed", "uncertain"} else "success")
+
+    async def _finish_carried_effect(self, request, carried, attempt: int | None):
+        """Record one carried result, then store the delete's after inspection on that attempt."""
+        _, _, call_id = _tool_call_parts(request)
+        self._record_tool_result(request, carried, attempt)
+        with self._attempt_lock:
+            if not self._still_owns(call_id, attempt):
+                self._carried_effect.setdefault(call_id, carried)
+                raise ToolReservationReleased()
+        await asyncio.to_thread(self._capture_delete_after, request, attempt)
+        with self._attempt_lock:
+            if not self._still_owns(call_id, attempt):
+                self._carried_effect.setdefault(call_id, carried)
+                raise ToolReservationReleased()
+        return self._authorization_result(await asyncio.to_thread(self._offload_read_file_image, carried))
+
     def _note_file_batch(self, request, call_id: str, attempt: int | None = None) -> None:
         if not call_id:
             return
@@ -528,6 +558,9 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         if self._outcome_batch.get(call_id) != self._batch_marker(request):
             return False
         if self._outcome_attempt.get(call_id) != self._file_attempts.get(call_id, 0):
+            return False
+        if (previous.outcome == "succeeded" and previous.name == "delete"
+                and previous.evidence.get("expected_absent") and previous.evidence.get("after_inspected") is not True):
             return False
         if previous.outcome in {"succeeded", "failed"}:
             return True
@@ -684,12 +717,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                             raise ToolReservationReleased()
                         carried = self._take_carried_effect(call_id, attempt)
                         if carried is not None:
-                            self._record_tool_result(request, carried, attempt)
-                            with self._attempt_lock:
-                                if not self._still_owns(call_id, attempt):
-                                    self._carried_effect.setdefault(call_id, carried)
-                                    raise ToolReservationReleased()
-                            return self._authorization_result(await asyncio.to_thread(self._offload_read_file_image, carried))
+                            return await self._finish_carried_effect(request, carried, attempt)
                         await asyncio.to_thread(self._begin_tool, request, attempt)
                         if not self._owns_file_attempt(call_id, attempt):
                             raise ToolReservationReleased()
@@ -743,6 +771,24 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 except HarnessError as exc:
                     if exc.code == "duplicate_tool_call" and exc.details.get("inflight"):
                         await asyncio.sleep(0.02)
+                        continue
+                    if exc.code == "duplicate_tool_call" and attempt is not None and self._owns_file_attempt(call_id, attempt):
+                        # The id was completed for an older attempt. This attempt still runs once
+                        # unless its own effect is already carried or recorded.
+                        try:
+                            carried = self._take_carried_effect(call_id, attempt)
+                        except ToolReservationReleased:
+                            return ToolMessage(content="A later file call owns this attempt. This result was not recorded.",
+                                name=name or "tool", tool_call_id=call_id, status="error")
+                        if carried is not None:
+                            try:
+                                return await self._finish_carried_effect(request, carried, attempt)
+                            except ToolReservationReleased:
+                                return ToolMessage(content="A later file call owns this attempt. This result was not recorded.",
+                                    name=name or "tool", tool_call_id=call_id, status="error")
+                        if self._attempt_effect_kept(call_id, attempt):
+                            return self._kept_effect_message(request)
+                        self.execution_control.reopen_completed_tool(self.run, call_id)
                         continue
                     raise
                 except ToolReservationReleased:

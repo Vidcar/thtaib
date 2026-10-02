@@ -214,6 +214,11 @@ class ExecutionControl:
                 run.dispatched_tool_calls += 1
             self.publish()
 
+    def reopen_completed_tool(self, run: Any, call_id: str) -> None:
+        """Let a later file attempt reserve an id an older attempt already finished."""
+        with self._lock:
+            self._completed.discard(f"{run.id}:{call_id}")
+
     @contextmanager
     def tool_dispatch(self, run, call_id, name=""):
         from langgraph.errors import GraphInterrupt

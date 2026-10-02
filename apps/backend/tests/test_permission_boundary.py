@@ -1066,6 +1066,11 @@ class FileOrderTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(getattr(owned_ran, "content", None), "removed")
                 self.assertEqual(run.tool_outcomes["call_3"].outcome, "succeeded")
                 self.assertEqual(middleware._outcome_attempt.get("call_3"), middleware._file_attempts.get("call_3"))
+                carried_evidence = run.tool_outcomes["call_3"].evidence
+                self.assertTrue(carried_evidence.get("before_exists"))
+                self.assertTrue(carried_evidence.get("expected_absent"))
+                self.assertIs(carried_evidence.get("after_inspected"), True)
+                self.assertIs(carried_evidence.get("after_exists"), False)
                 self.assertEqual(saw_directory, [False])
                 self.assertEqual(getattr(written_ran, "status", None), "success")
                 self.assertEqual((project / "dir2" / "child.txt").read_text(encoding="utf-8"), "after")
@@ -1084,6 +1089,101 @@ class FileOrderTests(unittest.IsolatedAsyncioTestCase):
                     *([newer_ran] if newer_ran is not None else []),
                     *([write_ran] if write_ran is not None else []),
                     return_exceptions=True)
+
+    async def test_completed_id_does_not_fail_the_newer_attempt(self):
+        with tempfile.TemporaryDirectory() as area:
+            project = Path(area)
+            folder = project / "dir"
+            folder.mkdir()
+            (folder / "child.txt").write_text("before", encoding="utf-8")
+            (folder / "keep.txt").write_text("keep", encoding="utf-8")
+            run = _run(project_path=str(project), id="completed-id-newer-attempt")
+            middleware = WorkbenchHarnessMiddleware(run)
+            release_second = asyncio.Event()
+            saw_directory = []
+            handler_runs = []
+
+            async def effect(request):
+                name = request.tool_call["name"]
+                if name == "delete":
+                    handler_runs.append(request.tool_call["id"])
+                    if len(handler_runs) > 1:
+                        await release_second.wait()
+
+                    def remove():
+                        import shutil
+                        shutil.rmtree(project / request.tool_call["args"]["file_path"])
+
+                    await asyncio.to_thread(remove)
+                    return ToolMessage(content="removed", name=name, tool_call_id=request.tool_call["id"])
+
+                def observe():
+                    target = project / request.tool_call["args"]["file_path"]
+                    saw_directory.append(target.parent.exists())
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(request.tool_call["args"]["content"], encoding="utf-8")
+
+                await asyncio.to_thread(observe)
+                return ToolMessage(content="wrote", name=name, tool_call_id=request.tool_call["id"])
+
+            delete_call = {"name": "delete", "args": {"file_path": "dir"}, "id": "call_1", "type": "tool_call"}
+            message = AIMessage(content="", tool_calls=[delete_call])
+            state = {"messages": [message]}
+            first = asyncio.create_task(middleware.awrap_tool_call(
+                SimpleNamespace(tool_call=delete_call, runtime=SimpleNamespace(state=state)), effect))
+            newer = write_task = None
+            try:
+                first_result = await asyncio.wait_for(first, 5)
+                self.assertEqual(getattr(first_result, "status", None), "success")
+                self.assertEqual(handler_runs, ["call_1"])
+                self.assertEqual(run.tool_outcomes["call_1"].outcome, "succeeded")
+                self.assertIn(f"{run.id}:call_1", middleware.execution_control._completed)
+                folder.mkdir()
+                (folder / "child.txt").write_text("before", encoding="utf-8")
+                (folder / "keep.txt").write_text("keep", encoding="utf-8")
+                write_call = {"name": "write_file", "args": {"file_path": "dir/child.txt", "content": "after"}, "id": "call_2", "type": "tool_call"}
+                state["messages"].append(AIMessage(content="", tool_calls=[delete_call, write_call]))
+                newer = asyncio.create_task(middleware.awrap_tool_call(
+                    SimpleNamespace(tool_call=delete_call, runtime=SimpleNamespace(state=state)), effect))
+                await self._until(lambda: len(handler_runs) == 2 and not newer.done())
+                write_task = asyncio.create_task(middleware.awrap_tool_call(
+                    SimpleNamespace(tool_call=write_call, runtime=SimpleNamespace(state=state)), effect))
+                await asyncio.sleep(0.2)
+                self.assertFalse(write_task.done())
+                self.assertFalse(newer.done())
+                self.assertEqual(handler_runs, ["call_1", "call_1"])
+                self.assertNotEqual(getattr(run.tool_outcomes["call_1"], "result", None), "This file call did not run.")
+                self.assertFalse(middleware._call_settled["call_1"].is_set())
+                self.assertEqual(saw_directory, [])
+                self.assertEqual((folder / "child.txt").read_text(encoding="utf-8"), "before")
+                self.assertEqual((folder / "keep.txt").read_text(encoding="utf-8"), "keep")
+                release_second.set()
+                owned = await asyncio.wait_for(newer, 5)
+                written = await asyncio.wait_for(write_task, 5)
+            finally:
+                release_second.set()
+                for task in (first, newer, write_task):
+                    if task is not None and not task.done():
+                        task.cancel()
+                await asyncio.gather(
+                    first,
+                    *([newer] if newer is not None else []),
+                    *([write_task] if write_task is not None else []),
+                    return_exceptions=True)
+            self.assertEqual(handler_runs, ["call_1", "call_1"])
+            self.assertEqual(getattr(owned, "status", None), "success")
+            self.assertEqual(getattr(owned, "content", None), "removed")
+            self.assertEqual(run.tool_outcomes["call_1"].outcome, "succeeded")
+            self.assertNotEqual(run.tool_outcomes["call_1"].result, "This file call did not run.")
+            self.assertEqual(middleware._outcome_attempt.get("call_1"), middleware._file_attempts.get("call_1"))
+            evidence = run.tool_outcomes["call_1"].evidence
+            self.assertTrue(evidence.get("before_exists"))
+            self.assertIs(evidence.get("after_inspected"), True)
+            self.assertIs(evidence.get("after_exists"), False)
+            self.assertEqual(saw_directory, [False])
+            self.assertEqual(getattr(written, "status", None), "success")
+            self.assertEqual((project / "dir" / "child.txt").read_text(encoding="utf-8"), "after")
+            self.assertFalse((folder / "keep.txt").exists())
 
     async def _until(self, predicate, timeout: float = 5) -> None:
         deadline = asyncio.get_running_loop().time() + timeout
