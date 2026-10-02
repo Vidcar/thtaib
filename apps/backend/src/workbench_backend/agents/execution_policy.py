@@ -215,9 +215,11 @@ class ExecutionControl:
             self.publish()
 
     def reopen_completed_tool(self, run: Any, call_id: str) -> None:
-        """Let a later file attempt reserve an id an older attempt already finished."""
+        """A later file attempt is a new dispatch, so the tool budget applies again."""
         with self._lock:
-            self._completed.discard(f"{run.id}:{call_id}")
+            identity = f"{run.id}:{call_id}"
+            self._completed.discard(identity)
+            self._calls.discard(identity)
 
     @contextmanager
     def tool_dispatch(self, run, call_id, name=""):

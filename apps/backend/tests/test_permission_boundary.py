@@ -26,6 +26,7 @@ from workbench_backend.agents.helper_execution import _child_run_record, _narrow
 from workbench_backend.agents.host_shell import interrupt_on_for_run
 from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
 from workbench_backend.agents.schemas import (
+    AgentBudgets,
     AgentRun,
     AgentRunStatus,
     InterruptDecisionRequest,
@@ -1184,6 +1185,122 @@ class FileOrderTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(getattr(written, "status", None), "success")
             self.assertEqual((project / "dir" / "child.txt").read_text(encoding="utf-8"), "after")
             self.assertFalse((folder / "keep.txt").exists())
+
+    async def test_failed_inspection_does_not_hold_the_nested_write(self):
+        with tempfile.TemporaryDirectory() as area:
+            project = Path(area)
+            folder = project / "dir"
+            folder.mkdir()
+            (folder / "child.txt").write_text("before", encoding="utf-8")
+            (folder / "keep.txt").write_text("keep", encoding="utf-8")
+            run = _run(project_path=str(project), id="inspection-false")
+            middleware = WorkbenchHarnessMiddleware(run)
+            middleware._capture_delete_after = lambda request, attempt=None: None
+            saw_directory = []
+
+            async def effect(request):
+                name = request.tool_call["name"]
+                if name == "delete":
+                    def remove():
+                        import shutil
+                        shutil.rmtree(project / "dir")
+                    await asyncio.to_thread(remove)
+                    return ToolMessage(content="removed", name=name, tool_call_id=request.tool_call["id"])
+
+                def observe():
+                    target = project / request.tool_call["args"]["file_path"]
+                    saw_directory.append(target.parent.exists())
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(request.tool_call["args"]["content"], encoding="utf-8")
+
+                await asyncio.to_thread(observe)
+                return ToolMessage(content="wrote", name=name, tool_call_id=request.tool_call["id"])
+
+            delete_call = {"name": "delete", "args": {"file_path": "dir"}, "id": "call_1", "type": "tool_call"}
+            write_call = {"name": "write_file", "args": {"file_path": "dir/child.txt", "content": "after"}, "id": "call_2", "type": "tool_call"}
+            state = {"messages": [AIMessage(content="", tool_calls=[delete_call, write_call])]}
+            delete_task = asyncio.create_task(middleware.awrap_tool_call(
+                SimpleNamespace(tool_call=delete_call, runtime=SimpleNamespace(state=state)), effect))
+            write_task = asyncio.create_task(middleware.awrap_tool_call(
+                SimpleNamespace(tool_call=write_call, runtime=SimpleNamespace(state=state)), effect))
+            try:
+                await asyncio.wait_for(delete_task, 5)
+                self.assertEqual(run.tool_outcomes["call_1"].outcome, "succeeded")
+                self.assertNotIn("after_inspected", run.tool_outcomes["call_1"].evidence)
+                await asyncio.sleep(0.2)
+                self.assertFalse(write_task.done())
+                self.assertEqual(saw_directory, [])
+                previous = run.tool_outcomes["call_1"]
+                run.tool_outcomes["call_1"] = previous.model_copy(update={
+                    "evidence": {**previous.evidence, "after_inspected": False, "after_error": "inspection failed"}})
+                written = await asyncio.wait_for(write_task, 2)
+            finally:
+                if not write_task.done():
+                    write_task.cancel()
+                await asyncio.gather(delete_task, write_task, return_exceptions=True)
+            self.assertEqual(run.tool_outcomes["call_1"].outcome, "succeeded")
+            self.assertIs(run.tool_outcomes["call_1"].evidence.get("after_inspected"), False)
+            self.assertEqual(getattr(written, "status", None), "success")
+            self.assertEqual(saw_directory, [False])
+            self.assertEqual((project / "dir" / "child.txt").read_text(encoding="utf-8"), "after")
+
+    async def test_reused_file_id_stops_when_the_tool_budget_is_spent(self):
+        with tempfile.TemporaryDirectory() as area:
+            project = Path(area)
+            run = _run(project_path=str(project), id="budget-spent", budgets=AgentBudgets(max_tool_calls=1))
+            middleware = WorkbenchHarnessMiddleware(run)
+            handler_runs = []
+
+            async def effect(request):
+                handler_runs.append(request.tool_call["id"])
+                return ToolMessage(content=f"wrote-{len(handler_runs)}", name=request.tool_call["name"],
+                    tool_call_id=request.tool_call["id"])
+
+            call = {"name": "write_file", "args": {"file_path": "notes.txt", "content": "one"}, "id": "call_1", "type": "tool_call"}
+            state = {"messages": [AIMessage(content="", tool_calls=[call])]}
+            first = await middleware.awrap_tool_call(
+                SimpleNamespace(tool_call=call, runtime=SimpleNamespace(state=state)), effect)
+            self.assertEqual(getattr(first, "content", None), "wrote-1")
+            self.assertEqual(run.dispatched_tool_calls, 1)
+            self.assertEqual(run.tool_outcomes["call_1"].outcome, "succeeded")
+            self.assertEqual(middleware._outcome_attempt.get("call_1"), 1)
+            state["messages"].append(AIMessage(content="", tool_calls=[call]))
+            with self.assertRaises(HarnessError) as caught:
+                await middleware.awrap_tool_call(
+                    SimpleNamespace(tool_call=call, runtime=SimpleNamespace(state=state)), effect)
+            self.assertEqual(caught.exception.code, "tool_budget_exhausted")
+            self.assertEqual(handler_runs, ["call_1"])
+            self.assertEqual(run.dispatched_tool_calls, 1)
+            self.assertEqual(run.tool_outcomes["call_1"].outcome, "succeeded")
+            self.assertEqual(run.tool_outcomes["call_1"].result, "wrote-1")
+            self.assertEqual(middleware._outcome_attempt.get("call_1"), 1)
+
+    async def test_reused_file_id_counts_while_the_tool_budget_remains(self):
+        with tempfile.TemporaryDirectory() as area:
+            project = Path(area)
+            run = _run(project_path=str(project), id="budget-remains", budgets=AgentBudgets(max_tool_calls=2))
+            middleware = WorkbenchHarnessMiddleware(run)
+            handler_runs = []
+
+            async def effect(request):
+                handler_runs.append(request.tool_call["id"])
+                return ToolMessage(content=f"wrote-{len(handler_runs)}", name=request.tool_call["name"],
+                    tool_call_id=request.tool_call["id"])
+
+            call = {"name": "write_file", "args": {"file_path": "notes.txt", "content": "one"}, "id": "call_1", "type": "tool_call"}
+            state = {"messages": [AIMessage(content="", tool_calls=[call])]}
+            await middleware.awrap_tool_call(
+                SimpleNamespace(tool_call=call, runtime=SimpleNamespace(state=state)), effect)
+            self.assertEqual(run.dispatched_tool_calls, 1)
+            state["messages"].append(AIMessage(content="", tool_calls=[call]))
+            second = await middleware.awrap_tool_call(
+                SimpleNamespace(tool_call=call, runtime=SimpleNamespace(state=state)), effect)
+            self.assertEqual(getattr(second, "content", None), "wrote-2")
+            self.assertEqual(handler_runs, ["call_1", "call_1"])
+            self.assertEqual(run.dispatched_tool_calls, 2)
+            self.assertEqual(run.tool_outcomes["call_1"].outcome, "succeeded")
+            self.assertEqual(run.tool_outcomes["call_1"].result, "wrote-2")
+            self.assertEqual(middleware._outcome_attempt.get("call_1"), middleware._file_attempts.get("call_1"))
 
     async def _until(self, predicate, timeout: float = 5) -> None:
         deadline = asyncio.get_running_loop().time() + timeout

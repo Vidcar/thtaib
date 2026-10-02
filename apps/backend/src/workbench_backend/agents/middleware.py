@@ -559,8 +559,9 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             return False
         if self._outcome_attempt.get(call_id) != self._file_attempts.get(call_id, 0):
             return False
+        evidence = previous.evidence or {}
         if (previous.outcome == "succeeded" and previous.name == "delete"
-                and previous.evidence.get("expected_absent") and previous.evidence.get("after_inspected") is not True):
+                and evidence.get("expected_absent") and "after_inspected" not in evidence):
             return False
         if previous.outcome in {"succeeded", "failed"}:
             return True
@@ -795,11 +796,16 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                     return ToolMessage(content="A later file call owns this attempt. This result was not recorded.",
                         name=name or "tool", tool_call_id=call_id, status="error")
         finally:
+            refusing = sys.exc_info()[1]
             if call_id and attempt is not None and self._owns_file_attempt(call_id, attempt):
                 previous = self.run.tool_outcomes.get(call_id)
                 recorded = (previous is not None and self._outcome_attempt.get(call_id) == attempt
                     and previous.outcome in {"succeeded", "failed", "uncertain", "not_dispatched"})
-                if not recorded:
+                # A spent budget refuses this attempt. The older attempt's terminal row stays.
+                keep_older = (isinstance(refusing, HarnessError) and refusing.code == "tool_budget_exhausted"
+                    and previous is not None and self._outcome_attempt.get(call_id) != attempt
+                    and previous.outcome in {"succeeded", "failed", "uncertain"})
+                if not recorded and not keep_older:
                     self._record_tool_result(request, ToolMessage(
                         content="This file call did not run.", name=name or "tool", tool_call_id=call_id, status="error"), attempt)
             self._mark_call_settled(call_id, attempt)
