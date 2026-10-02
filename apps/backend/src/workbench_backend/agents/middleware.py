@@ -118,6 +118,8 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         self._outline_text = (run.project_outline or {}).get("snapshot_text", "")
         self._call_settled: dict[str, asyncio.Event] = {}
         self._file_attempts: dict[str, int] = {}
+        self._outcome_attempt: dict[str, int] = {}
+        self._outcome_batch: dict[str, tuple] = {}
 
     def wrap_model_call(
         self,
@@ -290,15 +292,18 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         self.run.activity_phase = "using_tools"
         self.execution_control.record_tool_outcome(self.run, ToolOutcome(call_id=call_id, name=name,
             outcome="running", recovery_action="inspect_effects", evidence=file_evidence(self.run, name, args), updated_at=utc_now()))
+        self._note_file_batch(request, call_id)
 
     def _record_tool_result(self, request, result):
         name, _, call_id = _tool_call_parts(request)
         previous = self.run.tool_outcomes.get(call_id)
         if name != "delete" and previous is not None and previous.outcome in {"succeeded", "failed"} and isinstance(result, ToolMessage) and previous.result == result.content:
+            self._note_file_batch(request, call_id)
             return
         self.execution_control.record_tool_outcome(self.run,
             result_outcome(call_id, name, result, previous.evidence if previous else {},
                 process_stopped=True if name in {"execute", "execute_skill_script"} and sys.platform == "win32" and self.run.tool_mode != ToolMode.recorded_tool else None))
+        self._note_file_batch(request, call_id)
         if self.run.project_path and name in {"write_file", "edit_file", "apply_edits", "execute", "execute_skill_script", "delete", "start_command", "command_status", "stop_command"}:
             self.outline_cache.invalidate(self.run.project_path)
 
@@ -382,15 +387,46 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             return None
         attempt = self._file_attempts.get(call_id, 0) + 1
         self._file_attempts[call_id] = attempt
+        # This attempt waits on a fresh event. A previous succeeded or failed
+        # row for the same id belongs to an older entry.
+        self._call_settled[call_id] = asyncio.Event()
         return attempt
+
+    def _note_file_batch(self, request, call_id: str) -> None:
+        if not call_id:
+            return
+        self._outcome_attempt[call_id] = self._file_attempts.get(call_id, 0)
+        marker = self._batch_marker(request)
+        if marker is not None:
+            self._outcome_batch[call_id] = marker
+
+    def _selected_batch_index(self, request) -> int:
+        _, _, call_id = _tool_call_parts(request)
+        selected = -1
+        for index, message in enumerate(self._request_messages(request)):
+            if not isinstance(message, AIMessage):
+                continue
+            calls = message.tool_calls or []
+            if any(isinstance(call, dict) and str(call.get("id")) == call_id for call in calls):
+                selected = index
+        return selected
+
+    def _batch_marker(self, request) -> tuple | None:
+        index = self._selected_batch_index(request)
+        if index < 0:
+            return None
+        message = self._request_messages(request)[index]
+        calls = tuple(
+            (str(call.get("id")), str(call.get("name")))
+            for call in (message.tool_calls or [])
+            if isinstance(call, dict)
+        )
+        return (index, calls)
 
     def _settled_event(self, call_id: str) -> asyncio.Event:
         event = self._call_settled.get(call_id)
         if event is None:
             event = asyncio.Event()
-            previous = self.run.tool_outcomes.get(call_id)
-            if previous is not None and previous.outcome != "running" and not self._approval_pause(previous):
-                event.set()
             self._call_settled[call_id] = event
         return event
 
@@ -404,7 +440,13 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         event.set()
 
     def _rejection_message(self, request, call_id: str) -> ToolMessage | None:
-        for message in self._request_messages(request):
+        """An error after the AIMessage this batch selected. Older turns are ignored."""
+        start = self._selected_batch_index(request)
+        if start < 0:
+            return None
+        for message in self._request_messages(request)[start + 1:]:
+            if isinstance(message, AIMessage):
+                break
             if (isinstance(message, ToolMessage) and str(getattr(message, "tool_call_id", "")) == call_id
                     and getattr(message, "status", None) == "error"):
                 return message
@@ -412,11 +454,19 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
 
     def _finish_rejected_file_call(self, request, call_id: str) -> None:
         """Record a rejected file call as failed. The approval step already skipped its effect."""
-        previous = self.run.tool_outcomes.get(call_id)
-        if previous is not None and previous.outcome != "not_dispatched":
-            return
         message = self._rejection_message(request, call_id)
         if message is None:
+            return
+        previous = self.run.tool_outcomes.get(call_id)
+        attempt = self._file_attempts.get(call_id, 0)
+        marker = self._batch_marker(request)
+        same_attempt = self._outcome_attempt.get(call_id) == attempt and self._outcome_batch.get(call_id) == marker
+        if same_attempt and previous is not None and previous.outcome == "running":
+            return
+        if same_attempt and previous is not None and previous.outcome == "failed":
+            self._mark_call_settled(call_id)
+            return
+        if same_attempt and previous is not None and previous.outcome not in {"not_dispatched", "failed"}:
             return
         detail = message.content if isinstance(message.content, str) else "User rejected this action. The tool was not executed."
         self.execution_control.record_tool_outcome(self.run, ToolOutcome(
@@ -424,20 +474,35 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             outcome="failed", failure_category="permission", recovery_action="continue",
             detail=str(detail)[:8000], result=message.content,
             evidence=previous.evidence if previous is not None else {}, updated_at=utc_now()))
+        self._note_file_batch(request, call_id)
         self._mark_call_settled(call_id)
+
+    def _attempt_effect_ready(self, request, call_id: str) -> bool:
+        """A succeeded or failed row counts only for the attempt that recorded it."""
+        previous = self.run.tool_outcomes.get(call_id)
+        if previous is None or self._approval_pause(previous):
+            return False
+        if self._outcome_batch.get(call_id) != self._batch_marker(request):
+            return False
+        if self._outcome_attempt.get(call_id) != self._file_attempts.get(call_id, 0):
+            return False
+        if previous.outcome in {"succeeded", "failed"}:
+            return True
+        event = self._call_settled.get(call_id)
+        return bool(event is not None and event.is_set() and previous.outcome != "running")
 
     async def _wait_for_earlier_file_calls(self, request) -> None:
         # Arrival order is not call order. An unanswered approval holds the
-        # later call. Reject records failed and releases it.
+        # later call. Reject records failed for this batch and releases it.
         for earlier in self._earlier_conflict_ids(request):
-            while True:
+            while not self._attempt_effect_ready(request, earlier):
                 self._finish_rejected_file_call(request, earlier)
-                previous = self.run.tool_outcomes.get(earlier)
-                if previous is not None and previous.outcome in {"succeeded", "failed"}:
+                if self._attempt_effect_ready(request, earlier):
                     break
                 event = self._settled_event(earlier)
-                if event.is_set() and not self._approval_pause(previous):
-                    break
+                if event.is_set():
+                    await asyncio.sleep(0.05)
+                    continue
                 try:
                     await asyncio.wait_for(event.wait(), 0.05)
                 except TimeoutError:
@@ -500,6 +565,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             failure_category=None if interrupted else "runtime", recovery_action="none" if interrupted else "inspect_effects",
             detail="Waiting for approval or an answer." if interrupted else str(exc),
             evidence=previous.evidence if previous else {}, updated_at=utc_now()))
+        self._note_file_batch(request, call_id)
         return None
 
     def _authorization_result(self, result):

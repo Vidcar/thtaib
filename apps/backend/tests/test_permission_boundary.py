@@ -763,6 +763,168 @@ class FileOrderTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((folder / "keep.txt").read_text(encoding="utf-8"), "keep")
             self.assertEqual((folder / "child.txt").read_text(encoding="utf-8"), "after")
 
+    async def test_old_error_with_a_reused_id_does_not_release_the_new_write(self):
+        from langgraph.errors import GraphInterrupt
+
+        with tempfile.TemporaryDirectory() as area:
+            project = Path(area)
+            folder = project / "dir"
+            folder.mkdir()
+            (folder / "child.txt").write_text("before", encoding="utf-8")
+            (folder / "keep.txt").write_text("keep", encoding="utf-8")
+            run = _run(project_path=str(project), id="reused-id-old-error")
+            middleware = WorkbenchHarnessMiddleware(run)
+            saw_directory = []
+
+            async def effect(request):
+                name = request.tool_call["name"]
+                if name == "delete":
+                    raise GraphInterrupt(())
+
+                def observe():
+                    saw_directory.append((project / "dir").exists())
+                    target = project / "dir" / "child.txt"
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(request.tool_call["args"]["content"], encoding="utf-8")
+
+                await asyncio.to_thread(observe)
+                return ToolMessage(content="wrote", name=name, tool_call_id=request.tool_call["id"])
+
+            new_calls = [
+                {"name": "delete", "args": {"file_path": "dir"}, "id": "call_1", "type": "tool_call"},
+                {"name": "write_file", "args": {"file_path": "dir/child.txt", "content": "after"}, "id": "call_2", "type": "tool_call"},
+            ]
+            state = {"messages": [
+                AIMessage(content="", tool_calls=[
+                    {"name": "delete", "args": {"file_path": "other"}, "id": "call_1", "type": "tool_call"},
+                ]),
+                ToolMessage(
+                    content="User rejected the tool call for `delete` with id call_1. The tool was not executed.",
+                    name="delete", tool_call_id="call_1", status="error"),
+                AIMessage(content="", tool_calls=new_calls),
+            ]}
+            requests = [SimpleNamespace(tool_call=call, runtime=SimpleNamespace(state=state)) for call in new_calls]
+            delete_task = asyncio.create_task(middleware.awrap_tool_call(requests[0], effect))
+            write_task = asyncio.create_task(middleware.awrap_tool_call(requests[1], effect))
+            try:
+                await self._until(lambda: getattr(run.tool_outcomes.get("call_1"), "outcome", None) == "not_dispatched")
+                await self._until(lambda: "call_1" in middleware._call_settled or saw_directory)
+                await asyncio.sleep(0.05)
+                self.assertEqual(run.tool_outcomes["call_1"].outcome, "not_dispatched")
+                self.assertEqual(run.tool_outcomes["call_1"].detail, "Waiting for approval or an answer.")
+                self.assertFalse(middleware._call_settled["call_1"].is_set())
+                self.assertFalse(write_task.done())
+                self.assertEqual(saw_directory, [])
+                self.assertEqual((folder / "child.txt").read_text(encoding="utf-8"), "before")
+                self.assertEqual((folder / "keep.txt").read_text(encoding="utf-8"), "keep")
+            finally:
+                for task in (delete_task, write_task):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(delete_task, write_task, return_exceptions=True)
+
+    async def test_later_attempt_after_rejection_waits_for_its_own_effect(self):
+        from langgraph.errors import GraphInterrupt
+
+        with tempfile.TemporaryDirectory() as area:
+            project = Path(area)
+            folder = project / "dir"
+            folder.mkdir()
+            (folder / "child.txt").write_text("before", encoding="utf-8")
+            (folder / "keep.txt").write_text("keep", encoding="utf-8")
+            run = _run(project_path=str(project), id="reused-id-next-attempt")
+            middleware = WorkbenchHarnessMiddleware(run)
+            release = asyncio.Event()
+            saw_directory = []
+
+            async def effect(request):
+                name = request.tool_call["name"]
+                if name == "delete":
+                    if not release.is_set():
+                        raise GraphInterrupt(())
+
+                    def remove():
+                        import shutil
+                        shutil.rmtree(project / "dir")
+
+                    await asyncio.to_thread(remove)
+                    return ToolMessage(content="removed", name=name, tool_call_id=request.tool_call["id"])
+
+                def observe():
+                    saw_directory.append((project / "dir").exists())
+                    target = project / "dir" / "child.txt"
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(request.tool_call["args"]["content"], encoding="utf-8")
+
+                await asyncio.to_thread(observe)
+                return ToolMessage(content="wrote", name=name, tool_call_id=request.tool_call["id"])
+
+            first_calls = [
+                {"name": "delete", "args": {"file_path": "dir"}, "id": "call_1", "type": "tool_call"},
+                {"name": "write_file", "args": {"file_path": "dir/child.txt", "content": "after"}, "id": "call_2", "type": "tool_call"},
+            ]
+            state = {"messages": [AIMessage(content="", tool_calls=first_calls)]}
+            first_requests = [SimpleNamespace(tool_call=call, runtime=SimpleNamespace(state=state)) for call in first_calls]
+            delete_task = asyncio.create_task(middleware.awrap_tool_call(first_requests[0], effect))
+            write_task = asyncio.create_task(middleware.awrap_tool_call(first_requests[1], effect))
+            later_delete = later_write = resumed = written = None
+            try:
+                await self._until(lambda: getattr(run.tool_outcomes.get("call_1"), "outcome", None) == "not_dispatched")
+                state["messages"].append(ToolMessage(
+                    content="User rejected the tool call for `delete` with id call_1. The tool was not executed.",
+                    name="delete", tool_call_id="call_1", status="error"))
+                written = await asyncio.wait_for(write_task, 5)
+                with self.assertRaises(GraphInterrupt):
+                    await asyncio.wait_for(delete_task, 5)
+                self.assertEqual(run.tool_outcomes["call_1"].outcome, "failed")
+                self.assertTrue(middleware._call_settled["call_1"].is_set())
+                self.assertEqual(saw_directory, [True])
+                self.assertEqual((folder / "keep.txt").read_text(encoding="utf-8"), "keep")
+                (folder / "child.txt").write_text("before", encoding="utf-8")
+                saw_directory.clear()
+
+                later_calls = [
+                    {"name": "delete", "args": {"file_path": "dir"}, "id": "call_1", "type": "tool_call"},
+                    {"name": "write_file", "args": {"file_path": "dir/child.txt", "content": "later"}, "id": "call_3", "type": "tool_call"},
+                ]
+                state["messages"].append(AIMessage(content="", tool_calls=later_calls))
+                later_requests = [SimpleNamespace(tool_call=call, runtime=SimpleNamespace(state=state)) for call in later_calls]
+                later_delete = asyncio.create_task(middleware.awrap_tool_call(later_requests[0], effect))
+                await self._until(lambda: (
+                    getattr(run.tool_outcomes.get("call_1"), "outcome", None) == "not_dispatched"
+                    and middleware._file_attempts.get("call_1", 0) >= 2
+                    and "call_1" in middleware._call_settled
+                    and not middleware._call_settled["call_1"].is_set()))
+                with self.assertRaises(GraphInterrupt):
+                    await asyncio.wait_for(later_delete, 5)
+                later_write = asyncio.create_task(middleware.awrap_tool_call(later_requests[1], effect))
+                await asyncio.sleep(0.05)
+                self.assertEqual(run.tool_outcomes["call_1"].outcome, "not_dispatched")
+                self.assertFalse(middleware._call_settled["call_1"].is_set())
+                self.assertFalse(later_write.done())
+                self.assertEqual(saw_directory, [])
+                self.assertEqual((folder / "child.txt").read_text(encoding="utf-8"), "before")
+                self.assertEqual((folder / "keep.txt").read_text(encoding="utf-8"), "keep")
+                release.set()
+                resumed = await asyncio.wait_for(middleware.awrap_tool_call(later_requests[0], effect), 5)
+                written = await asyncio.wait_for(later_write, 5)
+            finally:
+                release.set()
+                for task in (delete_task, write_task, later_delete, later_write):
+                    if task is not None and not task.done():
+                        task.cancel()
+                await asyncio.gather(
+                    delete_task, write_task,
+                    *([later_delete] if later_delete is not None else []),
+                    *([later_write] if later_write is not None else []),
+                    return_exceptions=True)
+            self.assertEqual(getattr(resumed, "status", None), "success")
+            self.assertEqual(run.tool_outcomes["call_1"].outcome, "succeeded")
+            self.assertEqual(saw_directory, [False])
+            self.assertEqual(getattr(written, "status", None), "success")
+            self.assertEqual((project / "dir" / "child.txt").read_text(encoding="utf-8"), "later")
+            self.assertFalse((folder / "keep.txt").exists())
+
     async def _until(self, predicate, timeout: float = 5) -> None:
         deadline = asyncio.get_running_loop().time() + timeout
         while asyncio.get_running_loop().time() < deadline:
