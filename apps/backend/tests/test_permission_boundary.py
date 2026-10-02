@@ -1253,6 +1253,8 @@ class FileOrderTests(unittest.IsolatedAsyncioTestCase):
 
             async def effect(request):
                 handler_runs.append(request.tool_call["id"])
+                target = project / request.tool_call["args"]["file_path"]
+                target.write_text(request.tool_call["args"]["content"], encoding="utf-8")
                 return ToolMessage(content=f"wrote-{len(handler_runs)}", name=request.tool_call["name"],
                     tool_call_id=request.tool_call["id"])
 
@@ -1261,19 +1263,36 @@ class FileOrderTests(unittest.IsolatedAsyncioTestCase):
             first = await middleware.awrap_tool_call(
                 SimpleNamespace(tool_call=call, runtime=SimpleNamespace(state=state)), effect)
             self.assertEqual(getattr(first, "content", None), "wrote-1")
+            self.assertEqual((project / "notes.txt").read_text(encoding="utf-8"), "one")
             self.assertEqual(run.dispatched_tool_calls, 1)
             self.assertEqual(run.tool_outcomes["call_1"].outcome, "succeeded")
             self.assertEqual(middleware._outcome_attempt.get("call_1"), 1)
-            state["messages"].append(AIMessage(content="", tool_calls=[call]))
-            with self.assertRaises(HarnessError) as caught:
-                await middleware.awrap_tool_call(
-                    SimpleNamespace(tool_call=call, runtime=SimpleNamespace(state=state)), effect)
-            self.assertEqual(caught.exception.code, "tool_budget_exhausted")
+            overlap = {"name": "write_file", "args": {"file_path": "notes.txt", "content": "changed"}, "id": "call_2", "type": "tool_call"}
+            state["messages"].append(AIMessage(content="", tool_calls=[call, overlap]))
+            refused = asyncio.create_task(middleware.awrap_tool_call(
+                SimpleNamespace(tool_call=call, runtime=SimpleNamespace(state=state)), effect))
+            waiting = asyncio.create_task(middleware.awrap_tool_call(
+                SimpleNamespace(tool_call=overlap, runtime=SimpleNamespace(state=state)), effect))
+            try:
+                refused_result, waiting_result = await asyncio.wait_for(
+                    asyncio.gather(refused, waiting, return_exceptions=True), 5)
+            finally:
+                for task in (refused, waiting):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(refused, waiting, return_exceptions=True)
+            self.assertIsInstance(refused_result, HarnessError)
+            self.assertEqual(refused_result.code, "tool_budget_exhausted")
+            self.assertIsInstance(waiting_result, HarnessError)
+            self.assertEqual(waiting_result.code, "tool_budget_exhausted")
+            self.assertTrue(middleware._attempt_effect_ready(
+                SimpleNamespace(tool_call=overlap, runtime=SimpleNamespace(state=state)), "call_1"))
             self.assertEqual(handler_runs, ["call_1"])
             self.assertEqual(run.dispatched_tool_calls, 1)
             self.assertEqual(run.tool_outcomes["call_1"].outcome, "succeeded")
             self.assertEqual(run.tool_outcomes["call_1"].result, "wrote-1")
             self.assertEqual(middleware._outcome_attempt.get("call_1"), 1)
+            self.assertEqual((project / "notes.txt").read_text(encoding="utf-8"), "one")
 
     async def test_reused_file_id_counts_while_the_tool_budget_remains(self):
         with tempfile.TemporaryDirectory() as area:

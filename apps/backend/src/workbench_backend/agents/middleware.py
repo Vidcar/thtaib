@@ -124,6 +124,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         self._outcome_batch: dict[str, tuple] = {}
         self._attempt_lock = threading.RLock()
         self._carried_effect: dict[str, Any] = {}
+        self._budget_refused: dict[str, tuple] = {}
 
     def wrap_model_call(
         self,
@@ -552,6 +553,9 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
 
     def _attempt_effect_ready(self, request, call_id: str) -> bool:
         """A succeeded or failed row counts only for the attempt that recorded it."""
+        refusal = self._budget_refused.get(call_id)
+        if refusal == (self._file_attempts.get(call_id, 0), self._batch_marker(request)):
+            return True
         previous = self.run.tool_outcomes.get(call_id)
         if previous is None or self._approval_pause(previous):
             return False
@@ -805,6 +809,9 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 keep_older = (isinstance(refusing, HarnessError) and refusing.code == "tool_budget_exhausted"
                     and previous is not None and self._outcome_attempt.get(call_id) != attempt
                     and previous.outcome in {"succeeded", "failed", "uncertain"})
+                if keep_older:
+                    self._budget_refused[call_id] = (attempt, self._batch_marker(request))
+                    self._settled_event(call_id).set()
                 if not recorded and not keep_older:
                     self._record_tool_result(request, ToolMessage(
                         content="This file call did not run.", name=name or "tool", tool_call_id=call_id, status="error"), attempt)
