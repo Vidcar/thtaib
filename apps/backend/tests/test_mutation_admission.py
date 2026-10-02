@@ -214,13 +214,13 @@ async def _contended_native_and_apply() -> None:
 
 
 async def _cancel_queued_and_settling() -> None:
-    from workbench_backend.agents.file_operations import project_mutation_lock
+    from workbench_backend.agents.file_operations import file_order_lock, file_order_path
     from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
 
     with tempfile.TemporaryDirectory() as area:
         project = Path(area)
         middleware = WorkbenchHarnessMiddleware(_run(project, ["write_file"]))
-        lease = project_mutation_lock(project)
+        lease = file_order_lock(file_order_path(project, "holder.txt"))
         started, release = threading.Event(), threading.Event()
 
         async def holder():
@@ -240,20 +240,24 @@ async def _cancel_queued_and_settling() -> None:
         holding = asyncio.create_task(holder())
         if not await asyncio.to_thread(started.wait, 5):
             raise AssertionError("admitted holder did not start")
-        queued = [asyncio.create_task(_write(middleware, project, f"queued-{index}.txt", f"queued-{index}")) for index in range(6)]
+        other = asyncio.create_task(_write(middleware, project, "other.txt", "other", "other"))
+        await asyncio.wait_for(other, timeout=5)
+        if (project / "other.txt").read_text(encoding="utf-8") != "other":
+            raise AssertionError("a different file waited behind the held file")
+        queued = [asyncio.create_task(_write(middleware, project, "holder.txt", f"queued-{index}", f"queued-{index}")) for index in range(6)]
         for _ in range(50):
             if lease.waiting() >= 6:
                 break
             await asyncio.sleep(0.02)
         if lease.waiting() < 6:
-            raise AssertionError(f"expected queued waiters, saw {lease.waiting()}")
+            raise AssertionError(f"expected same-file waiters, saw {lease.waiting()}")
         for task in queued:
             task.cancel()
         queued_done = await asyncio.wait_for(asyncio.gather(*queued, return_exceptions=True), timeout=3)
         if not all(isinstance(item, asyncio.CancelledError) for item in queued_done):
             raise AssertionError(f"queued cancellation did not finish cleanly: {queued_done!r}")
-        if any((project / f"queued-{index}.txt").exists() for index in range(6)):
-            raise AssertionError("cancelled queued mutation wrote a file")
+        if (project / "holder.txt").exists():
+            raise AssertionError("cancelled same-file waiter wrote before the holder")
         if lease.acquire(blocking=False):
             lease.release()
             raise AssertionError("queued cancellation released the admitted holder")
@@ -268,7 +272,7 @@ async def _cancel_queued_and_settling() -> None:
         # Cancellation while the admitted worker is still inside its effect.
         # A fresh run avoids the unconfirmed-effect guard left by the queued cancels.
         middleware = WorkbenchHarnessMiddleware(_run(project, ["write_file"]))
-        lease = project_mutation_lock(project)
+        lease = file_order_lock(file_order_path(project, "settling.txt"))
         entered, finish = threading.Event(), threading.Event()
 
         async def settling():
@@ -385,7 +389,7 @@ async def _failure_approval_and_revocation() -> None:
 
 
 async def _read_and_other_project_continue() -> None:
-    from workbench_backend.agents.file_operations import project_mutation_lock
+    from workbench_backend.agents.file_operations import file_order_lock, file_order_path
     from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
 
     with tempfile.TemporaryDirectory() as area:
@@ -395,7 +399,8 @@ async def _read_and_other_project_continue() -> None:
         second.mkdir()
         held = WorkbenchHarnessMiddleware(_run(first, ["write_file", "read_file"]))
         other = WorkbenchHarnessMiddleware(_run(second, ["write_file"]))
-        lease = project_mutation_lock(first)
+        neighbor = WorkbenchHarnessMiddleware(_run(first, ["write_file"], "neighbor"))
+        lease = file_order_lock(file_order_path(first, "busy.txt"))
         started, release = threading.Event(), threading.Event()
 
         async def holder():
@@ -420,21 +425,32 @@ async def _read_and_other_project_continue() -> None:
             request = _request("read_file", {"file_path": "busy.txt"}, "read")
 
             async def handler(_request):
-                return _message("read_file", "read", "readable")
+                def work():
+                    return _message("read_file", "read", (first / "busy.txt").read_text(encoding="utf-8"))
+                return await asyncio.to_thread(work)
 
             return await held.awrap_tool_call(request, handler)
 
-        read_result, other_result = await asyncio.wait_for(asyncio.gather(
-            read(), _write(other, second, "elsewhere.txt", "elsewhere", "elsewhere")), timeout=5)
-        if getattr(read_result, "content", "") != "readable":
-            raise AssertionError("read waited behind a project mutation")
+        await asyncio.wait_for(asyncio.gather(
+            _write(other, second, "elsewhere.txt", "elsewhere", "elsewhere"),
+            _write(neighbor, first, "neighbor.txt", "neighbor", "neighbor"),
+        ), timeout=5)
         if (second / "elsewhere.txt").read_text(encoding="utf-8") != "elsewhere":
             raise AssertionError("another project did not continue")
+        if (first / "neighbor.txt").read_text(encoding="utf-8") != "neighbor":
+            raise AssertionError("a different file in the same folder did not continue")
         if lease.acquire(blocking=False):
             lease.release()
-            raise AssertionError("the busy project was not still admitted")
+            raise AssertionError("the busy file was not still admitted")
+        reading = asyncio.create_task(read())
+        await asyncio.sleep(0.05)
+        if reading.done():
+            raise AssertionError("a read of the file being written did not wait")
         release.set()
         await asyncio.wait_for(blocking, timeout=5)
+        read_result = await asyncio.wait_for(reading, timeout=5)
+        if getattr(read_result, "content", "") != "busy":
+            raise AssertionError("the waiting read did not see the new bytes")
 
 
 async def _lease_is_reusable_after_contention() -> None:

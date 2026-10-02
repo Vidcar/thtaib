@@ -36,10 +36,12 @@ class AgentUpgradeIntegrationTests(unittest.TestCase):
         policy = {"tool_loading": "when_needed", "pinned_tools": ["desktop_inspect"]}
         request = {"deployment_id": self.deployment_id, "task": "Inspect the selected window", "source_surface": "chat",
             "thread_id": "thread-one", "presented_tools": ["desktop_inspect"], "desktop_access": "selected", "input_policy": policy}
-        refused = self.client.post("/v1/agent-runs", json=request)
-        self.assertEqual(refused.status_code, 409, refused.text)
-        self.assertEqual(refused.json()["code"], "desktop_grant_required")
+        started_without_window = self.client.post("/v1/agent-runs", json=request)
+        self.assertEqual(started_without_window.status_code, 200, started_without_window.text)
+        unfinished = test_harness.wait_for_run(self.client, started_without_window.json()["id"])
+        self.assertEqual(unfinished["status"], "completed", unfinished.get("error"))
         self.assertEqual(fixture.commands, [])
+        self.assertIsNone(unfinished["desktop_window"])
         fixture.service.set_scope("thread-one", "selected", hwnd=101)
         started = self.client.post("/v1/agent-runs", json=request)
         self.assertEqual(started.status_code, 200, started.text)
@@ -228,8 +230,8 @@ class MutationCancellationTests(unittest.IsolatedAsyncioTestCase):
             runtime=SimpleNamespace(state={"messages": []}))
 
     async def test_queued_cancellation_does_not_steal_or_strand_the_lease(self):
-        from workbench_backend.agents.file_operations import project_mutation_lock
-        lock = project_mutation_lock(self.project)
+        from workbench_backend.agents.file_operations import file_order_lock, file_order_path
+        lock = file_order_lock(file_order_path(self.project, "file.txt"))
         self.assertTrue(lock.acquire(blocking=False))
         called = []
         async def handler(request):
@@ -255,8 +257,8 @@ class MutationCancellationTests(unittest.IsolatedAsyncioTestCase):
         lock.release()
 
     async def test_repeated_cancellation_keeps_lease_until_native_worker_settles(self):
-        from workbench_backend.agents.file_operations import project_mutation_lock
-        lock = project_mutation_lock(self.project)
+        from workbench_backend.agents.file_operations import file_order_lock, file_order_path
+        lock = file_order_lock(file_order_path(self.project, "file.txt"))
         entered, release = threading.Event(), threading.Event()
         def native_work():
             entered.set()

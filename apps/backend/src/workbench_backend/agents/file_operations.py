@@ -39,7 +39,7 @@ class _MutationWaiter:
 
 
 class ProjectMutationLease:
-    """Per-project gate whose asynchronous waiters do not occupy worker threads.
+    """Per-path gate whose asynchronous waiters do not occupy worker threads.
 
     The mutex covers only the queue. An async waiter parks on a Future and a
     synchronous caller parks on an Event. Release transfers ownership in FIFO
@@ -162,8 +162,22 @@ class ApplyEditsInput(BaseModel):
 
 
 def project_mutation_lock(project: Path) -> ProjectMutationLease:
-    """Serialize custom and native project mutations across graphs/helpers."""
-    key = str(canonical_root(project))
+    """Lease for one canonical path. Callers order a file, not a whole folder."""
+    return file_order_lock(project)
+
+
+def file_order_path(project: Path, file_path: str):
+    """Canonical key for one project-relative file. The folder itself is not a key."""
+    normalized = str(file_path).replace("\\", "/").lstrip("/")
+    parts = PurePosixPath(normalized).parts
+    if not parts or any(part in {".", ".."} for part in parts):
+        raise ValueError("File order needs one project-relative path.")
+    return canonical_root(Path(project).resolve().joinpath(*parts))
+
+
+def file_order_lock(path: Path) -> ProjectMutationLease:
+    """Serialize readers and writers of one file. A different file does not wait."""
+    key = str(canonical_root(path))
     with _lock_guard:
         current = _locks.get(key)
         if current is None:
@@ -200,7 +214,7 @@ def apply_edits_tool(run, *, cancel_requested=None):
                 or "apply_edits" not in run.enabled_tools or run.work_mode == "plan"):
             raise HarnessError("Structured edits require selected Work-mode project access.", code="tool_not_selected", status_code=403)
         target = project_file(Path(run.project_path), file_path)
-        with project_mutation_lock(Path(run.project_path)):
+        with file_order_lock(file_order_path(Path(run.project_path), file_path)):
             if not target.is_file() or target.stat().st_size > MAX_EDIT_BYTES:
                 raise HarnessError(f"Choose an existing UTF-8 text file of at most {MAX_EDIT_BYTES} bytes.", code="edit_file_size", status_code=400)
             original = target.read_bytes()

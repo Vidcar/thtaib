@@ -1,9 +1,7 @@
-"""Project-family exclusion policy; scheduling remains in the saved Chat queue."""
+"""Shared-folder admission. File order is per path, not a project owner."""
 
-import threading
 from typing import Any
 
-from workbench_backend.agents.harness_backend import roots_overlap
 from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
 
 
@@ -22,15 +20,6 @@ def root_runs(runs):
 
 
 def project_blocker_locked(admissions, store, runs, project_path: str) -> dict[str, Any] | None:
-    """Find an overlapping owner. The caller holds the harness lock."""
-
-    for _token, (path, owner_thread) in admissions.items():
-        if owner_thread != threading.get_ident() and roots_overlap(project_path, path):
-            return {"run_id": None, "thread_id": None, "task": "Starting another task", "project_path": path, "uncertain": False}
-    stored = {item.id: item for item in store.list_run_lifecycle()}
-    stored.update(runs)
-    for run in root_runs(list(stored.values())):
-        if run.project_path and holds_project(run) and roots_overlap(project_path, run.project_path):
-            return {"run_id": run.id, "thread_id": run.thread_id, "task": run.task[:160],
-                    "project_path": run.project_path, "uncertain": not is_run_lifecycle_live(run.status)}
+    """The folder is shared. Order is per file, so no chat owns the folder."""
+    del admissions, store, runs, project_path
     return None

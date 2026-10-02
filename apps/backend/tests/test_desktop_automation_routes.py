@@ -104,9 +104,8 @@ class DesktopAutomationRouteTests(unittest.TestCase):
         self.assertFalse(selected.json()["stale"])
         self.assertEqual(self.client.get(base).json()["scope"], "selected")
         broad = self.client.put(base, json={"scope": "all"})
-        self.assertEqual(broad.status_code, 200)
-        self.assertEqual(broad.json()["scope"], "all")
-        self.assertIsNone(broad.json()["selected_window"])
+        self.assertEqual(broad.status_code, 400)
+        self.assertEqual(broad.json()["code"], "desktop_invalid_arguments")
         cleared = self.client.put(base, json={"scope": "off"})
         self.assertEqual(cleared.status_code, 200)
         self.assertEqual(cleared.json()["scope"], "off")
@@ -128,8 +127,8 @@ class DesktopAutomationRouteTests(unittest.TestCase):
         self.assertIsNone(stale.json()["selected_window"])
         self.runtime.enabled = False
         unavailable = self.client.put(base, json={"scope": "all"})
-        self.assertEqual(unavailable.status_code, 409)
-        self.assertEqual(unavailable.json()["code"], "desktop_runtime_unavailable")
+        self.assertEqual(unavailable.status_code, 400)
+        self.assertEqual(unavailable.json()["code"], "desktop_invalid_arguments")
 
 
 if __name__ == "__main__":

@@ -129,7 +129,7 @@ class HelperRecoveryTests(unittest.TestCase):
         self.assertEqual(set(saved.tool_outcomes), {"write"})
         self.assertIsNone(saved.activity_phase)
         self.assertEqual((self.folder / "child.txt").read_text(), "partial unexpected bytes")
-        self.assertIsNotNone(self.app.state.harness.project_blocker(str(self.folder)))
+        self.assertIsNone(self.app.state.harness.project_blocker(str(self.folder)))
 
 
 class HelperContextTests(unittest.TestCase):

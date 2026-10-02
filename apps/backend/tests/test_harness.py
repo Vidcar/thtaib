@@ -729,21 +729,18 @@ class HarnessApiTests(unittest.TestCase):
         )
         first = self._start(project_path=str(project), presented_tools=["echo"])
         wait_for_status(self.client, first["id"], "running")
-        with patch.object(self.manager, "ensure_deployment_ready", wraps=self.manager.ensure_deployment_ready) as loaded:
-            second = self.client.post("/v1/agent-runs", json={"deployment_id": self.deployment_id,
-                "project_path": str(project), "presented_tools": ["echo"], "task": "A conflicting task"})
-            self.assertEqual(second.status_code, 409, second.text)
-            self.assertEqual(second.json()["code"], "project_busy")
-            self.assertEqual(second.json()["run_id"], first["id"])
-            loaded.assert_not_called()
+        second = self.client.post("/v1/agent-runs", json={"deployment_id": self.deployment_id,
+            "project_path": str(project), "presented_tools": ["echo"], "task": "A second task in this folder"})
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertNotEqual(second.json()["id"], first["id"])
         held_workspace = self._start(workspace_id=workspace.id, presented_tools=["echo"], task="Hold the workspace.")
         wait_for_status(self.client, held_workspace["id"], "running")
         another_workspace = self.client.post("/v1/agent-runs", json={"deployment_id": self.deployment_id,
             "workspace_id": workspace.id, "presented_tools": ["echo"], "task": "Another task in this workspace"})
-        self.assertEqual(another_workspace.status_code, 409, another_workspace.text)
-        self.assertEqual(another_workspace.json()["code"], "project_busy")
+        self.assertEqual(another_workspace.status_code, 200, another_workspace.text)
+        self.assertNotEqual(another_workspace.json()["id"], held_workspace["id"])
         hold.set()
-        for run_id in (first["id"], held_workspace["id"]):
+        for run_id in (first["id"], second.json()["id"], held_workspace["id"], another_workspace.json()["id"]):
             self.assertEqual(wait_for_run(self.client, run_id)["status"], "completed")
 
     def test_cancel_stops_a_running_task(self) -> None:

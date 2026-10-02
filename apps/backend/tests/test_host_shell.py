@@ -253,7 +253,7 @@ class HostShellPolicyTests(unittest.TestCase):
             tool_call = {"name": "execute", "args": {"command": "echo no-project"}}
 
         self.assertTrue(free_gate["execute"]["when"](_FreeReq()))  # type: ignore[index]
-        self.assertIn("resolved user profile", str(free_gate["execute"]["description"]))
+        self.assertIn(str(Path.home().resolve()), str(free_gate["execute"]["description"]))
 
     def test_pending_interrupt_and_decisions(self) -> None:
         pending = pending_interrupt_from_raw(

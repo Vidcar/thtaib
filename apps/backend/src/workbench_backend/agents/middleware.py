@@ -313,11 +313,17 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             raise ToolException(str(exc)) from exc
 
     def _native_mutation_lock(self, request):
-        name, _, _ = _tool_call_parts(request)
-        if self.fixture_bank is None and self.run.project_path and name in {"write_file", "edit_file", "delete", "apply_edits"}:
-            from workbench_backend.agents.file_operations import project_mutation_lock
-            return project_mutation_lock(Path(self.run.project_path))
-        return None
+        name, args, _ = _tool_call_parts(request)
+        if self.fixture_bank is not None or not self.run.project_path or name not in {"write_file", "edit_file", "delete", "apply_edits", "read_file"}:
+            return None
+        value = args.get("file_path") if isinstance(args.get("file_path"), str) else args.get("path")
+        if not isinstance(value, str) or not value.strip():
+            return None
+        from workbench_backend.agents.file_operations import file_order_lock, file_order_path
+        try:
+            return file_order_lock(file_order_path(Path(self.run.project_path), value))
+        except (OSError, RuntimeError, ValueError):
+            return None
 
     def _capture_delete_after(self, request):
         name, args, call_id = _tool_call_parts(request)

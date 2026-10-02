@@ -18,7 +18,7 @@ function actionTitle(action: PendingInterruptAction): string {
 }
 
 function actionWorkingFolder(action: PendingInterruptAction): string | null {
-  const cwd = action.args.cwd ?? action.args.working_directory ?? action.args.workdir;
+  const cwd = action.args.starting_folder ?? action.args.cwd ?? action.args.working_directory ?? action.args.workdir;
   return typeof cwd === "string" && cwd.trim() ? cwd : null;
 }
 

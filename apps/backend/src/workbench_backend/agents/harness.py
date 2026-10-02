@@ -370,17 +370,13 @@ class HarnessService:
 
     @contextmanager
     def project_admission(self, project_path: str | None):
-        """Reserve before model preparation; durable run state then owns the root."""
+        """Record the start. Several chats may use one folder; file order is per path."""
         self._reconcile_startup_once()
         if not project_path:
             yield
             return
         token = new_id("admission")
         with self._lock:
-            blocker = project_blocker_locked(self._project_admissions, self.store, self._runs, project_path)
-            if blocker is not None:
-                raise HarnessError("Another task owns this project. Wait for it to finish or resolve its unconfirmed effects before starting this task.",
-                    code="project_busy", status_code=409, details=blocker)
             self._project_admissions[token] = (project_path, threading.get_ident())
         try:
             yield
@@ -389,7 +385,7 @@ class HarnessService:
                 self._project_admissions.pop(token, None)
                 available = self._project_available_observer is not None and not any(
                     roots_overlap(project_path, path) for path, _owner in self._project_admissions.values()
-                ) and project_blocker_locked(self._project_admissions, self.store, self._runs, project_path) is None
+                )
             if available:
                 # Notify the existing queue owner only after the outermost
                 # reservation is free. A live run retains its terminal wake.
@@ -407,11 +403,11 @@ class HarnessService:
         return request.project_path
 
     def require_thread_effects_confirmed(self, thread_id: str | None) -> None:
-        """A new run cannot bypass an earlier unconfirmed action on its thread.
+        """A new run cannot bypass an earlier unconfirmed action on its own thread.
 
-        Project exclusion additionally protects other chats sharing files. This
-        continuation boundary also covers browser, desktop and external tools
-        in projectless chats. Existing interrupt resumes keep their owned run.
+        Other chats may use the same folder. This continuation boundary also
+        covers browser, desktop and external tools in projectless chats.
+        Existing interrupt resumes keep their owned run.
         """
         self._reconcile_startup_once()
         if not thread_id:
@@ -676,7 +672,7 @@ class HarnessService:
                     code=code,
                     status_code=400,
                 ) from exc
-            from workbench_backend.state.preferences import PreferenceStore
+            from workbench_backend.state.preferences import PreferenceStore, chat_confirmation_thread
             grants = PreferenceStore(self.store)
             for action, decision in zip(pending.action_requests, request.decisions, strict=True):
                 if decision.type != "approve":
@@ -687,7 +683,10 @@ class HarnessService:
                         code="interrupt_tool_unavailable",
                         status_code=409,
                     )
-                if decision.scope != "once":
+                if action.name == "execute" and chat_confirmation_thread(run):
+                    grants.confirm_host_shell(run.thread_id)
+                # An excluded file is one edit. Session and Always allow do not widen the grant.
+                if decision.scope != "once" and not grants.excluded_file_edit(run, action.name, action.args):
                     grants.allow(run, action, decision.scope)
             thread = self._threads.get(run_id)
             if thread is not None and thread.is_alive():
@@ -1103,8 +1102,10 @@ class HarnessService:
         )
 
     def _publish_interrupt(self, run: AgentRun, pending: Any) -> None:
-        if isinstance(pending, PendingInterrupt) and not pending.interrupt_id:
-            pending = pending.model_copy(update={"interrupt_id": _fallback_interrupt_id(run)})
+        if isinstance(pending, PendingInterrupt):
+            pending = _with_shell_folder(run, pending)
+            if not pending.interrupt_id:
+                pending = pending.model_copy(update={"interrupt_id": _fallback_interrupt_id(run)})
         with self._lock:
             run.pending_interrupt = pending
             run.updated_at = utc_now()
@@ -2107,6 +2108,29 @@ def _interrupt_id_from_raw(raw: Any) -> str | None:
 def _fallback_interrupt_id(run: AgentRun) -> str:
     count = sum(1 for event in run.events if event.kind == "interrupt") + 1
     return f"{run.id}:interrupt:{count}"
+
+
+def _with_shell_folder(run: AgentRun, pending: PendingInterrupt) -> PendingInterrupt:
+    """The card shows the resolved folder. A model-supplied path is not the grant."""
+    from workbench_backend.state.preferences import resolved_starting_folder
+    if not any(action.name == "execute" for action in pending.action_requests):
+        return pending
+    try:
+        folder = resolved_starting_folder(run)
+    except ValueError:
+        return pending
+    actions = []
+    for action in pending.action_requests:
+        if action.name != "execute":
+            actions.append(action)
+            continue
+        args = dict(action.args)
+        args["starting_folder"] = folder
+        description = action.description or ""
+        if folder not in description:
+            description = f"{description} Starting folder: {folder}".strip()
+        actions.append(action.model_copy(update={"args": args, "description": description}))
+    return pending.model_copy(update={"action_requests": actions})
 
 
 def _resume_value(decisions: list[dict[str, str]]) -> dict[str, Any]:

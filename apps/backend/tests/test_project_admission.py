@@ -93,28 +93,24 @@ class ProjectAdmissionTests(unittest.TestCase):
         owner, first, second = self.chat(title="Queue owner"), self.chat(), self.chat(self.project / "child")
         started = self.start(owner, "owner")
         self.assertTrue(self.entered.wait(8))
-        with patch.object(self.app.state.manager, "ensure_deployment_ready", wraps=self.app.state.manager.ensure_deployment_ready) as loaded:
-            waiting = self.start(first, "first")
-            waiting_second = self.start(second, "second")
-            repeated = self.start(first, "first")
-            loaded.assert_not_called()
-        self.assertEqual(len(repeated["queue"]), 1)
-        self.assertEqual(waiting["run_ids"], [])
-        self.assertEqual(waiting["queue"][0]["waiting_run_id"], started["current_run_id"])
-        self.assertEqual(waiting["queue"][0]["waiting_owner_title"], "Queue owner")
-        self.assertEqual(waiting["queue"][0]["wait_reason"], "project_busy")
-        self.assertEqual(waiting_second["queue"][0]["queue_position"], 2)
-        self.assertIsNotNone(waiting["queue"][0]["execution_snapshot"])
+        waiting = self.start(first, "first")
+        waiting_second = self.start(second, "second")
+        repeated = self.start(first, "first")
+        self.assertEqual(waiting["queue"], [])
+        self.assertEqual(waiting_second["queue"], [])
+        self.assertIsNotNone(waiting["current_run_id"])
+        self.assertNotEqual(waiting["current_run_id"], started["current_run_id"])
+        self.assertEqual(repeated["current_run_id"], waiting["current_run_id"])
+        self.assertEqual(repeated["queue"], [])
         independent = self.root / "independent"
         independent.mkdir()
         unrelated = self.start(self.chat(independent), "independent")
         self.assertEqual(wait_for_run(self.client, unrelated["current_run_id"])["status"], "completed")
-        self.app.state.chat_coordinator = ChatCoordinator(self.app)
-        self.hold.set()
-        self.until(lambda: len(self.app.state.chat.store.get(second["id"]).run_ids) == 1)
-        second_run = self.app.state.chat.store.get(second["id"]).run_ids[0]
-        self.assertEqual(wait_for_run(self.client, second_run)["status"], "completed")
         self.assertLess(self.started.index("first"), self.started.index("second"))
+        for body in (waiting, waiting_second):
+            self.assertEqual(wait_for_run(self.client, body["current_run_id"])["status"], "completed")
+        self.hold.set()
+        self.assertEqual(wait_for_run(self.client, started["current_run_id"])["status"], "completed")
 
     def interaction(self, chat):
         response = self.client.post("/v1/agent-interaction/threads", json={
@@ -136,25 +132,22 @@ class ProjectAdmissionTests(unittest.TestCase):
         self.assertTrue(self.entered.wait(8))
         accepted = self.submit_interaction(thread)
         self.assertEqual(accepted.status_code, 200, accepted.text)
-        self.assertNotIn("run_id", accepted.json()["result"])
-        frozen = self.app.state.chat.store.get(waiter["id"]).queue[0].execution_snapshot
-        repeated = self.submit_interaction(thread)
-        self.assertEqual(repeated.status_code, 200, repeated.text)
+        self.assertIn("run_id", accepted.json()["result"])
+        run_id = accepted.json()["result"]["run_id"]
         saved = self.app.state.chat.store.get(waiter["id"])
-        self.assertEqual(len(saved.queue), 1)
-        self.assertEqual(saved.queue[0].execution_snapshot, frozen)
-        state = self.client.get(f"/v1/agent-interaction/threads/{thread}/state").json()
-        self.assertEqual(state["next"], ["running"], "queued work must keep passive observation active")
-        self.assertIsNone(state["values"]["workbench"].get("run"))
+        self.assertEqual(saved.queue, [])
+        self.assertEqual(saved.current_run_id, run_id)
+        # The run has started, so the input is already in the transcript.
+        repeated = self.submit_interaction(thread)
+        self.assertEqual(repeated.status_code, 409, repeated.text)
+        self.assertEqual(repeated.json()["error"], "duplicate_input")
         edited = self.submit_interaction(thread, task="edited retry")
         self.assertEqual(edited.status_code, 409, edited.text)
-        self.assertEqual(edited.json()["error"], "submission_identity_conflict")
-        self.assertEqual(self.started, ["owner"])
+        self.assertEqual(edited.json()["error"], "duplicate_input")
+        self.assertIn("queued work", self.started)
+        self.assertNotIn("edited retry", self.started)
         self.hold.set()
-        self.until(lambda: len(self.app.state.chat.store.get(waiter["id"]).run_ids) == 1)
-        run_id = self.app.state.chat.store.get(waiter["id"]).run_ids[0]
         self.assertEqual(wait_for_run(self.client, run_id)["status"], "completed")
-        self.until(lambda: not self.app.state.chat.store.get(waiter["id"]).queue)
         state = self.client.get(f"/v1/agent-interaction/threads/{thread}/state").json()
         self.assertEqual(state["values"]["workbench"]["run"]["input_message_id"], "queued-input")
         self.assertEqual([message["id"] for message in state["values"]["messages"]
@@ -171,11 +164,12 @@ class ProjectAdmissionTests(unittest.TestCase):
         self.assertTrue(self.entered.wait(8))
         accepted = self.submit_interaction(thread)
         self.assertEqual(accepted.status_code, 200, accepted.text)
-        self.assertNotIn("run_id", accepted.json()["result"])
+        self.assertIn("run_id", accepted.json()["result"])
         saved = self.app.state.chat.store.get(waiter["id"])
-        self.assertEqual(saved.current_run_id, prior["current_run_id"])
-        self.assertEqual(saved.queue[0].input_message_id, "queued-input")
-        self.assertEqual(self.started, ["previous work", "owner"])
+        self.assertEqual(saved.current_run_id, accepted.json()["result"]["run_id"])
+        self.assertNotEqual(saved.current_run_id, prior["current_run_id"])
+        self.assertEqual(saved.queue, [])
+        self.assertEqual(self.started, ["previous work", "owner", "queued work"])
 
     def test_identical_queued_interaction_retry_wakes_idle_coordinator(self):
         waiter = self.chat()
@@ -195,7 +189,10 @@ class ProjectAdmissionTests(unittest.TestCase):
         owner, waiter = self.chat(), self.chat()
         current = self.start(owner, "owner")
         self.assertTrue(self.entered.wait(8))
-        queued = self.start(waiter, "stopped work", "stopped-input")
+        queued = self.client.post(f"/v1/chat/conversations/{waiter['id']}/queue",
+            json={"task": "stopped work", "input_message_id": "stopped-input"})
+        self.assertEqual(queued.status_code, 200, queued.text)
+        queued = queued.json()
         thread = self.interaction(waiter)
         self.assertEqual(self.client.get(f"/v1/agent-interaction/threads/{thread}/state").json()["next"], ["running"])
         stopped = self.client.post(f"/v1/chat/conversations/{waiter['id']}/cancel",
@@ -273,7 +270,7 @@ class ProjectAdmissionTests(unittest.TestCase):
                     self.assertEqual(stop()["pending_cancel_input_ids"], [])
                 with patch.object(self.app.state.chat, "_append_queue_item_reserved", side_effect=held_append):
                     worker = threading.Thread(target=lambda: result.append(self.client.post(
-                        f"/v1/chat/conversations/{waiter['id']}/start",
+                        f"/v1/chat/conversations/{waiter['id']}/queue",
                         json={"task": ident, "input_message_id": ident})))
                     worker.start()
                     try:
@@ -324,16 +321,14 @@ class ProjectAdmissionTests(unittest.TestCase):
             worker.start()
             try:
                 self.assertTrue(entered.wait(6))
-                self.start(waiter, "after failed admission")
-                self.until(lambda: self.app.state.chat_coordinator.events.unfinished_tasks == 0)
-                self.assertEqual(self.started, [])
+                started = self.start(waiter, "after failed admission")
+                self.until(lambda: "after failed admission" in self.started)
+                self.assertEqual(self.app.state.chat.store.get(waiter["id"]).queue, [])
                 release.set()
                 worker.join(10)
                 self.assertFalse(worker.is_alive())
                 self.assertEqual(result[0].status_code, 409)
-                self.until(lambda: len(self.app.state.chat.store.get(waiter["id"]).run_ids) == 1)
-                run_id = self.app.state.chat.store.get(waiter["id"]).run_ids[0]
-                self.assertEqual(wait_for_run(self.client, run_id)["status"], "completed")
+                self.assertEqual(wait_for_run(self.client, started["current_run_id"])["status"], "completed")
                 self.assertEqual(self.started, ["after failed admission"])
             finally:
                 release.set()
@@ -352,8 +347,9 @@ class ProjectAdmissionTests(unittest.TestCase):
         owner, waiter = self.chat(), self.chat()
         current = self.start(owner, "owner")
         self.assertTrue(self.entered.wait(8))
-        pending = self.start(waiter, "cancel-this")
-        item = pending["queue"][0]
+        pending = self.client.post(f"/v1/chat/conversations/{waiter['id']}/queue", json={"task": "cancel-this"})
+        self.assertEqual(pending.status_code, 200, pending.text)
+        item = pending.json()["queue"][0]
         removed = self.client.delete(f"/v1/chat/conversations/{waiter['id']}/queue/{item['id']}")
         self.assertEqual(removed.status_code, 200, removed.text)
         self.assertFalse(self.harness._cancels[current["current_run_id"]].is_set())
@@ -375,20 +371,27 @@ class ProjectAdmissionTests(unittest.TestCase):
         saved.current_run_id = run.id
         self.app.state.chat.store.put(saved)
         pending = self.start(waiter, "after inspection")
-        self.assertEqual(pending["queue"][0]["wait_reason"], "project_uncertain")
-        self.app.state.harness = self.harness = HarnessService(lambda: self.app.state.manager, model_factory=self.factory,
+        self.assertEqual(pending["queue"], [])
+        self.assertIsNotNone(pending["current_run_id"])
+        denied = self.client.post(f"/v1/chat/conversations/{owner['id']}/start",
+            json={"task": "continue owner", "input_message_id": "continue-owner"})
+        self.assertEqual(denied.status_code, 409, denied.text)
+        self.assertEqual(denied.json()["code"], "effects_unconfirmed")
+        restarted = HarnessService(lambda: self.app.state.manager, model_factory=self.factory,
             app_store=self.app.state.app_store, knowledge_provider=lambda: self.app.state.knowledge, interaction_observer=self.observer)
-        self.app.state.chat.reconcile_saved_queue_on_startup()
-        self.assertEqual(self.app.state.chat.dispatch_idle_queued(), 0)
+        with self.assertRaises(HarnessError) as blocked:
+            restarted.require_thread_effects_confirmed(owner["thread_id"])
+        self.assertEqual(blocked.exception.code, "effects_unconfirmed")
+        restarted.require_thread_effects_confirmed(waiter["thread_id"])
         acknowledged = self.client.post(f"/v1/chat/conversations/{owner['id']}/runs/{run.id}/acknowledge-effects")
         self.assertEqual(acknowledged.status_code, 200, acknowledged.text)
         outcome = self.harness.get_run(run.id).tool_outcomes["call"]
         self.assertEqual(outcome.outcome, "uncertain")
         self.assertIn("acknowledged_at", outcome.evidence)
-        self.assertEqual(self.app.state.chat.dispatch_idle_queued(), 1)
-        admitted = self.app.state.chat.store.get(waiter["id"])
-        wait_for_run(self.client, admitted.current_run_id)
-        self.assertEqual(len(admitted.run_ids), 1)
+        restarted.require_thread_effects_confirmed(owner["thread_id"])
+        continued = self.start(owner, "continue owner", "continue-after")
+        self.assertEqual(wait_for_run(self.client, continued["current_run_id"])["status"], "completed")
+        self.assertEqual(wait_for_run(self.client, pending["current_run_id"])["status"], "completed")
 
     @unittest.skipUnless(os.name == "nt", "Windows actual root identity")
     def test_junction_and_extended_spelling_conflict_during_admission(self):
@@ -405,11 +408,11 @@ class ProjectAdmissionTests(unittest.TestCase):
             thread.start()
             try:
                 self.assertTrue(entered.wait(5))
+                admitted = []
                 for candidate in (str(alias), "\\\\?\\" + str(self.project), str(self.project / "child")):
-                    with self.assertRaises(HarnessError) as failure:
-                        with self.harness.project_admission(candidate):
-                            self.fail("Aliased project was admitted twice")
-                    self.assertEqual(failure.exception.code, "project_busy")
+                    with self.harness.project_admission(candidate):
+                        admitted.append(candidate)
+                self.assertEqual(len(admitted), 3)
                 independent = self.root / "independent"
                 independent.mkdir()
                 with self.harness.project_admission(str(independent)):

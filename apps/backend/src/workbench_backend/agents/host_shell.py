@@ -28,7 +28,7 @@ from langchain_core.tools import ToolException
 
 from workbench_backend.agents.harness_backend import host_shell_requested
 from workbench_backend.agents.memory_skills import knowledge_routes_selected
-from workbench_backend.state.preferences import matched_permission_snapshot
+from workbench_backend.state.preferences import chat_confirmation_thread, matched_permission_snapshot, resolved_starting_folder
 from workbench_backend.agents.schemas import (
     AgentRun,
     CapabilitySetupRequest,
@@ -101,13 +101,22 @@ def filesystem_permissions_for_run(run: AgentRun) -> list[FilesystemPermission] 
 def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | dict[str, Any]] | None:
     """HITL config for protected tools. The run's approval mode chooses which pauses remain.
 
-    Ask pauses selected side-effecting tools. Full access permits them when a project is bound.
-    A host command without a project still pauses on this gate before it runs.
-    A typed question always pauses in either mode.
+    The first This computer command in a chat pauses in Ask and in Full access.
+    After this chat confirms, Full access proceeds and Ask matches the exact command
+    and resolved starting folder. A typed question always pauses.
     """
 
     mode = run.approval_mode if run.approval_mode in {"ask", "full_access"} else "ask"
     auto_external = mode == "full_access"
+    try:
+        starting_folder = resolved_starting_folder(run)
+    except ValueError:
+        starting_folder = ""
+
+    def shell_confirmed() -> bool:
+        thread_id = chat_confirmation_thread(run)
+        check = getattr(grants, "host_shell_confirmed", None) if grants is not None else None
+        return bool(thread_id and check and check(thread_id))
 
     def saved_permission(name, args, request):
         matched = grants.matching_grant(run, name, args) if grants is not None else None
@@ -123,9 +132,11 @@ def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | 
     def requires_approval(request: ToolCallRequest) -> bool:
         call = request.tool_call
         args = call.get("args", {}) if isinstance(call, dict) else getattr(call, "args", {})
-        # Full access permits a command that starts in a bound project.
-        # A project-free command still pauses on this gate.
-        if auto_external and run.project_path:
+        thread_id = chat_confirmation_thread(run)
+        # A chat shows one card before any stored grant, including Full access.
+        if thread_id and not shell_confirmed():
+            return True
+        if auto_external and (shell_confirmed() or (not thread_id and run.project_path)):
             return False
         if saved_permission("execute", args, request):
             return False
@@ -136,8 +147,8 @@ def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | 
             "allowed_decisions": ["approve", "reject"],
             "when": requires_approval,
             "description": (
-                "Host shell command (no isolation). Approve to run on this machine "
-                + ("starting in the project." if run.project_path else "starting in the resolved user profile.")
+                "This computer command (no isolation). Approve to run on this machine "
+                f"starting in {starting_folder}."
             ),
         }
     } if host_shell_requested(run) else {}
@@ -213,19 +224,21 @@ def approval_mode_instructions(mode: str, *, compact: bool = False) -> str:
 
     if compact:
         policy = (
-            "Full access. Selected actions proceed. A host command without a project still pauses."
+            "Full access. The first This computer command in this chat pauses. Later selected commands proceed."
             if mode == "full_access"
-            else "Ask. Selected actions pause unless a saved matching permission allows them."
+            else "Ask. Selected actions pause unless this chat confirmed This computer and a saved matching permission allows them."
         )
         return f"Access for this turn: {policy} The application handles access decisions. Task questions still need an answer. Access cannot enable unselected tools or automatic memory saving."
     if mode == "full_access":
         policy = (
             "Access for this turn: Full access. Selected file mutations and external tools "
-            "proceed under this mode without a permission card. A host command without a project still pauses before it runs. "
+            "proceed under this mode without a permission card. The first This computer command in this chat still pauses. "
+            "Later commands in this chat proceed. "
         )
     else:
         policy = (
             "Access for this turn: Ask. Selected file mutations, shell commands, and external tools pause unless a saved matching grant allows them. "
+            "This computer needs this chat's own confirmation first, then the exact command and resolved starting folder. "
         )
     return policy + (
         "Use selected tools directly to carry out the person's task; the application "

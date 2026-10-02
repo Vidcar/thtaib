@@ -134,9 +134,14 @@ def set_conversation_scope(request: Request, conversation_id: str,
     thread_id = _thread_id(request, conversation_id)
     service = _service(request)
     try:
-        if body.scope != "off":
+        # One window refuses every-window before the worker is consulted.
+        if body.scope == "all":
+            service.set_scope(thread_id, body.scope, body.hwnd)
+        elif body.scope != "off":
             service.runtime.command_path()
-        service.set_scope(thread_id, body.scope, body.hwnd)
+            service.set_scope(thread_id, body.scope, body.hwnd)
+        else:
+            service.set_scope(thread_id, body.scope, body.hwnd)
     except (DesktopAutomationError, WinAppRuntimeError) as exc:
         raise _worker_error(exc) from exc
     return _scope_view(service, thread_id)

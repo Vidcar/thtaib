@@ -35,9 +35,13 @@ class PermissionGrant(BaseModel):
     project_id: str | None = None
     operations: list[Literal["write_file", "edit_file"]] = Field(default_factory=list)
     excluded_paths: list[str] = Field(default_factory=list)
+    # Resolved This-computer folder. Empty values never match. Old rows stay null.
+    starting_folder: str | None = None
 
 
 PROJECT_FILE_EXCLUSIONS = (".git", ".git/**", "**/.git", "**/.git/**")
+DEFAULT_SECRET_EXCLUSIONS = (".env", ".env.*", "**/.env", "**/.env.*")
+_EXCLUDED_EDIT_TOOLS = frozenset({"write_file", "edit_file", "apply_edits"})
 
 
 class ProjectFileGrantRequest(BaseModel):
@@ -173,11 +177,38 @@ class PreferenceStore:
                 [(key, now) for key in keys],
             )
 
+    def confirm_host_shell(self, thread_id: str) -> None:
+        """Remember that this chat approved This computer. Reject does not call this."""
+        if not thread_id:
+            raise ValueError("This computer confirmation requires a chat.")
+        with self.store._lock, self.store._conn:
+            self.store._conn.execute(
+                "INSERT OR REPLACE INTO host_shell_confirmations VALUES (?, ?)",
+                (thread_id, utc_now()),
+            )
+
+    def host_shell_confirmed(self, thread_id: str | None) -> bool:
+        if not thread_id:
+            return False
+        with self.store._lock:
+            row = self.store._conn.execute(
+                "SELECT 1 FROM host_shell_confirmations WHERE thread_id=?",
+                (thread_id,),
+            ).fetchone()
+        return row is not None
+
     def allow(self, run, action, scope: Literal["session", "always"]) -> PermissionGrant:
+        arguments = dict(action.args)
+        starting_folder = None
+        if action.name == "execute":
+            # The card shows the resolved folder. Do not keep a model-supplied path.
+            arguments.pop("starting_folder", None)
+            starting_folder = resolved_starting_folder(run)
         grant = PermissionGrant(id=new_id("grant"), scope=scope,
             thread_id=run.thread_id if scope == "session" else None,
             project_path=_project(run.project_path), action=action.name,
-            arguments=action.args, created_at=utc_now(), source_run_id=run.id)
+            arguments=arguments, created_at=utc_now(), source_run_id=run.id,
+            starting_folder=starting_folder)
         if scope == "session" and not grant.thread_id:
             raise ValueError("A session grant requires a saved thread.")
         with self.store._lock, self.store._conn:
@@ -187,10 +218,30 @@ class PreferenceStore:
     def matches(self, run, name: str, arguments: dict) -> bool:
         return self.matching_grant(run, name, arguments) is not None
 
+    def excluded_file_edit(self, run, name: str, arguments: dict) -> bool:
+        """One edit outside the standing grant. Saving it must not widen that grant."""
+        if name not in _EXCLUDED_EDIT_TOOLS or not isinstance(arguments, dict):
+            return False
+        key = arguments.get("file_path")
+        if not isinstance(key, str) or not key.strip():
+            return False
+        patterns = list(PROJECT_FILE_EXCLUSIONS)
+        standing = self._standing_project_grants(run)
+        if standing:
+            for grant in standing:
+                patterns.extend(grant.excluded_paths)
+        else:
+            patterns.extend(DEFAULT_SECRET_EXCLUSIONS)
+        return _path_is_excluded(getattr(run, "project_path", None), key, patterns)
+
     def matching_grant(self, run, name: str, arguments: dict) -> PermissionGrant | None:
         # Exact arguments deliberately avoid shell-prefix or inferred path grants.
         if name not in run.presented_tools or name not in run.enabled_tools:
             return None
+        if self.excluded_file_edit(run, name, arguments):
+            return None
+        if name == "execute":
+            return self._matching_execute_grant(run, arguments)
         grants = self.grants()
         exact = next((grant for grant in grants if grant.kind == "exact_action" and grant.action == name and grant.arguments == arguments
             and grant.project_path == _project(run.project_path)
@@ -198,6 +249,51 @@ class PreferenceStore:
         if exact is not None:
             return exact
         return next((grant for grant in grants if self._project_file_match(grant, run, name, arguments)), None)
+
+    def _matching_execute_grant(self, run, arguments: dict) -> PermissionGrant | None:
+        # Another chat's Always allow does not apply until this chat confirms.
+        thread_id = chat_confirmation_thread(run)
+        if thread_id is not None and not self.host_shell_confirmed(thread_id):
+            return None
+        return next((grant for grant in self.grants() if self._execute_grant_matches(grant, run, arguments)), None)
+
+    def _execute_grant_matches(self, grant, run, arguments) -> bool:
+        if grant.kind != "exact_action" or grant.action != "execute":
+            return False
+        thread_id = chat_confirmation_thread(run)
+        if thread_id is not None and not self.host_shell_confirmed(thread_id):
+            return False
+        if grant.scope != "always" and grant.thread_id != getattr(run, "thread_id", None):
+            return False
+        command = arguments.get("command") if isinstance(arguments, dict) else None
+        stored = grant.arguments.get("command") if isinstance(grant.arguments, dict) else None
+        if not isinstance(command, str) or command != stored:
+            return False
+        try:
+            folder = resolved_starting_folder(run)
+        except ValueError:
+            return False
+        return _same_folder(grant.starting_folder, folder)
+
+    def _standing_project_grants(self, run) -> list[PermissionGrant]:
+        project_path = getattr(run, "project_path", None)
+        if not project_path:
+            return []
+        from workbench_backend.agents.harness_backend import canonical_root
+        try:
+            root = canonical_root(project_path)
+        except (OSError, RuntimeError, ValueError):
+            return []
+        found = []
+        for grant in self.grants():
+            if grant.kind != "project_files" or not grant.project_path:
+                continue
+            try:
+                if canonical_root(grant.project_path) == root:
+                    found.append(grant)
+            except (OSError, RuntimeError, ValueError):
+                continue
+        return found
 
     def allow_project_files(self, project, request: ProjectFileGrantRequest) -> PermissionGrant:
         """Save an explicit human-granted mutation scope, never shell authority."""
@@ -250,6 +346,10 @@ class PreferenceStore:
         grant = next((value for value in self.grants() if value.id == grant_id), None)
         if grant is None:
             return None
+        if self.excluded_file_edit(run, name, arguments):
+            return None
+        if grant.action == "execute":
+            return grant if self._execute_grant_matches(grant, run, arguments) else None
         if grant.kind == "project_files":
             return grant if self._project_file_match(grant, run, name, arguments) else None
         return grant if (grant.action == name and grant.arguments == arguments
@@ -257,8 +357,51 @@ class PreferenceStore:
             and (grant.scope == "always" or grant.thread_id == run.thread_id)) else None
 
 
+def chat_confirmation_thread(run) -> str | None:
+    """Chat threads confirm This computer. A direct run's checkpoint id does not."""
+    if getattr(run, "source_surface", None) != "chat":
+        return None
+    thread_id = getattr(run, "thread_id", None)
+    return thread_id if isinstance(thread_id, str) and thread_id.strip() else None
+
+
+def resolved_starting_folder(run) -> str:
+    """Project folder, or the resolved user profile when the run has no project."""
+    raw = getattr(run, "project_path", None) or str(Path.home())
+    folder = str(Path(raw).expanduser().resolve())
+    if not folder or folder in {".", ""}:
+        raise ValueError("The starting folder must be a resolved path.")
+    return folder
+
+
 def _project(value: str | None) -> str | None:
     return str(Path(value).resolve()) if value else None
+
+
+def _same_folder(left: str | None, right: str | None) -> bool:
+    if not isinstance(left, str) or not isinstance(right, str) or not left.strip() or not right.strip():
+        return False
+    try:
+        first = str(Path(left).expanduser().resolve())
+        second = str(Path(right).expanduser().resolve())
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return first.casefold() == second.casefold() if os.name == "nt" else first == second
+
+
+def _path_is_excluded(project_path: str | None, key: str, patterns: list[str]) -> bool:
+    candidates = [key.lstrip("/").replace("\\", "/")]
+    if project_path:
+        from workbench_backend.agents.harness_backend import resolve_project_tool_path
+        try:
+            target = resolve_project_tool_path(project_path, key)
+            candidates.append(target.relative_to(Path(project_path).resolve()).as_posix())
+        except (OSError, RuntimeError, ValueError):
+            pass
+    if os.name == "nt":
+        candidates = [item.casefold() for item in candidates]
+        patterns = [item.casefold() for item in patterns]
+    return any(_excluded(path, pattern) for path in candidates for pattern in patterns)
 
 
 def _excluded(relative: str, pattern: str) -> bool:

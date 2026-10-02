@@ -81,6 +81,7 @@ class ChatPermissionTests(unittest.TestCase):
                     deployment_id="model",
                     task="work",
                     thread_id="session1",
+                    source_surface="chat",
                     project_path=root,
                     enabled_tools=["ask_user", "execute"],
                     presented_tools=["ask_user", "execute"],
@@ -139,6 +140,11 @@ class ChatPermissionTests(unittest.TestCase):
                 self.assertFalse(
                     prefs.matches(run.model_copy(update={"thread_id": "other"}), "execute", actions[2].args)
                 )
+                # Another chat's Always allow waits for that chat's own confirmation.
+                self.assertFalse(
+                    prefs.matches(run.model_copy(update={"thread_id": "other"}), "execute", actions[3].args)
+                )
+                prefs.confirm_host_shell("other")
                 self.assertTrue(
                     prefs.matches(run.model_copy(update={"thread_id": "other"}), "execute", actions[3].args)
                 )
@@ -236,11 +242,14 @@ class ChatPermissionTests(unittest.TestCase):
             paths = WorkbenchPaths(Path(root))
             store = ApplicationStore(paths)
             run = AgentRun(id="run1", deployment_id="model", task="work", thread_id="session1",
+                source_surface="chat",
                 project_path=root, enabled_tools=["execute"], presented_tools=["execute"],
                 created_at=utc_now(), updated_at=utc_now())
             action = PendingInterruptAction(name="execute", args={"command": "echo approved > result.txt"})
             prefs = PreferenceStore(store)
             grant = prefs.allow(run, action, "session")
+            self.assertFalse(prefs.matches(run, "execute", action.args))
+            prefs.confirm_host_shell("session1")
             prefs.save_preferences(PresentationPreferences(theme="light"))
             store.close()
             store = ApplicationStore(paths)
@@ -255,6 +264,8 @@ class ChatPermissionTests(unittest.TestCase):
                 prefs.revoke(grant.id)
                 self.assertFalse(prefs.matches(run, "execute", action.args))
                 prefs.allow(run, action, "always")
+                self.assertFalse(prefs.matches(run.model_copy(update={"thread_id": "other"}), "execute", action.args))
+                prefs.confirm_host_shell("other")
                 self.assertTrue(prefs.matches(run.model_copy(update={"thread_id": "other"}), "execute", action.args))
             finally:
                 store.close()

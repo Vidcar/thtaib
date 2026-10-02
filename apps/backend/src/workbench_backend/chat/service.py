@@ -11,7 +11,7 @@ import json
 from fastapi import HTTPException
 
 from workbench_backend.agents.harness import HarnessService
-from workbench_backend.agents.harness_backend import roots_overlap, canonical_root
+from workbench_backend.agents.harness_backend import canonical_root
 from workbench_backend.agents.schemas import AgentRun, AgentStartRequest, InterruptDecisionRequest
 from workbench_backend.agents.tools import enabled_for_project, resolve_presented_tools, unpinned_project_reads
 from workbench_backend.agents.setup_service import SetupService, configuration_from_request, cleared_configuration_fields
@@ -607,8 +607,8 @@ class ChatService:
                         conversation = self.store.put(updated)
                     else:
                         conversation, _terminal = self._reconcile_terminal_assistant(conversation, current)
-            # Preserve FIFO admission across chats that share an actual folder.
-            if self._project_waiters(conversation.project_path):
+            # Another chat may use this folder. Queue only behind this chat's own items.
+            if conversation.project_path and any(item.status == "queued" for item in conversation.queue):
                 return self._view(self._append_queue_item(conversation, request))
             try:
                 return self._view(self._dispatch_request(conversation, request))
@@ -1364,9 +1364,6 @@ class ChatService:
             if current is not None and is_run_lifecycle_live(current.status):
                 return conversation
         next_item = conversation.queue[0]
-        waiters = self._project_waiters(conversation.project_path)
-        if waiters and waiters[0][1].id != next_item.id:
-            return conversation
         request = self._request_from_queue_item(next_item)
         try:
             return self._dispatch_request(conversation, request, queue_item=next_item)
@@ -1385,17 +1382,6 @@ class ChatService:
             # No loading, snapshot or model/tool dispatch has occurred. The
             # existing frozen queue record remains safely retryable.
             return self._require(conversation.id)
-
-    def _project_waiters(self, project_path: str | None):
-        if not project_path:
-            return []
-        waiters = []
-        for chat in self.store.list_conversations():
-            if not chat.queue or chat.queue[0].status == "paused":
-                continue
-            if chat.project_path and roots_overlap(chat.project_path, project_path):
-                waiters.extend((chat, item) for item in chat.queue if item.status == "queued")
-        return sorted(waiters, key=lambda pair: (pair[1].admission_order, pair[1].created_at, pair[1].id))
 
     def acknowledge_effects(self, conversation_id: str, run_id: str) -> ChatConversationView:
         with self.store.conversation_lock(conversation_id):
@@ -2621,28 +2607,18 @@ class ChatService:
             )
 
     def _view_queue_progress(self, conversation: ChatConversation) -> ChatConversation:
-        if conversation.project_path and any(item.status == "queued" for item in conversation.queue):
+        queued = [item for item in conversation.queue if item.status == "queued"]
+        if conversation.project_path and queued:
             conversation = conversation.model_copy(deep=True)
-            blocker = self.harness.project_blocker(conversation.project_path)
-            waiters = self._project_waiters(conversation.project_path)
-            positions = {item.id: index + 1 for index, (_chat, item) in enumerate(waiters)}
-            owner_title = None
-            if blocker:
-                owner = next((chat for chat in self.store.list_conversations(include_archived=True)
-                              if chat.thread_id == blocker["thread_id"]), None) if blocker["thread_id"] else None
-                if owner is not None:
-                    owner_title = _display_title(owner)
-                else:
-                    task_title = " ".join(blocker["task"].split())
-                    owner_title = f"{task_title[:51]}…" if len(task_title) > 52 else task_title
+            positions = {item.id: index + 1 for index, item in enumerate(queued)}
             for item in conversation.queue:
                 if item.status != "queued":
                     continue
                 item.queue_position = positions.get(item.id)
-                item.wait_reason = ("project_uncertain" if blocker["uncertain"] else "project_busy") if blocker else ("project_order" if item.queue_position and item.queue_position > 1 else None)
-                item.waiting_run_id = blocker["run_id"] if blocker else None
-                item.waiting_thread_id = blocker["thread_id"] if blocker else None
-                item.waiting_owner_title = owner_title
+                item.wait_reason = "project_order" if item.queue_position and item.queue_position > 1 else None
+                item.waiting_run_id = None
+                item.waiting_thread_id = None
+                item.waiting_owner_title = None
         return conversation
 
     def _reconcile_terminal_assistant(

@@ -36,7 +36,6 @@ export function VisualTestingControls({ conversationId, threadId, browserEnabled
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [confirmBrowserReset, setConfirmBrowserReset] = useState(false);
-  const needsWindowGrant = desktopAccess !== "off" && Boolean(conversationId) && (windowAccess?.scope !== desktopAccess || windowAccess?.stale || (desktopAccess === "selected" && !windowAccess?.selected_window?.hwnd));
   const lastRuntimeState = useRef<string | null>(null);
   const runtimeState = JSON.stringify([browserRuntime?.supported, browserRuntime?.installed, browserRuntime?.chrome_available, browserRuntime?.chrome_version, browserSession?.state, windowRuntime?.available, windowRuntime?.installed, windowAccess?.scope, windowAccess?.stale, windowAccess?.selected_window?.hwnd]);
 
@@ -86,10 +85,10 @@ export function VisualTestingControls({ conversationId, threadId, browserEnabled
   }, [conversationId, threadId, windowsOnly]);
 
   useEffect(() => {
-    if (!conversationId || !pendingWindowChoice || desktopAccess !== "selected") return;
+    if (!conversationId || !pendingWindowChoice) return;
     setPendingWindowChoice(false);
     void loadWindows();
-  }, [conversationId, pendingWindowChoice, desktopAccess]);
+  }, [conversationId, pendingWindowChoice]);
 
   async function perform(label: string, action: () => Promise<void>) {
     setBusy(label); setError("");
@@ -108,34 +107,19 @@ export function VisualTestingControls({ conversationId, threadId, browserEnabled
     });
   }
 
-  async function changeWindows(next: DesktopAccess) {
+  async function chooseWindow() {
     if (!conversationId) {
-      onDesktopAccess(next);
-      setPendingWindowChoice(next === "selected");
+      if (!onPrepareConversation) return;
+      setPendingWindowChoice(true);
+      await perform("prepare-chat", onPrepareConversation);
       return;
     }
-    if (next === "selected") {
-      await perform("narrow-window", async () => {
-        // Narrow the live grant before showing the picker. A cancelled picker
-        // must never leave a previous All-windows grant in force.
-        setWindowAccess(await api.setWindowAccess(conversationId, "off"));
-        onDesktopAccess("selected"); onReadinessChange?.();
-        const choices = await api.testWindows();
-        setWindows(choices);
-        setSelectedHwnd(choices[0] ? String(choices[0].hwnd) : "");
-        setChoosingWindow(true);
-        setExpanded("windows");
-      });
-      return;
-    }
-    await perform("scope", async () => {
-      const access = await api.setWindowAccess(conversationId, next);
-      setWindowAccess(access); setChoosingWindow(false); onDesktopAccess(access.scope); onReadinessChange?.();
-    });
+    await loadWindows();
   }
 
   const browserStatus = browserRuntime?.supported === false ? "Unsupported" : browserRuntime?.chrome_available === false ? "Needs Chrome" : browserRuntime?.installed ? browserSession?.state ?? "Installed" : browserRuntime ? "Needs install" : "Checking";
-  const windowsStatus = windowRuntime?.available ? desktopAccess === "off" ? "Off" : needsWindowGrant || !conversationId ? "Needs grant" : desktopAccess === "selected" ? "Selected" : "All" : windowRuntime?.installed ? "Unavailable" : windowRuntime ? "Needs install" : "Checking";
+  const oneWindow = desktopAccess === "selected" && Boolean(windowAccess?.selected_window?.hwnd) && !windowAccess?.stale;
+  const windowsStatus = windowRuntime?.available ? oneWindow ? "One window" : "Choose a window" : windowRuntime?.installed ? "Unavailable" : windowRuntime ? "Needs install" : "Checking";
 
   return <div className="visual-testing-controls" role="group" aria-label={windowsOnly ? "Live Windows access" : "Browser and Windows tools"}>
     {!windowsOnly ? <div className="visual-testing-capability">
@@ -153,17 +137,14 @@ export function VisualTestingControls({ conversationId, threadId, browserEnabled
       </div> : null}
     </div> : null}
     <div className="visual-testing-capability">
-      <button ref={windowsButton} type="button" className="visual-testing-disclosure" aria-expanded={expanded === "windows"} onClick={() => setExpanded(current => current === "windows" ? null : "windows")}><strong>Windows</strong><small>{windowsStatus}</small></button>
+      <button ref={windowsButton} type="button" className="visual-testing-disclosure" aria-expanded={expanded === "windows"} onClick={() => setExpanded(current => current === "windows" ? null : "windows")}><strong>One window</strong><small>{windowsStatus}</small></button>
       {expanded === "windows" ? <div className="visual-testing-detail">
         {!windowRuntime?.available && !windowRuntime?.installed ? windowsOnly ? <button type="button" onClick={onSettings}>Install worker in Settings</button> : <button type="button" disabled={disabled || Boolean(busy)} onClick={() => void perform("install-windows", async () => { setWindowRuntime(await api.installWindowRuntime()); onReadinessChange?.(); })}>{busy === "install-windows" ? "Installing…" : "Install Windows worker"}</button> : null}
         {windowRuntime?.installed && windowRuntime.available === false ? <p className="hint">Windows worker unavailable{windowRuntime.reason ? `: ${windowRuntime.reason}` : "."}</p> : null}
-        <label>Windows access <select aria-label="Windows access" value={desktopAccess} disabled={disabled || Boolean(busy)} onChange={event => void changeWindows(event.target.value as DesktopAccess)}><option value="off">Off</option><option value="selected">Selected window</option><option value="all">All windows</option></select></label>
-        {needsWindowGrant ? <div className="visual-testing-session" role="status"><span>This chat needs a fresh Windows grant before sending.</span><button type="button" disabled={disabled || Boolean(busy)} onClick={() => void changeWindows(desktopAccess)}>{desktopAccess === "selected" ? "Choose window" : "Grant all windows"}</button></div> : null}
-        {!conversationId && desktopAccess !== "off" ? <div className="visual-testing-session"><span>{canPrepareConversation ? "Create this chat to grant live window access." : "Choose a model before creating this chat."}</span>{onPrepareConversation ? <button type="button" disabled={disabled || Boolean(busy) || !canPrepareConversation} onClick={() => { if (desktopAccess === "selected") setPendingWindowChoice(true); void perform("prepare-chat", onPrepareConversation); }}>{busy === "prepare-chat" ? "Creating…" : "Create chat"}</button> : null}</div> : null}
-        {conversationId && desktopAccess === "selected" && !windowAccess?.selected_window?.hwnd && !choosingWindow ? <button type="button" disabled={disabled || Boolean(busy)} onClick={() => void loadWindows()}>Choose window</button> : null}
+        {!conversationId && !canPrepareConversation ? <p className="hint">Choose a model before creating this chat.</p> : null}
+        {!choosingWindow ? <button type="button" disabled={disabled || Boolean(busy) || (!conversationId && !canPrepareConversation)} onClick={() => void chooseWindow()}>Choose window</button> : null}
         {choosingWindow && conversationId ? <div className="visual-testing-picker"><label htmlFor="chat-window-choice">Window</label><select id="chat-window-choice" value={selectedHwnd} onChange={event => setSelectedHwnd(event.target.value)} disabled={Boolean(busy)}>{windows.map(item => <option key={item.hwnd} value={String(item.hwnd)}>{item.title || item.process_name} · {item.process_name} · {item.process_id}</option>)}</select><button type="button" disabled={disabled || Boolean(busy) || !selectedHwnd} onClick={() => void perform("select-window", async () => { const access = await api.setWindowAccess(conversationId, "selected", Number(selectedHwnd)); setWindowAccess(access); setChoosingWindow(false); onDesktopAccess("selected"); onReadinessChange?.(); })}>Use window</button><button type="button" disabled={Boolean(busy)} onClick={() => setChoosingWindow(false)}>Cancel</button>{!windows.length ? <span className="hint">No open windows were found.</span> : null}</div> : null}
-        {windowAccess?.scope === "selected" && windowAccess.selected_window ? <p className="hint">Selected: {windowAccess.selected_window.title || windowAccess.selected_window.process_name}</p> : null}
-        {windowAccess?.scope === "all" ? <p className="hint">This chat can access open windows until you switch it off or restart Workbench.</p> : null}
+        {oneWindow && windowAccess?.selected_window ? <p className="hint">One window: {windowAccess.selected_window.title || windowAccess.selected_window.process_name}</p> : null}
       </div> : null}
     </div>
     {workMode === "plan" ? <p className="hint">Switch to Work to use browser or Windows controls.</p> : null}
