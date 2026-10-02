@@ -403,14 +403,45 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             self._call_settled[call_id] = event
         event.set()
 
+    def _rejection_message(self, request, call_id: str) -> ToolMessage | None:
+        for message in self._request_messages(request):
+            if (isinstance(message, ToolMessage) and str(getattr(message, "tool_call_id", "")) == call_id
+                    and getattr(message, "status", None) == "error"):
+                return message
+        return None
+
+    def _finish_rejected_file_call(self, request, call_id: str) -> None:
+        """Record a rejected file call as failed. The approval step already skipped its effect."""
+        previous = self.run.tool_outcomes.get(call_id)
+        if previous is not None and previous.outcome != "not_dispatched":
+            return
+        message = self._rejection_message(request, call_id)
+        if message is None:
+            return
+        detail = message.content if isinstance(message.content, str) else "User rejected this action. The tool was not executed."
+        self.execution_control.record_tool_outcome(self.run, ToolOutcome(
+            call_id=call_id, name=str(message.name or (previous.name if previous is not None else "delete")),
+            outcome="failed", failure_category="permission", recovery_action="continue",
+            detail=str(detail)[:8000], result=message.content,
+            evidence=previous.evidence if previous is not None else {}, updated_at=utc_now()))
+        self._mark_call_settled(call_id)
+
     async def _wait_for_earlier_file_calls(self, request) -> None:
-        # Arrival order is not call order. An approval pause stays open until
-        # that call's effect is recorded as succeeded or failed.
+        # Arrival order is not call order. An unanswered approval holds the
+        # later call. Reject records failed and releases it.
         for earlier in self._earlier_conflict_ids(request):
-            previous = self.run.tool_outcomes.get(earlier)
-            if previous is not None and previous.outcome in {"succeeded", "failed"}:
-                continue
-            await self._settled_event(earlier).wait()
+            while True:
+                self._finish_rejected_file_call(request, earlier)
+                previous = self.run.tool_outcomes.get(earlier)
+                if previous is not None and previous.outcome in {"succeeded", "failed"}:
+                    break
+                event = self._settled_event(earlier)
+                if event.is_set() and not self._approval_pause(previous):
+                    break
+                try:
+                    await asyncio.wait_for(event.wait(), 0.05)
+                except TimeoutError:
+                    continue
 
     def _capture_delete_after(self, request):
         name, args, call_id = _tool_call_parts(request)
