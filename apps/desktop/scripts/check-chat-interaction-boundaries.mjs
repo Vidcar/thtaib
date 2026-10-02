@@ -631,17 +631,22 @@ function makeHarness(options = {}) {
               const kept = cutAt >= 0 ? current.transcript.slice(0, cutAt) : [...current.transcript];
               const content = workbench.rewind_mode === "retry" ? (source?.content ?? message?.content ?? "") : (message?.content ?? "");
               const runIndex = current.run_ids.indexOf(workbench.rewind_source_run_id);
+              const userMessage = {
+                id: message?.id ?? `rewind_${state.projectedRunIndex}`,
+                role: "user",
+                content,
+                at: now(),
+                run_id: projected.id,
+                content_blocks: [],
+              };
+              projected.messages = [
+                { id: userMessage.id, type: "human", content: userMessage.content },
+                { id: `${projected.id}_message`, type: "ai", content: "retried reply" },
+              ];
               state.streamRuns.set(threadId, projected);
               state.conversations[conversationId] = {
                 ...current,
-                transcript: [...kept, {
-                  id: message?.id ?? `rewind_${state.projectedRunIndex}`,
-                  role: "user",
-                  content,
-                  at: now(),
-                  run_id: projected.id,
-                  content_blocks: [],
-                }],
+                transcript: [...kept, userMessage],
                 queue: [],
                 current_run: projected,
                 current_run_id: projected.id,
@@ -3982,6 +3987,12 @@ function editRowOpen(renderer) {
   return renderer.root.findAll(node => node.type === "button" && node.props.className === "composer-edit-cancel").length > 0;
 }
 
+function mountedConversations(renderer) {
+  return renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatInteractionStream")
+    .map(node => node.props.conversation)
+    .filter(item => item?.id === "conv_a");
+}
+
 async function testAcceptedRetryKeepsOrClosesTheOpenEdit(vite) {
   const cases = [
     { editRunId: "run_first", retryRunId: "run_first", unsent: "unsent edit of first", keepRow: true, composer: "unsent edit of first" },
@@ -4027,10 +4038,26 @@ async function testAcceptedRetryKeepsOrClosesTheOpenEdit(vite) {
       const workbench = harness.state.requests.commands[0].payload.params.metadata.workbench;
       assert.equal(workbench.rewind_mode, "retry");
       assert.equal(workbench.rewind_source_run_id, spec.retryRunId);
-      await waitFor(() => {
-        assert.equal(editRowOpen(renderer), spec.keepRow, spec.keepRow ? "open edit stays" : "removed edit closes");
-        assert.equal(textarea(renderer).props.value, spec.composer);
-      }, spec.keepRow ? "retry of the open edit keeps the unsent text" : "retry that removes the edited message restores the earlier draft");
+      if (spec.keepRow) {
+        await waitFor(() => {
+          const conversations = mountedConversations(renderer);
+          assert.ok(conversations.length > 0, "mounted conversation");
+          for (const conversation of conversations) {
+            assert.equal(conversation.transcript.some(item => item.role === "user" && item.run_id === "run_first"), false, "retried user message is gone");
+          }
+          const replacement = conversations[0].transcript.find(item => item.role === "user" && item.run_id && item.run_id !== "run_second");
+          assert.ok(replacement?.run_id, "replacement run is in the transcript");
+          assert.equal(editRowOpen(renderer), true, "cancel stays");
+          assert.equal(textarea(renderer).props.value, spec.composer);
+          const openEdit = renderer.root.findAll(node => node.type === "button" && node.props["aria-label"] === "Edit" && node.props["data-edit-run"] === replacement.run_id);
+          assert.ok(openEdit.length > 0, "open edit points at the replacement run");
+        }, "retry of the open edit keeps the unsent text on the replacement run");
+      } else {
+        await waitFor(() => {
+          assert.equal(editRowOpen(renderer), false, "removed edit closes");
+          assert.equal(textarea(renderer).props.value, spec.composer);
+        }, "retry that removes the edited message restores the earlier draft");
+      }
     } finally { await closeHarness(renderer, harness); }
   }
 }
