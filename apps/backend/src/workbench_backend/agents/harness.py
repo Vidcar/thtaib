@@ -203,7 +203,8 @@ class HarnessService:
         self._model_clients: dict[str, httpx.Client] = {}
         self._adapter_models: dict[str, Any] = {}
         self._start_cancel_guards: dict[tuple[str | None, str | None], threading.Event] = {}
-        self._rewind_kept_messages: dict[str, list] = {}
+        # Thread id until admission, then run id: the user message a rewind drops from.
+        self._rewind_drop_from: dict[str, str] = {}
         self._lock = threading.RLock()
         self._updates = threading.Condition(self._lock)
         self._startup_reconciled = False

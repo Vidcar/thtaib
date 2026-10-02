@@ -612,12 +612,16 @@ class ChatService:
                 # Queueing is not acceptance. A refused rewind must put this
                 # snapshot back, including messages removed only in memory.
                 snapshot = conversation.model_copy(deep=True)
-                cut, request, fork_id, clear = self._prepare_rewind(conversation, request)
+                cut, request, fork_id, clear, drop_from = self._prepare_rewind(conversation, request)
+                if conversation.thread_id and drop_from:
+                    self.harness._rewind_drop_from[conversation.thread_id] = drop_from
                 try:
                     self.store.put(cut)
                     return self._view(self._dispatch_request(
                         cut, request, fork_checkpoint_id=fork_id, rewind_clear_messages=clear))
                 except Exception:
+                    if conversation.thread_id:
+                        self.harness._rewind_drop_from.pop(conversation.thread_id, None)
                     if self._find_chat_run_by_input(snapshot, request.input_message_id) is None:
                         self.store.put(snapshot)
                     raise
@@ -633,7 +637,7 @@ class ChatService:
 
     def _prepare_rewind(
         self, conversation: ChatConversation, request: ChatStartRequest,
-    ) -> tuple[ChatConversation, ChatStartRequest, str | None, bool]:
+    ) -> tuple[ChatConversation, ChatStartRequest, str | None, bool, str]:
         """Cut later transcript and queue in memory. The caller persists the cut only with an accepted run."""
         if request.rewind_mode not in {"retry", "edit"}:
             raise ChatError("Choose retry or edit.", code="rewind_mode_required", status_code=400)
@@ -689,7 +693,7 @@ class ChatService:
         cut.run_ids = conversation.run_ids[:index]
         cut.accepted_inputs = {key: value for key, value in conversation.accepted_inputs.items() if key in kept_ids}
         cut.current_run_id = cut.run_ids[-1] if cut.run_ids else None
-        return cut, request, fork_id, clear
+        return cut, request, fork_id, clear, conversation.transcript[cut_at].id or ""
 
     def enqueue(self, conversation_id: str, request: ChatStartRequest) -> ChatConversationView:
         task = request.task.strip()

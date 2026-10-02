@@ -25,6 +25,7 @@ try {
   const { AnswerActions } = await vite.ssrLoadModule("/src/renderer/AnswerActions.tsx");
   const { PanelResize, usePanelWidth } = await vite.ssrLoadModule("/src/renderer/PanelResize.tsx");
   const { HoverHelp } = await vite.ssrLoadModule("/src/renderer/HoverHelp.tsx");
+  const { MessageTaskActions } = await vite.ssrLoadModule("/src/renderer/MessageTaskActions.tsx");
   const { ChatMeasurements } = await vite.ssrLoadModule("/src/renderer/ChatMeasurements.tsx");
   const { AttentionPanel } = await vite.ssrLoadModule("/src/renderer/AttentionPanel.tsx");
 
@@ -36,6 +37,7 @@ try {
   await checkChatHistoryActions(ChatHistoryActions, AnswerActions);
   await checkPanelResize(PanelResize, usePanelWidth);
   await checkHoverHelp(HoverHelp);
+  await checkMessageTaskActions(MessageTaskActions);
   await checkChatMeasurements(ChatMeasurements);
   await checkAttentionTargets(AttentionPanel);
   await checkBlockedAttentionNavigationPreservesItem(AttentionPanel);
@@ -352,6 +354,59 @@ async function checkHoverHelp(HoverHelp) {
   } finally {
     if (renderer) await act(async () => renderer.unmount());
     Object.assign(globalThis, originals);
+  }
+}
+
+async function checkMessageTaskActions(MessageTaskActions) {
+  const saved = { window: globalThis.window, document: globalThis.document };
+  const events = { addEventListener() {}, removeEventListener() {} };
+  const buttonNode = { getBoundingClientRect: () => ({ left: 40, top: 200, bottom: 228, width: 28, height: 28 }), contains: () => false, matches: () => false };
+  const tooltipNode = { getBoundingClientRect: () => ({ width: 180, height: 28 }), contains: () => false };
+  globalThis.window = { ...saved.window, innerWidth: 800, innerHeight: 600, ...events };
+  globalThis.document = { body: { nodeType: 1, children: [], createNodeMock: () => tooltipNode }, querySelector: () => null, ...events };
+  const calls = { retry: 0, edit: 0 };
+  const held = "Wait until this turn finishes";
+  const render = (reason) => React.createElement(MessageTaskActions, {
+    runId: "run_1",
+    held: reason,
+    onRetry: () => { calls.retry += 1; },
+    onEdit: () => { calls.edit += 1; },
+  });
+  let renderer;
+  try {
+    await act(async () => {
+      renderer = create(render(held), { createNodeMock: (element) => element.type === "button" ? buttonNode : tooltipNode });
+    });
+    const buttons = () => renderer.root.findAllByType("button");
+    assert.equal(buttons().length, 2);
+    for (const node of buttons()) {
+      assert.equal(node.props["aria-disabled"], true);
+      assert.equal(node.props.disabled, undefined);
+      assert.equal(node.props.title, held);
+      assert.equal(node.props["aria-label"] === "Retry" || node.props["aria-label"] === "Edit", true);
+    }
+    assert.equal(buttons().find((node) => node.props["aria-label"] === "Edit").props["data-edit-run"], "run_1");
+    await act(async () => { buttons()[0].props.onClick(); buttons()[1].props.onClick(); });
+    await act(async () => {
+      buttons()[0].props.onKeyDown({ key: "Enter", preventDefault() {}, stopPropagation() {} });
+      buttons()[1].props.onKeyDown({ key: " ", preventDefault() {}, stopPropagation() {} });
+    });
+    assert.equal(calls.retry, 0);
+    assert.equal(calls.edit, 0);
+    await act(async () => renderer.root.findAllByProps({ className: "hover-help" })[0].props.onMouseEnter());
+    const tips = renderer.root.findAllByProps({ role: "tooltip" });
+    assert.equal(tips.length > 0, true);
+    assert.equal(tips[0].props.children, held);
+    await act(async () => { renderer.update(render(null)); });
+    const active = renderer.root.findAllByType("button");
+    for (const node of active) assert.equal(node.props["aria-disabled"], undefined);
+    await act(async () => { active[0].props.onClick(); active[1].props.onClick(); });
+    assert.equal(calls.retry, 1);
+    assert.equal(calls.edit, 1);
+  } finally {
+    if (renderer) await act(async () => renderer.unmount());
+    globalThis.window = saved.window;
+    globalThis.document = saved.document;
   }
 }
 
@@ -758,6 +813,23 @@ function paintedTranscript() {
           transcriptText(" Check the file"),
         ]),
       ]),
+      transcriptElement("div", { class: "tool-call-row" }, [
+        transcriptElement("details", { class: "message-tools" }, [
+          transcriptElement("summary", {}, [
+            transcriptElement("span", { class: "activity-line" }, ["Checked the vault"]),
+          ]),
+          transcriptElement("div", { class: "tool-call-details" }, [
+            transcriptElement("section", { "aria-label": "Tool output" }, [
+              transcriptText("UNIQUE-TOOL-OUTPUT-should-not-export"),
+            ]),
+            transcriptElement("details", { class: "tool-raw-arguments" }, [
+              transcriptElement("section", { "aria-label": "Raw tool arguments" }, [
+                transcriptText("UNIQUE-RAW-ARGS-should-not-export"),
+              ]),
+            ]),
+          ]),
+        ]),
+      ]),
       transcriptElement("div", { class: "message-reasoning" }, [transcriptElement("p", {}, ["secret thought"])]),
     ]),
     transcriptElement("div", { class: "tool-message" }, [
@@ -843,9 +915,12 @@ async function checkChatHistoryActions(ChatHistoryActions, AnswerActions) {
     });
     assert.equal(downloads.at(-1).filename, "Source-chat.md");
     const transcriptTextBody = await downloads.at(-1).blob.text();
-    assert.match(transcriptTextBody, /# Source chat\n\nExported: .+\nArea: Project\n\nThis file is a transcript\. It is not a restore\.\n\n## You\n\nDo work\n\n## Assistant\n\n\*\*Done\*\*\n\nRead notes\.txt\nRead plan\.md failed\nResearcher Done Find the note\n✓ Check the file\nWaiting: echo\n\n## Retained files\n\n- notes\.txt\n/);
+    assert.match(transcriptTextBody, /# Source chat\n\nExported: .+\nArea: Project\n\nThis file is a transcript\. It is not a restore\.\n\n## You\n\nDo work\n\n## Assistant\n\n\*\*Done\*\*\n\nRead notes\.txt\nRead plan\.md failed\nResearcher Done Find the note\n✓ Check the file\nChecked the vault\nWaiting: echo\n\n## Retained files\n\n- notes\.txt\n/);
     assert.equal(transcriptTextBody.includes("Read 3 files"), false);
     assert.equal(transcriptTextBody.includes("secret thought"), false);
+    assert.equal(transcriptTextBody.includes("UNIQUE-TOOL-OUTPUT-should-not-export"), false);
+    assert.equal(transcriptTextBody.includes("UNIQUE-RAW-ARGS-should-not-export"), false);
+    assert.equal(transcriptTextBody.includes("Checked the vault"), true);
     assert.equal(transcriptTextBody.includes("12 B"), false);
 
     await act(async () => {

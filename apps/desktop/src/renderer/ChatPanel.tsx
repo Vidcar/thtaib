@@ -443,10 +443,22 @@ function ChatInteractionStreamContent(props: {
       return;
     }
     projectionSignature.current = signature;
-    if (
-      pendingSubmit &&
-      projectionMatchesPendingSubmit
-    ) {
+    if (pendingSubmit && projectionMatchesPendingSubmit && pendingSubmit.rewind_source_run_id) {
+      const submitted = pendingSubmit;
+      // The server cut has to land before pendingSubmit clears. Clearing it cancels the reconcile fetch.
+      void api.chatConversation(conversation.id).then((next) => {
+        if (!isCurrentOwner(owner) || !chatHasAcceptedInputMessage(next, submitted.id)) return;
+        noteRewindResult(submitted, true);
+        updateConversation(next, owner);
+        clearSubmittedDraft(submitted);
+        clearPendingSubmit(submitted);
+        refreshDeployments();
+      }).catch((error: unknown) => {
+        if (isCurrentOwner(owner)) setMessage(errorMessage(error));
+      });
+      return;
+    }
+    if (pendingSubmit && projectionMatchesPendingSubmit) {
       clearSubmittedDraft(pendingSubmit);
       clearPendingSubmit(pendingSubmit);
       refreshDeployments();
@@ -458,7 +470,7 @@ function ChatInteractionStreamContent(props: {
       run_ids: run && !conversation.run_ids.includes(run.id) ? [...conversation.run_ids, run.id] : conversation.run_ids,
       updated_at: new Date().toISOString(),
     }, owner);
-  }, [clearPendingSubmit, clearSubmittedDraft, conversation, isCurrentOwner, owner, pendingSubmit, projectionMatchesPendingSubmit, projectionRunOwned, refreshDeployments, run, updateConversation]);
+  }, [clearPendingSubmit, clearSubmittedDraft, conversation, isCurrentOwner, noteRewindResult, owner, pendingSubmit, projectionMatchesPendingSubmit, projectionRunOwned, refreshDeployments, run, setMessage, updateConversation]);
 
   useEffect(() => {
     if (!run || !projectionRunOwned || isAgentRunLive(run.status)) {

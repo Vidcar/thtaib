@@ -706,17 +706,12 @@ def _persist_admitted_run(service, admitted):
     run.thread_id = request.thread_id or run.id
     if request.fork_checkpoint_id:
         run.pre_run_checkpoint_id = request.fork_checkpoint_id
-    elif request.thread_id:
+    elif request.thread_id and not request.rewind_clear_messages:
+        # A cleared first turn has no checkpoint to fork. The pre-clear head still holds the deleted history.
         try:
             run.pre_run_checkpoint_id = checkpoint_head_id(service.manager.paths.checkpoints_db, run.thread_id)
         except CheckpointReadError as exc:
             raise HarnessError(str(exc), code="checkpoint_linkage_failed", status_code=409) from exc
-    if request.fork_checkpoint_id or request.rewind_clear_messages:
-        if request.rewind_clear_messages:
-            kept: list = []
-        else:
-            kept = list(service.checkpoint_state_for_run(run, request.fork_checkpoint_id).get("values", {}).get("messages") or [])
-        service._rewind_kept_messages[run.id] = kept
     with service._lock:
         cancel = service._start_cancel_guards.get((request.thread_id, input_message_id)) or threading.Event()
         if cancel.is_set():
@@ -730,6 +725,10 @@ def _persist_admitted_run(service, admitted):
             )
             run.updated_at = utc_now()
         service._runs[run.id] = run
+        if request.thread_id:
+            drop_from = service._rewind_drop_from.pop(request.thread_id, None)
+            if drop_from:
+                service._rewind_drop_from[run.id] = drop_from
         service._cancels[run.id] = cancel
         service._decision_ready[run.id] = threading.Event()
         service._pending_decisions[run.id] = None

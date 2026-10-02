@@ -509,7 +509,27 @@ class AgentCapabilitiesTests(unittest.TestCase):
             started = self.post(f"/v1/chat/conversations/{chat['id']}/start", {'task': 'Use the accepted memory', 'presented_tools': [], 'memory_version_refs': [version_id], 'input_policy': {'version': 1, 'reference_loading': {entry_id: 'always'}}})
             loaded = wait_for_run(self.client, started['current_run_id'])
         self.assertEqual(loaded['status'], 'completed', loaded.get('error'))
-        self.assertTrue(seen.get('memory'), seen)
+        from workbench_backend.agents.harness_backend import harness_scratch_root
+        from workbench_backend.agents.memory_skills import memory_file_path
+        expected = memory_file_path('user', entry_id, version_id)
+        self.assertEqual(seen.get('memory'), [expected])
+        materialized = harness_scratch_root(self.app.state.manager.paths, started['thread_id']) / 'memories' / expected.removeprefix('/memories/')
+        self.assertEqual(materialized.read_bytes(), b'A proposed preference')
+
+    def test_full_access_with_automatic_writes_leaves_memory_pending(self):
+        enabled = self.client.put('/v1/knowledge/automatic-save-policy', json={'scope': 'user', 'automatic_agent_writes': True})
+        self.assertEqual(enabled.status_code, 200, enabled.text)
+        self.harness(lambda *_: ScriptedChatModel([
+            call('propose_memory', {'content': 'A proposed preference', 'scope': 'user'}, 'memory'),
+            AIMessage(content='Proposed'),
+        ]))
+        run = self.start(presented_tools=['propose_memory'], approval_mode='full_access')
+        finished = wait_for_run(self.client, run['id'])
+        self.assertEqual(finished['status'], 'completed', finished.get('error'))
+        proposal, = self.app.state.knowledge.list_proposals(run_id=run['id'])
+        self.assertEqual(proposal.status, 'pending')
+        self.assertIsNone(proposal.committed_version_id)
+        self.assertEqual(self.app.state.knowledge.list_entries(), [])
 
     def test_cancel_child_approval_never_writes_and_settles_child(self):
         project = self.project()

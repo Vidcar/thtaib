@@ -117,7 +117,7 @@ class ChatBranchTests(unittest.TestCase):
         )
         self.assertEqual(queued.status_code, 200, queued.text)
         self.assertTrue(queued.json()["queue"])
-        before = (self.project / "seed.txt").read_text(encoding="utf-8")
+        (self.project / "seed.txt").write_text("changed-after-second", encoding="utf-8")
         response = self.rewind(conversation["id"], first["id"], "edit", "Edited request")
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["id"], conversation["id"])
@@ -133,7 +133,8 @@ class ChatBranchTests(unittest.TestCase):
         self.assertEqual(body["queue"], [])
         self.assertEqual(body["thread_id"], conversation["thread_id"])
         self.assertNotEqual(body["current_run_id"], second["id"])
-        self.assertEqual((self.project / "seed.txt").read_text(encoding="utf-8"), before)
+        self.assertEqual((self.project / "seed.txt").read_text(encoding="utf-8"), "changed-after-second")
+        self.assertEqual(Path(body["project_path"]).resolve(), self.project.resolve())
         self.assertEqual(self.client.get("/v1/chat/conversations/search", params={"q": "Second request"}).json(), [])
         self.assertEqual([item["id"] for item in self.client.get("/v1/chat/conversations").json()], [conversation["id"]])
 
@@ -155,33 +156,54 @@ class ChatBranchTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409, response.text)
         self.assertEqual(response.json()["code"], "rewind_checkpoint_missing")
         body = self.client.get(f"/v1/chat/conversations/{conversation['id']}").json()
-        self.assertIn("First request", str(body["transcript"]))
-        self.assertIn("Second request", str(body["transcript"]))
+        transcript = str(body["transcript"])
+        self.assertIn("First request", transcript)
+        self.assertIn("first answer", transcript)
+        self.assertIn("Second request", transcript)
+        self.assertIn("second answer", transcript)
         self.assertEqual(body["queue"][0]["task"], "Waiting follow-up")
         self.assertEqual(body["current_run_id"], second["id"])
+        found = self.client.get("/v1/chat/conversations/search", params={"q": "Second request"})
+        self.assertEqual(found.status_code, 200, found.text)
+        self.assertEqual([item["conversation"]["id"] for item in found.json()], [conversation["id"]])
 
     def test_live_turn_refuses_rewind(self) -> None:
+        self.install_model([AIMessage(content="first answer"), AIMessage(content="held answer")])
+        conversation = self.create_conversation()
+        first = self.start_turn(conversation["id"], "First request")
         hold = threading.Event()
         set_generate_hold(hold)
-        self.install_model([AIMessage(content="held answer")])
-        conversation = self.create_conversation()
         started = self.client.post(
             f"/v1/chat/conversations/{conversation['id']}/start",
             json={"task": "Hold this", "presented_tools": []},
         )
         self.assertEqual(started.status_code, 200, started.text)
+        live_id = started.json()["current_run_id"]
         try:
             wait_for_generate_hold()
-            response = self.rewind(conversation["id"], started.json()["current_run_id"], "retry", "Hold this")
+            queued = self.client.post(
+                f"/v1/chat/conversations/{conversation['id']}/queue",
+                json={"task": "Waiting follow-up", "presented_tools": []},
+            )
+            self.assertEqual(queued.status_code, 200, queued.text)
+            response = self.rewind(conversation["id"], first["id"], "edit", "Should not apply")
             self.assertEqual(response.status_code, 409, response.text)
             self.assertEqual(response.json()["code"], "chat_turn_active")
             body = self.client.get(f"/v1/chat/conversations/{conversation['id']}").json()
-            self.assertIn("Hold this", str(body["transcript"]))
-            self.assertEqual(body["current_run_id"], started.json()["current_run_id"])
+            transcript = str(body["transcript"])
+            self.assertIn("First request", transcript)
+            self.assertIn("first answer", transcript)
+            self.assertIn("Hold this", transcript)
+            self.assertNotIn("Should not apply", transcript)
+            self.assertEqual(body["queue"][0]["task"], "Waiting follow-up")
+            self.assertEqual(body["current_run_id"], live_id)
+            live = self.client.get(f"/v1/agent-runs/{live_id}")
+            self.assertEqual(live.status_code, 200, live.text)
+            self.assertEqual(live.json()["status"], "running")
         finally:
             hold.set()
             set_generate_hold(None)
-            wait_for_run(self.client, started.json()["current_run_id"])
+            wait_for_run(self.client, live_id)
 
     def test_first_turn_without_a_checkpoint_retries_in_place(self) -> None:
         self.install_model([AIMessage(content="first answer"), AIMessage(content="retried answer")])
@@ -202,6 +224,68 @@ class ChatBranchTests(unittest.TestCase):
         self.assertEqual(body["id"], conversation["id"])
         self.assertEqual([item["id"] for item in self.client.get("/v1/chat/conversations").json()], [conversation["id"]])
 
+    def test_cleared_first_turn_clears_again_and_keeps_earlier_archive_rows(self) -> None:
+        self.install_model([
+            AIMessage(content="first answer"),
+            AIMessage(content="retried answer"),
+            AIMessage(content="cleared again"),
+        ])
+        conversation = self.create_conversation()
+        first = self.start_turn(conversation["id"], "First request")
+        registered = self.client.post(
+            "/v1/agent-interaction/threads",
+            json={"source_surface": "chat", "conversation_id": conversation["id"]},
+        )
+        self.assertEqual(registered.status_code, 200, registered.text)
+        from copy import deepcopy
+        from workbench_backend.interaction.projection import event
+        store = self.app.state.app_store
+        binding = store.get_interaction(conversation["id"])
+        self.assertIsNotNone(binding)
+        snapshot = deepcopy(binding["snapshot"])
+        snapshot["messages"] = [
+            {"id": "kept-prefix", "type": "human", "content": "earlier readable row"},
+            *snapshot.get("messages", []),
+        ]
+        store.append_interaction(binding["id"], [event("values", snapshot)], snapshot=snapshot)
+        live = self.app.state.harness._runs[first["id"]]
+        live.pre_run_checkpoint_id = None
+        self.app.state.app_store.put_run(live)
+        first_retry = self.rewind(conversation["id"], first["id"], "retry", "ignored by server")
+        self.assertEqual(first_retry.status_code, 200, first_retry.text)
+        retried = wait_for_run(self.client, first_retry.json()["current_run_id"])
+        self.assertEqual(retried["status"], "completed", retried.get("error"))
+        self.assertIsNone(self.app.state.harness._runs[retried["id"]].pre_run_checkpoint_id)
+        painted = self.interaction_text(conversation["id"])
+        self.assertIn("earlier readable row", painted)
+        self.assertNotIn("first answer", painted)
+        second_retry = self.rewind(conversation["id"], retried["id"], "retry", "ignored by server")
+        self.assertEqual(second_retry.status_code, 200, second_retry.text)
+        cleared = wait_for_run(self.client, second_retry.json()["current_run_id"])
+        self.assertEqual(cleared["status"], "completed", cleared.get("error"))
+        cleared_run = self.app.state.harness._runs[cleared["id"]]
+        self.assertIsNone(cleared_run.pre_run_checkpoint_id)
+        body = self.client.get(f"/v1/chat/conversations/{conversation['id']}").json()
+        transcript = str(body["transcript"])
+        self.assertNotIn("first answer", transcript)
+        self.assertNotIn("retried answer", transcript)
+        self.assertIn("cleared again", transcript)
+        painted = self.interaction_text(conversation["id"])
+        self.assertIn("earlier readable row", painted)
+        self.assertNotIn("first answer", painted)
+        self.assertNotIn("retried answer", painted)
+        self.assertIn("cleared again", painted)
+        if cleared_run.checkpoint_ids:
+            values = self.app.state.harness.checkpoint_state_for_run(cleared_run, cleared_run.checkpoint_ids[0])
+            checkpoint_text = str(values["values"].get("messages"))
+            self.assertNotIn("first answer", checkpoint_text)
+            self.assertNotIn("retried answer", checkpoint_text)
+            self.assertIn("cleared again", checkpoint_text)
+
+    def interaction_text(self, conversation_id: str) -> str:
+        response = self.client.get(f"/v1/agent-interaction/threads/{conversation_id}/state")
+        self.assertEqual(response.status_code, 200, response.text)
+        return str(response.json()["values"].get("messages"))
 
     def test_typed_ask_user_cancel_resumes_with_cancelled_payload(self) -> None:
         self.install_model([

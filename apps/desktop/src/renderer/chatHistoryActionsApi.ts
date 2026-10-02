@@ -1,25 +1,4 @@
 import { request } from "./api";
-import type { ChatConversation } from "./types";
-
-export interface ChatReplyActions {
-  branch_available: boolean;
-  retry_available: boolean;
-  regenerate_available: boolean;
-  branch_reason: string | null;
-  retry_reason: string | null;
-  regenerate_reason: string | null;
-}
-
-export type ChatBranchMode = "continue" | "retry" | "edit" | "regenerate";
-
-export interface ConversationExportPayload {
-  schema_version: 1;
-  exported_at: string;
-  conversation: Record<string, unknown>;
-  runs: Array<Record<string, unknown>>;
-  retained_assets: Array<Record<string, unknown>>;
-  note: string;
-}
 
 export interface ConversationDeletePreview {
   conversation_id: string;
@@ -41,20 +20,6 @@ export interface ConversationDeletePreview {
 }
 
 export const chatHistoryActionsApi = {
-  replyActions: (conversationId: string, runId: string) =>
-    request<ChatReplyActions>(`/v1/chat/conversations/${encodeURIComponent(conversationId)}/replies/${encodeURIComponent(runId)}/actions`),
-  createBranch: (conversationId: string, sourceRunId: string, mode: ChatBranchMode, acknowledgeRepeatedEffects = false, editedTask?: string) =>
-    request<ChatConversation>(`/v1/chat/conversations/${encodeURIComponent(conversationId)}/branches`, {
-      method: "POST",
-      body: JSON.stringify({
-        source_run_id: sourceRunId,
-        mode,
-        acknowledge_repeated_effects: acknowledgeRepeatedEffects,
-        edited_task: editedTask,
-      }),
-    }),
-  exportConversation: (conversationId: string) =>
-    request<ConversationExportPayload>(`/v1/chat/conversations/${encodeURIComponent(conversationId)}/export`),
   deletePreview: (conversationId: string) =>
     request<ConversationDeletePreview>(`/v1/chat/conversations/${encodeURIComponent(conversationId)}/delete-preview`, { method: "POST", body: "{}" }),
   deleteConversation: (conversationId: string, includeDiagnostics = true) =>

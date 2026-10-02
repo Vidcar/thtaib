@@ -358,7 +358,7 @@ class InteractionService:
                 return
             binding = self.store.interaction_for_graph(run.thread_id or run.id)
             if binding is None:
-                self.harness._rewind_kept_messages.pop(run.id, None)
+                self.harness._rewind_drop_from.pop(run.id, None)
                 return
             self._flush_thread(binding["id"])
             binding = self.binding(binding["id"])
@@ -372,20 +372,21 @@ class InteractionService:
             snapshot = _copy_public_snapshot(binding["snapshot"])
             outgoing = []
             previous = snapshot.get("workbench", {}).get("run") or {}
-            kept_raw = self.harness._rewind_kept_messages.pop(run.id, None)
+            drop_from = self.harness._rewind_drop_from.pop(run.id, None)
             snapshot.setdefault("workbench", {}).update({"run": self._stored_run(run), "conversation_id": binding["conversation_id"]})
             if previous.get("id") != run.id:
                 snapshot["workbench"]["run_started_seq"] = binding["seq"]
                 snapshot["workbench"].pop("recovery", None)
-                if kept_raw is not None:
-                    kept = archive_messages([], kept_raw)
-                    old_ids = {message["id"] for message in snapshot.get("messages", []) if message.get("id")}
-                    kept_ids = {message["id"] for message in kept if message.get("id")}
-                    excluded = set(snapshot["workbench"].get("display_excluded_message_ids", []))
-                    excluded.update(old_ids - kept_ids)
-                    excluded.difference_update(kept_ids)
-                    snapshot["workbench"]["display_excluded_message_ids"] = sorted(excluded)
-                    snapshot["messages"] = kept
+                # Keep the readable prefix. A compacted checkpoint is not the list of rows that stay.
+                if drop_from:
+                    messages = list(snapshot.get("messages", []))
+                    cut = next((index for index, message in enumerate(messages) if message.get("id") == drop_from), None)
+                    if cut is not None:
+                        dropped = [message["id"] for message in messages[cut:] if message.get("id")]
+                        excluded = set(snapshot["workbench"].get("display_excluded_message_ids", []))
+                        excluded.update(dropped)
+                        snapshot["workbench"]["display_excluded_message_ids"] = sorted(excluded)
+                        snapshot["messages"] = messages[:cut]
             if run.input_message_id and snapshot["workbench"].get("display_hidden_run_id") != run.id:
                 snapshot["messages"] = archive_messages(snapshot.get("messages", []), [{
                     "type": "human", "id": run.input_message_id, "content": user_message_content(run.task, run.content_blocks),
