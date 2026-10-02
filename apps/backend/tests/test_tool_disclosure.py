@@ -671,5 +671,461 @@ class DeferredWindowsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.commands, [])
 
 
+def _prompt_index(prompt: str) -> str:
+    start = prompt.index("## Selected tools")
+    end = prompt.find("\n\n", start)
+    return prompt[start:] if end < 0 else prompt[start:end]
+
+
+def _resolve_index_helper(*, policy, parent_tools, versions):
+    from unittest.mock import patch
+    from workbench_backend.agents.helper_execution import _narrow_presented_tools, _resolve_child_setup
+    from workbench_backend.agents.setup_schemas import SetupConfiguration
+    parent = SimpleNamespace(
+        presented_tools=parent_tools, work_mode="work", connection_snapshots=[],
+        project_path="D:/project", protected_instruction_version_refs=[], project_id=None,
+    )
+    config = SetupConfiguration(presented_tools=["ls", "edit_file"], input_policy=policy, deployment_id="dep")
+    _selected, presented, work_mode = _narrow_presented_tools(parent, config, policy)
+    snapshot = SimpleNamespace(
+        role="Report the files.", instruction_layers=[], agent_id="helper", version_id="ver",
+        name="Reviewer", settings_snapshot=None, configuration=config,
+    )
+    owner = SimpleNamespace(
+        _resolve_knowledge_refs=lambda request, frozen: SimpleNamespace(
+            memory_version_refs=[], skill_version_refs=[], protected_instruction_version_refs=[]),
+        _load_knowledge_versions=lambda refs: versions,
+        _knowledge_provider=lambda: None,
+        manager=SimpleNamespace(get_profile=lambda ident: None),
+    )
+
+    class _Deployment:
+        def __init__(self, settings=None):
+            self.id = "dep"
+            self.server_props = None
+            self.settings = settings or SimpleNamespace(agent=SimpleNamespace(applied={}))
+
+        def model_copy(self, update=None):
+            return _Deployment((update or {}).get("settings", self.settings))
+
+    bags = SimpleNamespace(agent=SimpleNamespace(applied={}), per_request={})
+    setup = SimpleNamespace(system_prompt="Helper job.", startup_mismatches=[], selected_profile_id=None, bags=bags)
+    with patch("workbench_backend.agents.helper_execution.resolve_effective_setup", return_value=setup):
+        presented, resolved, _refs = _resolve_child_setup(
+            owner, parent, snapshot, config, policy, _Deployment(), presented, work_mode, "ask", [], [])
+    return presented, resolved
+
+
+class SelectedToolsIndexTests(unittest.TestCase):
+    def test_index_names_labels_and_omits_the_handbook(self):
+        from workbench_backend.agents.input_sources import WORKBENCH_CORE_INSTRUCTIONS, build_input_sources
+        from workbench_backend.agents.tool_disclosure import (
+            append_selected_tools_index, discovery_context, selected_tools_index,
+        )
+        policy = AgentInputPolicy()
+        index = selected_tools_index(["edit_file", "ls", "not_a_tool"], input_policy=policy)
+        self.assertIn("## Selected tools", index)
+        self.assertIn("ls (List files)", index)
+        self.assertIn("edit_file (Edit files)", index)
+        self.assertIn(
+            "Call find_tools with the label or the call name before the first use "
+            "if that schema is not already loaded. Do not invent a different tool name.",
+            index,
+        )
+        self.assertNotIn("read_file", index)
+        self.assertNotIn("write_file", index)
+        self.assertNotIn("not_a_tool", index)
+        self.assertNotIn("find_tools (", index)
+        self.assertNotIn("replace_all", index)
+        self.assertNotIn("project root when bound", index)
+        self.assertNotIn("file edit tool", index)
+        self.assertNotIn("computer shell tool", index)
+        self.assertNotIn("edit_file", WORKBENCH_CORE_INSTRUCTIONS)
+        self.assertNotIn("List files", WORKBENCH_CORE_INSTRUCTIONS)
+        pinned = AgentInputPolicy(tool_loading="always", pinned_tools=["ls", "edit_file"])
+        self.assertEqual(discovery_context(SimpleNamespace(
+            input_policy=pinned, presented_tools=["ls", "edit_file"], connection_snapshots=[])), "")
+        pinned_index = selected_tools_index(["ls", "edit_file"], input_policy=pinned)
+        self.assertIn("## Selected tools", pinned_index)
+        self.assertEqual(append_selected_tools_index("legacy", ["ls"], None), "legacy")
+        self.assertEqual(selected_tools_index(["ls"], input_policy=None), "")
+        ordered = selected_tools_index(["browser_snapshot", "execute", "edit_file", "ls"], input_policy=policy)
+        self.assertLess(ordered.index("Project files:"), ordered.index("This computer:"))
+        self.assertLess(ordered.index("This computer:"), ordered.index("Browser:"))
+        self.assertLess(ordered.index("ls (List files)"), ordered.index("edit_file (Edit files)"))
+        planning = selected_tools_index(["browser_snapshot", "task"], input_policy=policy)
+        self.assertLess(planning.index("Planning:"), planning.index("Browser:"))
+        self.assertIn("task (Delegate task)", planning)
+        self.assertNotIn("write_todos", planning)
+        questions = selected_tools_index(["browser_snapshot", "find_tools"], input_policy=policy)
+        self.assertLess(questions.index("Questions:"), questions.index("Browser:"))
+        self.assertIn("find_tools (Find tools)", questions)
+        preview = build_input_sources(policy=policy, presented_tools=["ls", "edit_file"], include_content=True)
+        shown = next(row for row in preview if row.id == "selected_tools")
+        self.assertEqual(shown.content, index)
+        self.assertTrue(shown.required)
+        legacy = build_input_sources(policy=None, presented_tools=["ls", "edit_file"], include_content=True)
+        self.assertFalse(any(row.id == "selected_tools" for row in legacy))
+        once = append_selected_tools_index("Helper job.", ["ls", "edit_file"], policy)
+        self.assertTrue(once.startswith("Helper job."))
+        self.assertEqual(once.count("## Selected tools"), 1)
+        self.assertEqual(append_selected_tools_index(once, ["ls", "edit_file"], policy), once)
+        self.assertEqual(selected_tools_index([], input_policy=policy), "")
+        self.assertEqual(selected_tools_index(["not_a_tool"], input_policy=policy), "")
+        for names in ([], ["not_a_tool"]):
+            rows = build_input_sources(policy=policy, presented_tools=names, include_content=True)
+            self.assertFalse(any(row.id == "selected_tools" for row in rows))
+
+    def test_helper_index_names_helper_tools_and_does_not_add_task(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from workbench_backend.agents.helper_execution import _narrow_presented_tools, _resolve_child_setup
+        from workbench_backend.agents.setup_schemas import SetupConfiguration
+        parent = SimpleNamespace(
+            presented_tools=["ls", "edit_file", "write_file", "task"],
+            work_mode="work", connection_snapshots=[], project_path="D:/project",
+            protected_instruction_version_refs=[], project_id=None,
+        )
+        policy = AgentInputPolicy()
+        config = SetupConfiguration(presented_tools=["ls", "edit_file"], input_policy=policy, deployment_id="dep")
+        _selected, presented, work_mode = _narrow_presented_tools(parent, config, policy)
+        self.assertNotIn("task", presented)
+        snapshot = SimpleNamespace(
+            role="Report the files.", instruction_layers=[], agent_id="helper", version_id="ver",
+            name="Reviewer", settings_snapshot=None, configuration=config,
+        )
+        owner = SimpleNamespace(
+            _resolve_knowledge_refs=lambda request, frozen: SimpleNamespace(
+                memory_version_refs=[], skill_version_refs=[], protected_instruction_version_refs=[]),
+            _load_knowledge_versions=lambda refs: [],
+            _knowledge_provider=lambda: None,
+            manager=SimpleNamespace(get_profile=lambda ident: None),
+        )
+        class _Deployment:
+            def __init__(self, settings=None):
+                self.id = "dep"
+                self.server_props = None
+                self.settings = settings or SimpleNamespace(agent=SimpleNamespace(applied={}))
+
+            def model_copy(self, update=None):
+                return _Deployment((update or {}).get("settings", self.settings))
+
+        bags = SimpleNamespace(agent=SimpleNamespace(applied={}), per_request={})
+        deployment = _Deployment()
+        setup = SimpleNamespace(system_prompt="Helper job.", startup_mismatches=[], selected_profile_id=None, bags=bags)
+        with patch("workbench_backend.agents.helper_execution.resolve_effective_setup", return_value=setup):
+            presented, resolved, _refs = _resolve_child_setup(
+                owner, parent, snapshot, config, policy, deployment, presented, work_mode, "ask", [], [])
+        self.assertEqual(presented, ["ls", "edit_file"])
+        self.assertIn("ls (List files)", resolved.system_prompt)
+        self.assertIn("edit_file (Edit files)", resolved.system_prompt)
+        self.assertNotIn("task (Delegate task)", resolved.system_prompt)
+        self.assertNotIn("write_file", resolved.system_prompt)
+        self.assertNotIn("replace_all", resolved.system_prompt)
+        self.assertIn("## Selected tools", resolved.system_prompt)
+        shown = next(row for row in resolved.input_sources if row.id == "selected_tools")
+        self.assertEqual(shown.title, "Selected tools")
+        self.assertTrue(shown.required)
+        index_text = _prompt_index(resolved.system_prompt)
+        self.assertEqual(shown.content, index_text)
+        self.assertIn("ls (List files)", shown.content)
+        self.assertIn("edit_file (Edit files)", shown.content)
+        self.assertNotIn("task (Delegate task)", shown.content)
+
+    def test_helper_without_a_policy_has_no_index(self):
+        _presented, resolved = _resolve_index_helper(policy=None, parent_tools=["ls", "edit_file", "task"], versions=[])
+        self.assertNotIn("## Selected tools", resolved.system_prompt)
+
+    def test_helper_index_includes_when_needed_readers_the_parent_offers(self):
+        memory = SimpleNamespace(
+            content="Remember this.", entry_id="mem-1", id="ver-1", kind="memory",
+            scope="user", display_name="Note", description="", resources=[],
+            required_tools=[], required_connections=[], requires_project=False,
+        )
+        presented, resolved = _resolve_index_helper(
+            policy=AgentInputPolicy(),
+            parent_tools=["ls", "edit_file", "write_file", "task", "find_tools", "read_reference"],
+            versions=[memory],
+        )
+        self.assertEqual(presented, ["ls", "edit_file", "read_reference", "find_tools"])
+        self.assertIn("find_tools (Find tools)", resolved.system_prompt)
+        self.assertIn("read_reference (Read reference)", resolved.system_prompt)
+        self.assertIn("ls (List files)", resolved.system_prompt)
+        self.assertIn("edit_file (Edit files)", resolved.system_prompt)
+        self.assertNotIn("task (Delegate task)", resolved.system_prompt)
+
+    def test_starter_drafts_keep_the_job_and_leave_repository_skills_off(self):
+        from workbench_backend.agents.setup_templates import setup_templates
+        from workbench_backend.knowledge.bundled_skills import PACK_ROOT
+        entry = SimpleNamespace(
+            package_source=str((PACK_ROOT / "project-change").resolve()), id="skill-installed",
+            kind="skill", scope="user", enabled=True)
+        templates = {item.id: item for item in setup_templates(SimpleNamespace(list_entries=lambda: [entry]))}
+        general = templates["general"]
+        self.assertEqual(general.configuration.helper_agent_ids, [])
+        self.assertEqual(general.configuration.skill_entry_ids, [])
+        self.assertEqual(general.configuration.input_policy.pinned_tools, ["ls", "read_file", "edit_file", "write_file"])
+        self.assertIn("Finish the requested result in the bound project", general.configuration.instructions)
+        self.assertIn("A send needs that folder.", general.configuration.instructions)
+        self.assertNotIn("when there is one", general.configuration.instructions)
+        self.assertNotIn("execute", general.configuration.input_policy.pinned_tools)
+        self.assertEqual(general.suggested_chat_access, "ask")
+        for slug in ("guarded-project-builder", "read-only-reviewer", "browser-validator", "evidence-researcher", "windows-validator"):
+            self.assertEqual(templates[slug].configuration.skill_entry_ids, [])
+            self.assertEqual(templates[slug].suggested_chat_access, "ask")
+        guarded = templates["guarded-project-builder"]
+        self.assertEqual(guarded.configuration.input_policy.pinned_tools, ["ls", "read_file", "edit_file", "write_file"])
+        self.assertFalse(set(guarded.configuration.input_policy.pinned_tools) & {"execute", "glob", "grep"})
+        self.assertEqual(templates["browser-validator"].configuration.input_policy.pinned_tools, ["browser_navigate", "browser_snapshot"])
+        self.assertEqual(templates["windows-validator"].configuration.input_policy.pinned_tools, ["desktop_inspect"])
+        researcher = templates["evidence-researcher"]
+        self.assertEqual(researcher.configuration.input_policy.pinned_tools, ["read_attachment", "read_tool_result"])
+        self.assertTrue({"browser_navigate", "browser_snapshot", "browser_find", "read_attachment", "read_tool_result"} <= set(researcher.configuration.presented_tools))
+        self.assertFalse(set(researcher.configuration.presented_tools) & {"write_file", "edit_file", "execute"})
+        trusted = templates["trusted-project-builder"]
+        self.assertEqual(trusted.suggested_chat_access, "full_access")
+        self.assertEqual(trusted.configuration.skill_entry_ids, ["skill-installed"])
+        self.assertEqual(trusted.configuration.input_policy.pinned_tools, ["glob", "grep", "edit_file", "write_file", "execute"])
+
+
+_DISCOVERY = "Find selected tools with find_tools(query, group?, cursor?)."
+_INDEX_CLOSING = (
+    "Call find_tools with the label or the call name before the first use "
+    "if that schema is not already loaded. Do not invent a different tool name."
+)
+
+
+class SelectedToolsAdmissionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        import tempfile
+        from pathlib import Path
+        from typing import Any
+        from workbench_backend.agents.harness import HarnessService
+        from workbench_backend.agents.schemas import AgentRun
+        from workbench_backend.app import create_app
+        from tests.scripted_model import ScriptedChatModel
+        from tests.support import offline_workbench_client
+        from langchain_core.messages import AIMessage
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.app = create_app(data_root=self.root / "data")
+        self.scripted = ScriptedChatModel([AIMessage(content="Done.")])
+
+        def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
+            return self.scripted
+
+        self.app.state.harness = HarnessService(
+            lambda: self.app.state.manager,
+            model_factory=factory,
+            knowledge_provider=lambda: self.app.state.knowledge,
+            app_store=self.app.state.app_store,
+        )
+        self.client = offline_workbench_client(self.app)
+        self.deployment_id = self.client.post("/v1/deployments/connected", json={
+            "endpoint": "http://127.0.0.1:9/v1", "display_name": "index-fixture",
+        }).json()["id"]
+
+    def tearDown(self) -> None:
+        from tests.support import close_workbench_sqlite
+        close_workbench_sqlite(self.app, getattr(self, "client", None))
+        self.tmp.cleanup()
+
+    def _save(self, name: str, configuration: dict) -> dict:
+        saved = self.client.post("/v1/agent-setups", json={"name": name, "role": "Edit", "configuration": configuration})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        return saved.json()
+
+    def _chat(self, **extra) -> dict:
+        created = self.client.post("/v1/chat/conversations", json={
+            "deployment_id": self.deployment_id, "approval_mode": "full_access", **extra})
+        self.assertEqual(created.status_code, 200, created.text)
+        return created.json()
+
+    def _finish(self, chat: dict, task: str = "Edit the note.", **start) -> dict:
+        from langchain_core.messages import AIMessage
+        from tests.scripted_model import ScriptedChatModel
+        from tests.test_chat import wait_for_chat
+        self.scripted = ScriptedChatModel([AIMessage(content="Done.")])
+        started = self.client.post(f"/v1/chat/conversations/{chat['id']}/start", json={"task": task, **start})
+        self.assertEqual(started.status_code, 200, started.text)
+        finished = wait_for_chat(self.client, chat["id"])
+        run = finished["current_run"]
+        self.assertEqual(run["status"], "completed", run.get("error"))
+        return run
+
+    def test_admitted_turn_places_the_index_before_discovery_and_skips_a_second_copy(self) -> None:
+        from langchain_core.messages import AIMessage
+        from tests.scripted_model import ScriptedChatModel
+        from tests.test_chat import wait_for_chat
+        from workbench_backend.agents.setup_schemas import AgentInputPolicy
+        from workbench_backend.agents.tool_disclosure import selected_tools_index
+        project = self.root / "notes"
+        project.mkdir()
+        policy = {"tool_loading": "when_needed", "pinned_tools": ["ls", "edit_file"]}
+        setup = self._save("Files", {"presented_tools": ["ls", "edit_file"], "instructions": "Change the notes.",
+            "input_policy": policy, "requires_project": True})
+        prompt = self._finish(self._chat(agent_setup_id=setup["id"], project_path=str(project)))["effective_setup"]["system_prompt"]
+        self.assertIn("## Selected tools", prompt)
+        self.assertIn("ls (List files)", prompt)
+        self.assertIn("edit_file (Edit files)", prompt)
+        self.assertIn(_INDEX_CLOSING, prompt)
+        self.assertLess(prompt.index("## Selected tools"), prompt.index("ls (List files)"))
+        self.assertLess(prompt.index("ls (List files)"), prompt.index("edit_file (Edit files)"))
+        self.assertLess(prompt.index("edit_file (Edit files)"), prompt.index(_INDEX_CLOSING))
+        self.assertLess(prompt.index(_INDEX_CLOSING), prompt.index(_DISCOVERY))
+
+        always = {"tool_loading": "always", "pinned_tools": ["ls", "edit_file"]}
+        pinned = self._save("Pinned", {"presented_tools": ["ls", "edit_file"], "instructions": "Change the notes.",
+            "input_policy": always, "requires_project": True})
+        pinned_prompt = self._finish(self._chat(agent_setup_id=pinned["id"], project_path=str(project)))["effective_setup"]["system_prompt"]
+        self.assertIn("## Selected tools", pinned_prompt)
+        self.assertIn("ls (List files)", pinned_prompt)
+        self.assertIn("edit_file (Edit files)", pinned_prompt)
+        self.assertNotIn(_DISCOVERY, pinned_prompt)
+
+        queued_chat = self._chat(agent_setup_id=setup["id"], project_path=str(project))
+        queued = self.client.post(f"/v1/chat/conversations/{queued_chat['id']}/queue", json={"task": "Edit again."})
+        self.assertEqual(queued.status_code, 200, queued.text)
+        index = selected_tools_index(["ls", "edit_file", "find_tools"], input_policy=AgentInputPolicy.model_validate(policy))
+        stored = self.app.state.chat.store.get(queued_chat["id"])
+        stored.queue[0].execution_snapshot.system_prompt = "SNAPSHOT\n\n" + index
+        self.app.state.chat.store.put(stored)
+        self.scripted = ScriptedChatModel([AIMessage(content="Done.")])
+        resumed = self.client.post(f"/v1/chat/conversations/{queued_chat['id']}/queue/resume", json={})
+        self.assertEqual(resumed.status_code, 200, resumed.text)
+        finished = wait_for_chat(self.client, queued_chat["id"])
+        snap = finished["current_run"]["effective_setup"]["system_prompt"]
+        self.assertEqual(snap.count("## Selected tools"), 1)
+        self.assertLess(snap.index("SNAPSHOT"), snap.index("## Selected tools"))
+        self.assertLess(snap.index("## Selected tools"), snap.index(_DISCOVERY))
+
+        bare_chat = self._chat(agent_setup_id=setup["id"], project_path=str(project))
+        bare_queued = self.client.post(f"/v1/chat/conversations/{bare_chat['id']}/queue", json={"task": "Edit from the snapshot."})
+        self.assertEqual(bare_queued.status_code, 200, bare_queued.text)
+        stored = self.app.state.chat.store.get(bare_chat["id"])
+        stored.queue[0].execution_snapshot.system_prompt = "SNAPSHOT"
+        self.app.state.chat.store.put(stored)
+        self.scripted = ScriptedChatModel([AIMessage(content="Done.")])
+        resumed = self.client.post(f"/v1/chat/conversations/{bare_chat['id']}/queue/resume", json={})
+        self.assertEqual(resumed.status_code, 200, resumed.text)
+        finished = wait_for_chat(self.client, bare_chat["id"])
+        bare = finished["current_run"]["effective_setup"]["system_prompt"]
+        self.assertEqual(bare.count("## Selected tools"), 1)
+        self.assertLess(bare.index("SNAPSHOT"), bare.index("## Selected tools"))
+        self.assertLess(bare.index("## Selected tools"), bare.index("ls (List files)"))
+        self.assertLess(bare.index("ls (List files)"), bare.index("edit_file (Edit files)"))
+        self.assertLess(bare.index("edit_file (Edit files)"), bare.index(_INDEX_CLOSING))
+        self.assertLess(bare.index(_INDEX_CLOSING), bare.index(_DISCOVERY))
+
+    def test_preview_index_matches_the_admitted_prompt(self) -> None:
+        import base64
+        from workbench_backend.assets.schemas import RetainedUploadRequest
+        from workbench_backend.assets.service import RetainedAssetService
+        template = next(item for item in self.client.get("/v1/agent-setup-templates").json() if item["id"] == "evidence-researcher")
+        saved = self._save(template["name"], template["configuration"])
+        chat = self._chat(agent_setup_id=saved["id"], work_mode="plan")
+        asset = RetainedAssetService(self.app.state.app_store).retain_upload(RetainedUploadRequest(
+            session_id=chat["id"], filename="source.md", content_type="text/markdown",
+            content_base64=base64.b64encode(b"DOC_RECEIPT_77").decode()))
+        ready = self.client.post(f"/v1/chat/conversations/{chat['id']}/readiness", json={
+            "include_input_content": True, "attachment_ids": [asset.id]})
+        self.assertEqual(ready.status_code, 200, ready.text)
+        shown = next(row for row in ready.json()["input_preview"]["sources"] if row["id"] == "selected_tools")
+        prompt_index = _prompt_index(self._finish(chat, task="Read the attached source.", attachment_ids=[asset.id])["effective_setup"]["system_prompt"])
+        self.assertEqual(shown["content"], prompt_index)
+        for needle in ("ls (List files)", "read_file (Read files)", "glob (", "grep ("):
+            self.assertNotIn(needle, prompt_index)
+
+        project = self.root / "bound"
+        project.mkdir()
+        excluded = self._save("Exclude edit", {
+            "presented_tools": ["ls", "edit_file"],
+            "instructions": "Read the notes.",
+            "input_policy": {"tool_loading": "when_needed", "pinned_tools": ["ls"], "excluded_sources": ["tool:edit_file"]},
+            "requires_project": True,
+        })
+        excluded_chat = self._chat(agent_setup_id=excluded["id"], project_path=str(project))
+        ready = self.client.post(f"/v1/chat/conversations/{excluded_chat['id']}/readiness", json={"include_input_content": True})
+        self.assertEqual(ready.status_code, 200, ready.text)
+        sources = ready.json()["input_preview"]["sources"]
+        shown = next(row for row in sources if row["id"] == "selected_tools")
+        tool_row = next(row for row in sources if row["id"] == "tool:edit_file")
+        self.assertEqual(tool_row["mode"], "off")
+        prompt_index = _prompt_index(self._finish(excluded_chat, task="List the notes.")["effective_setup"]["system_prompt"])
+        self.assertEqual(shown["content"], prompt_index)
+        self.assertNotIn("edit_file (", prompt_index)
+        self.assertIn("ls (List files)", prompt_index)
+
+    def test_preview_indexes_a_helper_reference_without_the_helpers_tools(self) -> None:
+        project = self.root / "helper-notes"
+        project.mkdir()
+        memory = self.client.post("/v1/knowledge/entries", json={
+            "scope": "user", "kind": "memory", "content": "Remember the folder.",
+        })
+        self.assertEqual(memory.status_code, 200, memory.text)
+        helper = self._save("Checker", {
+            "presented_tools": ["grep"],
+            "instructions": "Report the files.",
+            "memory_entry_ids": [memory.json()["id"]],
+            "input_policy": {"tool_loading": "when_needed", "pinned_tools": []},
+        })
+        parent = self._save("Parent", {
+            "presented_tools": ["ls", "edit_file"],
+            "instructions": "Change the notes.",
+            "helper_agent_ids": [helper["id"]],
+            "input_policy": {"tool_loading": "when_needed", "pinned_tools": ["ls", "edit_file"]},
+            "requires_project": True,
+        })
+        chat = self._chat(agent_setup_id=parent["id"], project_path=str(project))
+        ready = self.client.post(f"/v1/chat/conversations/{chat['id']}/readiness", json={"include_input_content": True})
+        self.assertEqual(ready.status_code, 200, ready.text)
+        sources = ready.json()["input_preview"]["sources"]
+        shown = next(row for row in sources if row["id"] == "selected_tools")
+        prompt_index = _prompt_index(self._finish(chat, task="Edit the note.")["effective_setup"]["system_prompt"])
+        self.assertEqual(shown["content"], prompt_index)
+        self.assertIn("read_reference (Read reference)", prompt_index)
+        self.assertIn("task (Delegate task)", prompt_index)
+        self.assertNotIn("grep (", prompt_index)
+        self.assertNotIn("tool:grep", {row["id"] for row in sources})
+
+    def test_preview_indexes_project_memory_merged_onto_a_helper(self) -> None:
+        folder = self.root / "project-memory"
+        folder.mkdir()
+        memory = self.client.post("/v1/knowledge/entries", json={
+            "scope": "user", "kind": "memory", "content": "Project note.",
+        })
+        self.assertEqual(memory.status_code, 200, memory.text)
+        memory_id = memory.json()["id"]
+        created = self.client.post("/v1/projects", json={
+            "path": str(folder),
+            "defaults": {
+                "memory_entry_ids": [memory_id],
+                "input_policy": {"reference_loading": {memory_id: "always"}},
+            },
+        })
+        self.assertEqual(created.status_code, 200, created.text)
+        helper = self._save("Checker", {
+            "presented_tools": ["grep"],
+            "instructions": "Report the files.",
+            "input_policy": {"tool_loading": "when_needed", "pinned_tools": []},
+        })
+        parent = self._save("Parent", {
+            "presented_tools": ["ls", "edit_file"],
+            "instructions": "Change the notes.",
+            "helper_agent_ids": [helper["id"]],
+            "input_policy": {"tool_loading": "when_needed", "pinned_tools": ["ls", "edit_file"]},
+            "requires_project": True,
+        })
+        chat = self._chat(agent_setup_id=parent["id"], project_id=created.json()["id"])
+        ready = self.client.post(f"/v1/chat/conversations/{chat['id']}/readiness", json={"include_input_content": True})
+        self.assertEqual(ready.status_code, 200, ready.text)
+        sources = ready.json()["input_preview"]["sources"]
+        shown = next(row for row in sources if row["id"] == "selected_tools")
+        prompt_index = _prompt_index(self._finish(chat, task="Edit the note.")["effective_setup"]["system_prompt"])
+        self.assertEqual(shown["content"], prompt_index)
+        self.assertIn("read_reference (Read reference)", prompt_index)
+        self.assertNotIn("grep (", prompt_index)
+
+
 if __name__ == "__main__":
     unittest.main()

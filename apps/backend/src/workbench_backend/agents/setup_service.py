@@ -418,9 +418,10 @@ class SetupService:
         if validate:
             self._raise_for_dependency_issues(configuration, project)
         return self._build_resolved_selection(
-            project_id=project_id, version=version, configuration=configuration, instructions=instructions,
-            effective=effective, input_policy=input_policy, preview_versions=preview_versions,
-            excluded_rows=excluded_rows, values=values, include_input_content=include_input_content)
+            project_id=project_id, project_path=project.path if project else None, version=version,
+            configuration=configuration, instructions=instructions, effective=effective, input_policy=input_policy,
+            preview_versions=preview_versions, excluded_rows=excluded_rows, values=values,
+            include_input_content=include_input_content)
 
     def _editing_layers(self, project: ProjectRecord | None, version: AgentSetupVersion | None,
         overrides: SetupConfiguration | None, editing_layer: str,
@@ -649,9 +650,9 @@ class SetupService:
             if deployment is not None and deployment.bundle_id != configuration.bundle_id:
                 raise HarnessError("The selected deployment uses a different model from this setup.", code="setup_model_mismatch", status_code=409)
 
-    def _build_resolved_selection(self, *, project_id: str | None, version: AgentSetupVersion | None,
-        configuration: SetupConfiguration, instructions: list[InstructionLayer], effective: dict,
-        input_policy: AgentInputPolicy, preview_versions: list, excluded_rows: list, values: dict,
+    def _build_resolved_selection(self, *, project_id: str | None, project_path: str | None,
+        version: AgentSetupVersion | None, configuration: SetupConfiguration, instructions: list[InstructionLayer],
+        effective: dict, input_policy: AgentInputPolicy, preview_versions: list, excluded_rows: list, values: dict,
         include_input_content: bool) -> ResolvedSetupSelection:
         profile = self.manager.store.get_profile(configuration.profile_id or configuration.model_configuration_id or "")
         deployment = self.manager.store.get_deployment(configuration.deployment_id or "")
@@ -671,15 +672,26 @@ class SetupService:
             if any(reference_source_mode(input_policy, item.entry_id, item.kind) == "when_needed" for item in preview_versions) and "read_reference" not in preview_tools:
                 preview_tools.append("read_reference")
         optional, unavailable = cold_optional_tool_definitions(preview_tools, paths=getattr(self.manager, "paths", None))
+        external_names = []
         if self.connection_tool_definitions is not None:
             for connection_id in configuration.connection_ids or []:
-                optional.extend(self.connection_tool_definitions(connection_id))
+                definitions = self.connection_tool_definitions(connection_id)
+                optional.extend(definitions)
+                external_names.extend(tool.name for tool in definitions)
         if configuration.work_mode == "plan":
             eligible = self._plan_tools(configuration.connection_ids)
             preview_tools = [name for name in preview_tools if name in eligible]
+        from types import SimpleNamespace
+        from workbench_backend.agents.harness_presentation import index_names_for_preview
+        from workbench_backend.agents.helpers import index_helper_refs
+        helpers = index_helper_refs(self, configuration.helper_agent_ids, project_id=project_id)
+        index_tools = index_names_for_preview(configuration, project_path=project_path,
+            knowledge_versions=preview_versions, service=SimpleNamespace(manager=self.manager),
+            external_names=external_names, helpers=helpers,
+            resource_loader=self.knowledge.resource_bytes if self.knowledge is not None else None)
         input_sources = build_input_sources(policy=input_policy, instruction_layers=instructions,
             knowledge_versions=preview_versions, profile=profile, deployment=deployment,
-            presented_tools=preview_tools, tool_metadata=tool_descriptions(),
+            presented_tools=preview_tools, index_tools=index_tools, tool_metadata=tool_descriptions(),
             include_content=include_input_content, selected_agent=bool(version), project_id=project_id,
             extra_tools=optional, tool_unavailable=unavailable)
         input_sources.extend(excluded_rows)

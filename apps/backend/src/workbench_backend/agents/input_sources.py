@@ -251,8 +251,8 @@ def _append_tool_sources(rows: list[InputSourceRow], *, policy, excluded: set[st
 
 def build_input_sources(*, policy: AgentInputPolicy | None, instruction_layers=None,
         knowledge_versions=None, profile=None, deployment=None, presented_tools=None,
-        tool_metadata=None, include_content=False, selected_agent=False, surface_text=None,
-        project_id=None, extra_tools=(), tool_unavailable=None) -> list[InputSourceRow]:
+        index_tools=None, tool_metadata=None, include_content=False, selected_agent=False,
+        surface_text=None, project_id=None, extra_tools=(), tool_unavailable=None) -> list[InputSourceRow]:
     """Describe candidate sources, with exact content fetched only on explicit inspection."""
     rows: list[InputSourceRow] = []
     excluded = set(policy.excluded_sources) if policy else set()
@@ -263,6 +263,14 @@ def build_input_sources(*, policy: AgentInputPolicy | None, instruction_layers=N
     _append_tool_sources(rows, policy=policy, excluded=excluded, presented_tools=presented_tools,
         tool_metadata=tool_metadata, include_content=include_content, extra_tools=extra_tools,
         tool_unavailable=tool_unavailable)
+    from workbench_backend.agents.tool_disclosure import selected_tools_index
+    names_for_index = presented_tools if index_tools is None else index_tools
+    index = selected_tools_index(names_for_index, input_policy=policy)
+    if index:
+        _append_text_source(rows, excluded, include_content, "selected_tools", "Selected tools", index,
+            origin="Accepted tool selection",
+            reason="Call names and screen labels for this turn. Parameter rules stay on each tool schema.",
+            required=True)
     if presented_tools != []:
         _append_text_source(rows, excluded, include_content, "tool_protocol", "Tool calling protocol", None,
             origin="Native model/LangChain tool binding",
@@ -275,7 +283,9 @@ def build_input_sources(*, policy: AgentInputPolicy | None, instruction_layers=N
 
 
 def create_input_preview(selection, *, include_content=False, knowledge=None, manager=None,
-        additional_sources=None, connection_tool_definitions=None) -> AgentInputPreview:
+        additional_sources=None, connection_tool_definitions=None, project_path=None,
+        retained_asset_ids=(), retrieval_project_paths=(), capture_routes=False,
+        external_names=(), work_mode=None, helpers=None) -> AgentInputPreview:
     """One cold preview builder shared by Setup resolution and Chat readiness."""
     config = selection.configuration
     if selection.input_sources and (not include_content or all(row.content is not None or row.mode == "off" for row in selection.input_sources)):
@@ -291,12 +301,22 @@ def create_input_preview(selection, *, include_content=False, knowledge=None, ma
         from workbench_backend.agents.tools import tool_descriptions
         names = [row.tool_name for row in selection.input_sources if row.tool_name] or config.presented_tools
         optional, unavailable = cold_optional_tool_definitions(names or [], paths=getattr(manager, "paths", None))
+        accepted_external = [name for name in external_names if name]
         if connection_tool_definitions is not None:
             for connection_id in config.connection_ids or []:
-                optional.extend(connection_tool_definitions(connection_id))
+                definitions = connection_tool_definitions(connection_id)
+                optional.extend(definitions)
+                accepted_external.extend(tool.name for tool in definitions)
+        from workbench_backend.agents.harness_presentation import index_names_for_preview
+        index_tools = index_names_for_preview(config, project_path=project_path, knowledge_versions=versions,
+            service=SimpleNamespace(manager=manager) if manager is not None else None,
+            retained_asset_ids=retained_asset_ids, retrieval_project_paths=retrieval_project_paths,
+            capture_routes=capture_routes, external_names=accepted_external,
+            work_mode=work_mode, helpers=helpers,
+            resource_loader=knowledge.resource_bytes if knowledge is not None else None)
         rows = build_input_sources(policy=config.input_policy, instruction_layers=selection.instruction_layers,
             knowledge_versions=versions, profile=profile, deployment=deployment, presented_tools=names,
-            tool_metadata=tool_descriptions(), include_content=include_content,
+            index_tools=index_tools, tool_metadata=tool_descriptions(), include_content=include_content,
             selected_agent=bool(selection.agent_setup_version_id), project_id=selection.project_id,
             extra_tools=optional, tool_unavailable=unavailable)
         # Excluded deleted sources remain usable controls without reading their content.

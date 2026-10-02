@@ -121,6 +121,60 @@ def discovery_context(run: Any) -> str:
     return text
 
 
+_INDEX_CLOSING = (
+    "Call find_tools with the label or the call name before the first use "
+    "if that schema is not already loaded. Do not invent a different tool name."
+)
+
+
+def selected_tools_index(names, *, input_policy) -> str:
+    """Call names and screen labels for one input-policy turn. Empty without a policy."""
+    if input_policy is None:
+        return ""
+    from workbench_backend.agents.tools import _GROUP_LABELS, enabled_catalogue
+    accepted: list[str] = []
+    seen: set[str] = set()
+    for name in names or []:
+        if not isinstance(name, str) or name in seen or name not in TOOL_PRESENTATIONS:
+            continue
+        seen.add(name)
+        accepted.append(name)
+    if not accepted:
+        return ""
+    # Group order follows the catalogue even when that group's catalogue tools were not accepted.
+    order = list(dict.fromkeys([*enabled_catalogue(), *TOOL_PRESENTATIONS]))
+    grouped: dict[str, list[str]] = {}
+    pending = set(accepted)
+    for name in order:
+        presentation = TOOL_PRESENTATIONS.get(name)
+        if presentation is None:
+            continue
+        bucket = grouped.get(presentation.group)
+        if name in pending:
+            pending.remove(name)
+            if bucket is None:
+                grouped[presentation.group] = [name]
+            else:
+                bucket.append(name)
+        elif bucket is None:
+            grouped[presentation.group] = []
+    lines = []
+    for group, members in grouped.items():
+        if not members:
+            continue
+        title = _GROUP_LABELS.get(group, group.replace("_", " ").title())
+        items = ", ".join(f"{name} ({TOOL_PRESENTATIONS[name].label})" for name in members)
+        lines.append(f"{title}: {items}.")
+    return "## Selected tools\n" + "\n".join(lines) + "\n" + _INDEX_CLOSING
+
+
+def append_selected_tools_index(system_prompt: str, presented, input_policy) -> str:
+    index = selected_tools_index(presented, input_policy=input_policy)
+    if not index or index in system_prompt:
+        return system_prompt
+    return system_prompt + "\n\n" + index
+
+
 def _discovery_score(query: str, name: str, description: str) -> int:
     """Prefer task families and name terms before weak prose matches."""
     terms = set(re.findall(r"[\w]+", query.casefold())) - {"tool", "tools", "use", "the", "a", "to"}

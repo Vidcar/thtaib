@@ -210,6 +210,77 @@ def include_selected_public_web(request, presented, connection_snapshots):
     return [*presented, *added]
 
 
+def gate_presented_names(service, request, input_policy, helpers, project_path, knowledge_plan, capture_routes, external_names, connection_snapshots):
+    """Accepted names after the catalogue, project, reader, and disclosure gates."""
+    (
+        presented,
+        filesystem_blocked,
+        shell_blocked,
+        retrieval_requested,
+        recorded,
+        embedding_deployment,
+        retrieval_documents,
+        retrieval_presented,
+    ) = resolve_catalogue_and_retrieval(
+        service, request, project_path, knowledge_plan, capture_routes, external_names,
+    )
+    presented = apply_filesystem_shell_gates(input_policy, presented, filesystem_blocked, shell_blocked)
+    presented, framework_read_paths = apply_automatic_read_paths(
+        request, knowledge_plan, presented, retrieval_presented, capture_routes, recorded,
+    )
+    presented = apply_disclosure_and_plan_filter(
+        request, input_policy, helpers, knowledge_plan, presented, connection_snapshots,
+    )
+    return (
+        presented,
+        filesystem_blocked,
+        shell_blocked,
+        retrieval_requested,
+        embedding_deployment,
+        retrieval_documents,
+        retrieval_presented,
+        framework_read_paths,
+    )
+
+
+def index_names_for_preview(configuration, *, project_path=None, knowledge_versions=(), service=None,
+        retained_asset_ids=(), retrieval_project_paths=(), capture_routes=False, connection_snapshots=(),
+        external_names=(), helpers=None, work_mode=None, resource_loader=None) -> list[str]:
+    """Accepted names for one Inputs index. A turn the gates refuse has an empty index."""
+    policy = getattr(configuration, "input_policy", None)
+    if policy is None:
+        return []
+    if getattr(configuration, "embedding_deployment_id", None) and (service is None or getattr(service, "manager", None) is None):
+        return []
+    try:
+        from workbench_backend.agents.harness import _resolved_project_path
+        from workbench_backend.agents.memory_skills import plan_knowledge_materialization
+        from workbench_backend.agents.schemas import ToolMode
+        bound = _resolved_project_path(project_path) if project_path else None
+        plan = plan_knowledge_materialization(list(knowledge_versions), resource_loader, input_policy=policy)
+        # Callers pass the frozen helper selections admission uses. Empty stubs would
+        # add task and hide a helper memory or skill, so read_reference would be missing.
+        # Those selections are not copied onto the parent's tool list.
+        helpers = list(helpers or [])
+        request = SimpleNamespace(
+            presented_tools=getattr(configuration, "presented_tools", None),
+            work_mode=work_mode or getattr(configuration, "work_mode", None) or "work",
+            tool_mode=ToolMode.live_tool,
+            embedding_deployment_id=getattr(configuration, "embedding_deployment_id", None),
+            retained_asset_ids=list(retained_asset_ids or []),
+            retrieval_project_paths=list(retrieval_project_paths or []),
+            input_policy=policy,
+        )
+        presented, *_ignored = gate_presented_names(
+            service, request, policy, helpers, bound, plan, capture_routes,
+            list(external_names or []), connection_snapshots or (),
+        )
+        return list(presented)
+    except HarnessError:
+        # The same project and catalogue errors stop the model prompt.
+        return []
+
+
 def validate_required_presentation(
     service, request, input_policy, knowledge_plan, project_path,
     connection_snapshots, presented, framework_read_paths, filesystem_blocked, shell_blocked,
