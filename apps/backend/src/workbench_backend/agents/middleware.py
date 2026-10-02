@@ -123,6 +123,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         self._outcome_attempt: dict[str, int] = {}
         self._outcome_batch: dict[str, tuple] = {}
         self._attempt_lock = threading.RLock()
+        self._carried_effect: dict[str, Any] = {}
 
     def wrap_model_call(
         self,
@@ -414,6 +415,13 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         with self._attempt_lock:
             return self._still_owns(call_id, attempt)
 
+    def _take_carried_effect(self, call_id: str, attempt: int | None):
+        """One handler result, moved onto the attempt that still owns the call."""
+        with self._attempt_lock:
+            if not self._still_owns(call_id, attempt):
+                raise ToolReservationReleased()
+            return self._carried_effect.pop(call_id, None)
+
     def _note_file_batch(self, request, call_id: str, attempt: int | None = None) -> None:
         if not call_id:
             return
@@ -664,56 +672,82 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             if not self._owns_file_attempt(call_id, attempt):
                 return ToolMessage(content="A later file call owns this attempt. This result was not recorded.",
                     name=name or "tool", tool_call_id=call_id, status="error")
-            try:
-                with self.execution_control.tool_dispatch(self.run, call_id, name) as dispatch:
-                    if not dispatch:
-                        return self._browser_action_reconsidered(request)
-                    if not self._owns_file_attempt(call_id, attempt):
-                        raise ToolReservationReleased()
-                    await asyncio.to_thread(self._begin_tool, request, attempt)
-                    if not self._owns_file_attempt(call_id, attempt):
-                        raise ToolReservationReleased()
-                    try:
-                        async with self._amutation_lease(request):
-                            self._require_dispatch_allowed()
-                            if not self._owns_file_attempt(call_id, attempt):
-                                raise ToolReservationReleased()
-                            await asyncio.to_thread(self._before_tool_effect, request, attempt)
-                            if not self._owns_file_attempt(call_id, attempt):
-                                raise ToolReservationReleased()
-                            try:
-                                result = await self._awrap_tool_call(request, handler, attempt)
-                            finally:
-                                # Shield the post-effect inspection too: the mutation
-                                # lease stays owned until its final evidence settles.
-                                inspection = asyncio.create_task(asyncio.to_thread(self._capture_delete_after, request, attempt))
-                                _, interrupted = await _settle_owned_task(inspection)
-                                if interrupted is not None:
-                                    raise interrupted
-                            if not self._owns_file_attempt(call_id, attempt):
-                                raise ToolReservationReleased()
-                    except BaseException as exc:
-                        previous = self.run.tool_outcomes.get(_tool_call_parts(request)[2])
-                        # Shielded Windows work may have settled while cancellation was
-                        # waiting. Keep its returned result and process-stop evidence;
-                        # interrupted command effects still require inspection.
-                        if (isinstance(exc, asyncio.CancelledError) and previous is not None
-                            and (previous.outcome in {"succeeded", "failed"} or previous.outcome == "uncertain" and previous.result is not None)):
-                            raise
-                        if isinstance(exc, ToolReservationReleased):
-                            raise
+            while True:
+                if not self._owns_file_attempt(call_id, attempt):
+                    return ToolMessage(content="A later file call owns this attempt. This result was not recorded.",
+                        name=name or "tool", tool_call_id=call_id, status="error")
+                try:
+                    with self.execution_control.tool_dispatch(self.run, call_id, name) as dispatch:
+                        if not dispatch:
+                            return self._browser_action_reconsidered(request)
                         if not self._owns_file_attempt(call_id, attempt):
-                            raise ToolReservationReleased() from exc
-                        result = self._handle_tool_failure(request, exc, attempt)
-                        if result is None:
-                            raise
-                    if not self._owns_file_attempt(call_id, attempt):
-                        raise ToolReservationReleased()
-                    self._record_tool_result(request, result, attempt)
-                    return self._authorization_result(await asyncio.to_thread(self._offload_read_file_image, result))
-            except ToolReservationReleased:
-                return ToolMessage(content="A later file call owns this attempt. This result was not recorded.",
-                    name=name or "tool", tool_call_id=call_id, status="error")
+                            raise ToolReservationReleased()
+                        carried = self._take_carried_effect(call_id, attempt)
+                        if carried is not None:
+                            self._record_tool_result(request, carried, attempt)
+                            with self._attempt_lock:
+                                if not self._still_owns(call_id, attempt):
+                                    self._carried_effect.setdefault(call_id, carried)
+                                    raise ToolReservationReleased()
+                            return self._authorization_result(await asyncio.to_thread(self._offload_read_file_image, carried))
+                        await asyncio.to_thread(self._begin_tool, request, attempt)
+                        if not self._owns_file_attempt(call_id, attempt):
+                            raise ToolReservationReleased()
+                        handler_started = False
+                        try:
+                            async with self._amutation_lease(request):
+                                self._require_dispatch_allowed()
+                                if not self._owns_file_attempt(call_id, attempt):
+                                    raise ToolReservationReleased()
+                                await asyncio.to_thread(self._before_tool_effect, request, attempt)
+                                if not self._owns_file_attempt(call_id, attempt):
+                                    raise ToolReservationReleased()
+                                handler_started = True
+                                try:
+                                    result = await self._awrap_tool_call(request, handler, attempt)
+                                finally:
+                                    # Shield the post-effect inspection too: the mutation
+                                    # lease stays owned until its final evidence settles.
+                                    inspection = asyncio.create_task(asyncio.to_thread(self._capture_delete_after, request, attempt))
+                                    _, interrupted = await _settle_owned_task(inspection)
+                                    if interrupted is not None:
+                                        raise interrupted
+                                if not self._owns_file_attempt(call_id, attempt):
+                                    if result is not None:
+                                        self._carried_effect[call_id] = result
+                                    raise ToolReservationReleased()
+                        except BaseException as exc:
+                            previous = self.run.tool_outcomes.get(_tool_call_parts(request)[2])
+                            # Shielded Windows work may have settled while cancellation was
+                            # waiting. Keep its returned result and process-stop evidence;
+                            # interrupted command effects still require inspection.
+                            if (isinstance(exc, asyncio.CancelledError) and previous is not None
+                                and (previous.outcome in {"succeeded", "failed"} or previous.outcome == "uncertain" and previous.result is not None)):
+                                raise
+                            if isinstance(exc, ToolReservationReleased):
+                                raise
+                            if not self._owns_file_attempt(call_id, attempt):
+                                if handler_started and call_id not in self._carried_effect and not isinstance(exc, GraphInterrupt):
+                                    failed = recoverable_tool_error(exc, name=name, call_id=call_id)
+                                    self._carried_effect[call_id] = failed or ToolMessage(
+                                        content=str(exc) or "This file call failed.", name=name or "tool",
+                                        tool_call_id=call_id, status="error")
+                                raise ToolReservationReleased() from exc
+                            result = self._handle_tool_failure(request, exc, attempt)
+                            if result is None:
+                                raise
+                        if not self._owns_file_attempt(call_id, attempt):
+                            raise ToolReservationReleased()
+                        self._record_tool_result(request, result, attempt)
+                        return self._authorization_result(await asyncio.to_thread(self._offload_read_file_image, result))
+                except HarnessError as exc:
+                    if exc.code == "duplicate_tool_call" and exc.details.get("inflight"):
+                        await asyncio.sleep(0.02)
+                        continue
+                    raise
+                except ToolReservationReleased:
+                    return ToolMessage(content="A later file call owns this attempt. This result was not recorded.",
+                        name=name or "tool", tool_call_id=call_id, status="error")
         finally:
             if call_id and attempt is not None and self._owns_file_attempt(call_id, attempt):
                 previous = self.run.tool_outcomes.get(call_id)

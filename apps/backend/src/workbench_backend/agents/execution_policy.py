@@ -181,12 +181,19 @@ class ExecutionControl:
                 raise HarnessError("An action has unconfirmed effects. Inspect and acknowledge it before continuing; it will not be repeated automatically.",
                     code="effects_unconfirmed", status_code=409)
 
+    def tool_call_inflight(self, run: Any, call_id: str) -> bool:
+        with self._lock:
+            return f"{run.id}:{call_id}" in self._inflight
+
     def reserve_tool(self, run: Any, call_id: str, name: str = "") -> None:
         with self._lock:
             self.require_dispatch(run)
             identity = f"{run.id}:{call_id}"
             self._pause_dispatch(run, identity)
-            if identity in self._completed or identity in self._inflight:
+            if identity in self._inflight:
+                raise HarnessError("A repeated tool-call identity was not executed again.",
+                    code="duplicate_tool_call", status_code=409, details={"inflight": True})
+            if identity in self._completed:
                 raise HarnessError("A repeated tool-call identity was not executed again.", code="duplicate_tool_call", status_code=409)
             if identity in self._calls:
                 self._inflight.add(identity)
