@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from workbench_backend.agents.schemas import ModelRequestCapture
+from workbench_backend.chat.schemas import ChatConversation
 from workbench_backend.paths import WorkbenchPaths
 from workbench_backend.state.store import ApplicationStore, SCHEMA_VERSION
 
@@ -31,11 +32,35 @@ class DiagnosticStorageTests(unittest.TestCase):
         store = ApplicationStore(self.paths)
         try:
             store.put_execution_run(run)
+            store.put_conversation(ChatConversation(
+                id="scratch-chat",
+                deployment_id=run.deployment_id,
+                created_at="2026-01-01T00:00:00Z",
+                updated_at="2026-01-01T00:00:00Z",
+            ))
+            with store._lock:
+                self.kept_tables = {
+                    str(row[0])
+                    for row in store._conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+                }
         finally:
             close_workbench_sqlite(store)
         conn = sqlite3.connect(self.paths.application_db)
         try:
-            conn.execute("DROP TABLE run_diagnostic_captures")
+            conn.execute(
+                """
+                CREATE TABLE run_diagnostic_captures (
+                    run_id TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    payload TEXT NOT NULL,
+                    PRIMARY KEY (run_id, position)
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO run_diagnostic_captures (run_id, position, payload) VALUES (?, 0, ?)",
+                (run.id, json.dumps({"instructions": "API_KEY=wb_synthetic_legacy_credential_1234"})),
+            )
             conn.execute("UPDATE runs SET payload = ? WHERE id = ?", (payload, run.id))
             conn.execute("UPDATE schema_meta SET value = '2' WHERE key = 'schema_version'")
             conn.commit()
@@ -50,14 +75,16 @@ class DiagnosticStorageTests(unittest.TestCase):
             self.addCleanup(close_workbench_sqlite, store)
             with store._lock:
                 payload = store._conn.execute("SELECT payload FROM runs WHERE id = ?", (legacy.id,)).fetchone()[0]
-                saved = store._conn.execute("SELECT payload FROM run_diagnostic_captures WHERE run_id = ?", (legacy.id,)).fetchall()
+                table = store._conn.execute("SELECT name FROM sqlite_master WHERE name = 'run_diagnostic_captures'").fetchone()
                 version = store._conn.execute("SELECT value FROM schema_meta WHERE key = 'schema_version'").fetchone()[0]
-                conversations = store._conn.execute("SELECT COUNT(*) FROM conversations").fetchone()[0]
+                chat = store._conn.execute("SELECT payload FROM conversations WHERE id = 'scratch-chat'").fetchone()[0]
+                names = {str(row[0]) for row in store._conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()}
             self.assertEqual(version, SCHEMA_VERSION)
             self.assertNotIn("model_requests", json.loads(payload))
             self.assertNotIn("wb_synthetic_legacy_credential_1234", payload)
-            self.assertEqual(saved, [])
-            self.assertEqual(conversations, 0)
+            self.assertIsNone(table)
+            self.assertIn("scratch-chat", chat)
+            self.assertEqual(names, self.kept_tables)
             self.assertIsNotNone(store.get_run_operational(legacy.id))
             self.assertNotIn("model_requests", store.get_run_operational(legacy.id).model_dump())
         execution = store.get_execution_run(legacy.id)
@@ -79,7 +106,8 @@ class DiagnosticStorageTests(unittest.TestCase):
                 ApplicationStore(self.paths)
             self.assertEqual(conn.execute("SELECT value FROM schema_meta WHERE key = 'schema_version'").fetchone()[0], "2")
             self.assertEqual(conn.execute("SELECT payload FROM runs WHERE id = ?", (legacy.id,)).fetchone()[0], payload)
-            self.assertIsNone(conn.execute("SELECT name FROM sqlite_master WHERE name = 'run_diagnostic_captures'").fetchone())
+            self.assertIsNotNone(conn.execute("SELECT name FROM sqlite_master WHERE name = 'run_diagnostic_captures'").fetchone())
+            self.assertIn("scratch-chat", conn.execute("SELECT payload FROM conversations WHERE id = 'scratch-chat'").fetchone()[0])
             conn.execute("DROP TRIGGER reject_capture_cutover")
             conn.commit()
         finally:
@@ -90,8 +118,12 @@ class DiagnosticStorageTests(unittest.TestCase):
         self.assertEqual(restored.model_requests, [])
         self.assertEqual(restored.id, legacy.id)
         with migrated._lock:
-            saved = migrated._conn.execute("SELECT COUNT(*) FROM run_diagnostic_captures").fetchone()[0]
-        self.assertEqual(saved, 0)
+            table = migrated._conn.execute("SELECT name FROM sqlite_master WHERE name = 'run_diagnostic_captures'").fetchone()
+            chat = migrated._conn.execute("SELECT payload FROM conversations WHERE id = 'scratch-chat'").fetchone()[0]
+            names = {str(row[0]) for row in migrated._conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()}
+        self.assertIsNone(table)
+        self.assertIn("scratch-chat", chat)
+        self.assertEqual(names, self.kept_tables)
 
     def test_run_writes_do_not_store_request_bodies(self) -> None:
         store = ApplicationStore(self.paths)
@@ -99,9 +131,9 @@ class DiagnosticStorageTests(unittest.TestCase):
         run = store.put_run(synthetic_large_run())
         self.assertGreaterEqual(len(run.model_requests), 50)
         with store._lock:
-            saved = store._conn.execute("SELECT COUNT(*) FROM run_diagnostic_captures").fetchone()[0]
+            table = store._conn.execute("SELECT name FROM sqlite_master WHERE name = 'run_diagnostic_captures'").fetchone()
             payload = store._conn.execute("SELECT payload FROM runs WHERE id = ?", (run.id,)).fetchone()[0]
-        self.assertEqual(saved, 0)
+        self.assertIsNone(table)
         self.assertNotIn("model_requests", json.loads(payload))
         self.assertLess(len(payload.encode()), 20 * 1024)
         statements = []
@@ -116,8 +148,8 @@ class DiagnosticStorageTests(unittest.TestCase):
                 store.get_run_operational(run.id)
         finally:
             store._conn.set_trace_callback(None)
-        inserted = [sql for sql in statements if "INSERT INTO run_diagnostic_captures" in sql]
-        self.assertEqual(inserted, [])
+        touched = [sql for sql in statements if "run_diagnostic_captures" in sql]
+        self.assertEqual(touched, [])
         self.assertEqual(store.get_run(run.id).model_requests, [])
         self.assertEqual(store.get_execution_run(run.id).model_requests, [])
         self.assertEqual(len(run.model_requests), 50)

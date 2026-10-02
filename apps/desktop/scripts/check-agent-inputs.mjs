@@ -51,7 +51,7 @@ async function checkInspector(AgentInputs) {
   function Host() {
     const [configuration, setConfiguration] = React.useState({ input_policy: { version: 1, tool_loading: "when_needed" } });
     current = configuration;
-    return React.createElement(AgentInputs, { configuration, run: originalRun, hasHistory: true, agentName: "Reusable assistant", onChange: setConfiguration, onClose() {}, onEditSource: (...route) => routes.push(route), onFreshChat: () => fresh++, onSaveToAgent: async () => saved.push(structuredClone(current)) });
+    return React.createElement(AgentInputs, { configuration, hasHistory: true, agentName: "Reusable assistant", onChange: setConfiguration, onClose() {}, onEditSource: (...route) => routes.push(route), onFreshChat: () => fresh++, onSaveToAgent: async () => saved.push(structuredClone(current)) });
   }
   try {
     await act(async () => { renderer = create(React.createElement(Host)); });

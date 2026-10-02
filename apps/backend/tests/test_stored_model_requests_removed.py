@@ -110,9 +110,11 @@ class StoredModelRequestRemovalTests(unittest.TestCase):
     def _capture_rows(self) -> list[str]:
         store = self.app.state.app_store
         with store._lock:
-            rows = store._conn.execute("SELECT payload FROM run_diagnostic_captures").fetchall()
+            table = store._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'run_diagnostic_captures'"
+            ).fetchone()
             run_payloads = [str(row[0]) for row in store._conn.execute("SELECT payload FROM runs").fetchall()]
-        self.assertEqual(rows, [])
+        self.assertIsNone(table)
         for payload in run_payloads:
             body = json.loads(payload)
             self.assertNotIn("model_requests", body)

@@ -5,7 +5,7 @@ import { SettingRow } from "./CompactControls";
 import { workspaceApi, type SetupConfiguration, type InputPreviewContext } from "./workspaceApi";
 import { excludeInputSource, referenceMode, type AgentInputPolicy, type AgentInputPreview, type AgentInputSource, type ReferenceLoading } from "./agentInputPolicy";
 import { errorMessage } from "./errors";
-import type { AgentRun, WorkbenchTab } from "./types";
+import type { WorkbenchTab } from "./types";
 import "./AgentInputs.css";
 
 const modeLabel = (mode: string) => ({ off: "Off", when_needed: "When needed", always: "Always included", required: "Required" }[mode] ?? mode);
@@ -19,7 +19,6 @@ export function AgentInputs(props: {
   agentSetupVersionId?: string | null;
   scope?: "agent" | "conversation";
   preview?: AgentInputPreview | null;
-  run?: AgentRun | null;
   hasHistory?: boolean;
   disabled?: boolean;
   effectiveTools?: string[] | null;

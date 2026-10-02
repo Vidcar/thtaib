@@ -451,7 +451,7 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled, onNavigate }
         <EmptyState title="Ready for a task">Choose a model and describe what to do.</EmptyState>
       )}
       {message ? <Notice tone="error" action={attentionFailed && attentionRunId ? <button type="button" disabled={starting} onClick={() => setAttentionAttempt(current => current + 1)}>Retry</button> : undefined}>{message}</Notice> : null}
-      {showInputs ? <AgentInputs configuration={configuration} run={run} onChange={setConfiguration} onClose={() => setShowInputs(false)} onEditSource={onNavigate} /> : null}
+      {showInputs ? <AgentInputs configuration={configuration} onChange={setConfiguration} onClose={() => setShowInputs(false)} onEditSource={onNavigate} /> : null}
     </section>
   );
 }

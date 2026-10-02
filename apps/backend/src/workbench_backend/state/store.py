@@ -51,13 +51,6 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE INDEX IF NOT EXISTS idx_runs_status_created ON runs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_runs_thread_created ON runs(thread_id, created_at);
 
-CREATE TABLE IF NOT EXISTS run_diagnostic_captures (
-    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-    position INTEGER NOT NULL CHECK(position >= 0),
-    payload TEXT NOT NULL,
-    PRIMARY KEY (run_id, position)
-) WITHOUT ROWID;
-
 CREATE TABLE IF NOT EXISTS run_checkpoints (
     run_id TEXT NOT NULL,
     checkpoint_id TEXT NOT NULL,
@@ -149,8 +142,8 @@ class ApplicationStore(ChatStateStoreMixin, InteractionStoreMixin, SetupStoreMix
             self._conn.execute("UPDATE conversations SET payload=? WHERE id=?", (json.dumps(payload), row["id"]))
 
     def _discard_stored_model_requests(self) -> None:
-        """Drop stored model-request copies. Runs, chats, and weights stay."""
-        self._conn.execute("DELETE FROM run_diagnostic_captures")
+        """An existing database may still contain the retired request table. Drop only that table."""
+        self._conn.execute("DROP TABLE IF EXISTS run_diagnostic_captures")
         self._conn.execute(
             "UPDATE runs SET payload = json_remove(payload, '$.model_requests') "
             "WHERE json_type(payload, '$.model_requests') IS NOT NULL"
@@ -236,7 +229,6 @@ class ApplicationStore(ChatStateStoreMixin, InteractionStoreMixin, SetupStoreMix
                     run.updated_at,
                 ),
             )
-            self._conn.execute("DELETE FROM run_diagnostic_captures WHERE run_id = ?", (run.id,))
             self._replace_checkpoints_locked(run.id, run.thread_id, run.checkpoint_ids)
             self._replace_files_locked(run.id, run.related_files)
             self._reconcile_chat_completion_locked(run)

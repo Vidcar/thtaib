@@ -61,6 +61,11 @@ class OperationalRunViewsTests(unittest.TestCase):
 
     def _capture_count(self, run_id: str | None = None) -> int:
         with self.store._lock:
+            present = self.store._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'run_diagnostic_captures'"
+            ).fetchone()
+            if present is None:
+                return 0
             if run_id is None:
                 row = self.store._conn.execute("SELECT COUNT(*) FROM run_diagnostic_captures").fetchone()
             else:
@@ -166,6 +171,16 @@ class OperationalRunViewsTests(unittest.TestCase):
         synthetic_secret = "wb_synthetic_changed_credential_1234"
         with self.store._lock:
             self.store._conn.execute(
+                """
+                CREATE TABLE run_diagnostic_captures (
+                    run_id TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    payload TEXT NOT NULL,
+                    PRIMARY KEY (run_id, position)
+                )
+                """
+            )
+            self.store._conn.execute(
                 "INSERT INTO run_diagnostic_captures (run_id, position, payload) VALUES (?, 0, ?)",
                 (self.run.id, json.dumps({"instructions": f"API_KEY={synthetic_secret}"})),
             )
@@ -211,7 +226,6 @@ class OperationalRunViewsTests(unittest.TestCase):
                 observer.execute("SELECT checkpoint_id FROM run_checkpoints WHERE run_id = ? ORDER BY checkpoint_id", (self.run.id,)).fetchall(),
                 observer.execute("SELECT path, kind FROM run_files WHERE run_id = ? ORDER BY path", (self.run.id,)).fetchall(),
                 observer.execute("SELECT payload FROM conversations WHERE id = ?", (conversation.id,)).fetchone(),
-                observer.execute("SELECT position, payload FROM run_diagnostic_captures WHERE run_id = ? ORDER BY position", (self.run.id,)).fetchall(),
             )
 
         before = snapshot()

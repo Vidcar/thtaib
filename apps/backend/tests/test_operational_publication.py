@@ -128,9 +128,9 @@ class OperationalPublicationTests(unittest.TestCase):
         self.store.put_run(archived)
         with self.store._lock:
             stored = self.store._conn.execute(
-                "SELECT COUNT(*) FROM run_diagnostic_captures WHERE run_id = ?", (archived.id,),
-            ).fetchone()[0]
-        self.assertEqual(stored, 0)
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'run_diagnostic_captures'"
+            ).fetchone()
+        self.assertIsNone(stored)
         self.harness._runs.clear()
         with forbid_diagnostic_processing(), \
                 patch.object(self.store, "get_execution_run", side_effect=AssertionError("observation hydrated captures")), \
@@ -152,9 +152,9 @@ class OperationalPublicationTests(unittest.TestCase):
             self.assertEqual(self.harness._runs, {}, "observation must not create an execution owner")
         with self.store._lock:
             remaining = self.store._conn.execute(
-                "SELECT COUNT(*) FROM run_diagnostic_captures WHERE run_id = ?", (archived.id,),
-            ).fetchone()[0]
-        self.assertEqual(remaining, 0)
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'run_diagnostic_captures'"
+            ).fetchone()
+        self.assertIsNone(remaining)
 
     def test_run_read_lock_keeps_missing_run_error_without_hydration(self):
         with patch.object(self.store, "get_execution_run", side_effect=AssertionError("observation hydrated captures")):
