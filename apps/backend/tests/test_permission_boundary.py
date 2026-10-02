@@ -925,6 +925,82 @@ class FileOrderTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((project / "dir" / "child.txt").read_text(encoding="utf-8"), "later")
             self.assertFalse((folder / "keep.txt").exists())
 
+    async def test_older_result_does_not_release_the_newer_attempt(self):
+        with tempfile.TemporaryDirectory() as area:
+            project = Path(area)
+            folder = project / "dir"
+            folder.mkdir()
+            (folder / "child.txt").write_text("before", encoding="utf-8")
+            (folder / "keep.txt").write_text("keep", encoding="utf-8")
+            run = _run(project_path=str(project), id="reused-id-superseded")
+            middleware = WorkbenchHarnessMiddleware(run)
+            release_old = asyncio.Event()
+            release_hold = asyncio.Event()
+            saw_directory = []
+
+            async def effect(request):
+                name = request.tool_call["name"]
+                call_id = request.tool_call["id"]
+                if call_id == "call_hold":
+                    await release_hold.wait()
+                    return ToolMessage(content="held", name=name, tool_call_id=call_id)
+                if name == "delete":
+                    await release_old.wait()
+                    return ToolMessage(content="removed", name=name, tool_call_id=call_id)
+
+                def observe():
+                    saw_directory.append((project / "dir").exists())
+                    target = project / "dir" / "child.txt"
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(request.tool_call["args"]["content"], encoding="utf-8")
+
+                await asyncio.to_thread(observe)
+                return ToolMessage(content="wrote", name=name, tool_call_id=call_id)
+
+            delete_call = {"name": "delete", "args": {"file_path": "dir"}, "id": "call_1", "type": "tool_call"}
+            write_call = {"name": "write_file", "args": {"file_path": "dir/child.txt", "content": "after"}, "id": "call_2", "type": "tool_call"}
+            message = AIMessage(content="", tool_calls=[delete_call, write_call])
+            state = {"messages": [message]}
+            older = asyncio.create_task(middleware.awrap_tool_call(
+                SimpleNamespace(tool_call=delete_call, runtime=SimpleNamespace(state=state)), effect))
+            hold = newer = write_task = None
+            try:
+                await self._until(lambda: getattr(run.tool_outcomes.get("call_1"), "outcome", None) == "running")
+                message.tool_calls.insert(0, {
+                    "name": "write_file", "args": {"file_path": "dir/hold.txt", "content": "hold"},
+                    "id": "call_hold", "type": "tool_call"})
+                hold_call = message.tool_calls[0]
+                hold = asyncio.create_task(middleware.awrap_tool_call(
+                    SimpleNamespace(tool_call=hold_call, runtime=SimpleNamespace(state=state)), effect))
+                await self._until(lambda: getattr(run.tool_outcomes.get("call_hold"), "outcome", None) == "running")
+                newer = asyncio.create_task(middleware.awrap_tool_call(
+                    SimpleNamespace(tool_call=delete_call, runtime=SimpleNamespace(state=state)), effect))
+                await self._until(lambda: middleware._file_attempts.get("call_1", 0) >= 2 and not newer.done())
+                write_task = asyncio.create_task(middleware.awrap_tool_call(
+                    SimpleNamespace(tool_call=write_call, runtime=SimpleNamespace(state=state)), effect))
+                release_old.set()
+                await asyncio.wait_for(older, 5)
+                await asyncio.sleep(0.2)
+                self.assertFalse(newer.done())
+                self.assertFalse(write_task.done())
+                self.assertEqual(saw_directory, [])
+                self.assertNotEqual(run.tool_outcomes["call_1"].outcome, "succeeded")
+                self.assertNotEqual(middleware._outcome_attempt.get("call_1"), middleware._file_attempts.get("call_1"))
+                self.assertEqual((folder / "child.txt").read_text(encoding="utf-8"), "before")
+                self.assertEqual((folder / "keep.txt").read_text(encoding="utf-8"), "keep")
+            finally:
+                release_old.set()
+                release_hold.set()
+                for task in (older, hold, newer, write_task):
+                    if task is not None and not task.done():
+                        task.cancel()
+                await asyncio.gather(
+                    older,
+                    *([hold] if hold is not None else []),
+                    *([newer] if newer is not None else []),
+                    *([write_task] if write_task is not None else []),
+                    return_exceptions=True)
+
     async def _until(self, predicate, timeout: float = 5) -> None:
         deadline = asyncio.get_running_loop().time() + timeout
         while asyncio.get_running_loop().time() < deadline:

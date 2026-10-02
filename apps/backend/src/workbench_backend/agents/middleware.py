@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import sys
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -120,6 +121,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         self._file_attempts: dict[str, int] = {}
         self._outcome_attempt: dict[str, int] = {}
         self._outcome_batch: dict[str, tuple] = {}
+        self._attempt_lock = threading.RLock()
 
     def wrap_model_call(
         self,
@@ -287,27 +289,34 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         finally:
             self._mark_call_settled(call_id)
 
-    def _begin_tool(self, request):
+    def _begin_tool(self, request, attempt: int | None = None):
         name, args, call_id = _tool_call_parts(request)
-        self.run.activity_phase = "using_tools"
-        self.execution_control.record_tool_outcome(self.run, ToolOutcome(call_id=call_id, name=name,
-            outcome="running", recovery_action="inspect_effects", evidence=file_evidence(self.run, name, args), updated_at=utc_now()))
-        self._note_file_batch(request, call_id)
+        evidence = file_evidence(self.run, name, args)
+        with self._attempt_lock:
+            if not self._still_owns(call_id, attempt):
+                return
+            self.run.activity_phase = "using_tools"
+            self.execution_control.record_tool_outcome(self.run, ToolOutcome(call_id=call_id, name=name,
+                outcome="running", recovery_action="inspect_effects", evidence=evidence, updated_at=utc_now()))
+            self._note_file_batch(request, call_id, attempt)
 
-    def _record_tool_result(self, request, result):
+    def _record_tool_result(self, request, result, attempt: int | None = None):
         name, _, call_id = _tool_call_parts(request)
-        previous = self.run.tool_outcomes.get(call_id)
-        if name != "delete" and previous is not None and previous.outcome in {"succeeded", "failed"} and isinstance(result, ToolMessage) and previous.result == result.content:
-            self._note_file_batch(request, call_id)
-            return
-        self.execution_control.record_tool_outcome(self.run,
-            result_outcome(call_id, name, result, previous.evidence if previous else {},
-                process_stopped=True if name in {"execute", "execute_skill_script"} and sys.platform == "win32" and self.run.tool_mode != ToolMode.recorded_tool else None))
-        self._note_file_batch(request, call_id)
+        with self._attempt_lock:
+            if not self._still_owns(call_id, attempt):
+                return
+            previous = self.run.tool_outcomes.get(call_id)
+            if name != "delete" and previous is not None and previous.outcome in {"succeeded", "failed"} and isinstance(result, ToolMessage) and previous.result == result.content:
+                self._note_file_batch(request, call_id, attempt)
+                return
+            self.execution_control.record_tool_outcome(self.run,
+                result_outcome(call_id, name, result, previous.evidence if previous else {},
+                    process_stopped=True if name in {"execute", "execute_skill_script"} and sys.platform == "win32" and self.run.tool_mode != ToolMode.recorded_tool else None))
+            self._note_file_batch(request, call_id, attempt)
         if self.run.project_path and name in {"write_file", "edit_file", "apply_edits", "execute", "execute_skill_script", "delete", "start_command", "command_status", "stop_command"}:
             self.outline_cache.invalidate(self.run.project_path)
 
-    def _before_tool_effect(self, request):
+    def _before_tool_effect(self, request, attempt: int | None = None):
         if self.fixture_bank is not None:
             return
         from langchain_core.tools import ToolException
@@ -318,9 +327,12 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         try:
             if name == "delete":
                 evidence = validate_delete_target(self.run, args)
-                previous = self.run.tool_outcomes[call_id]
-                self.execution_control.record_tool_outcome(self.run,
-                    previous.model_copy(update={"evidence": evidence}))
+                with self._attempt_lock:
+                    if not self._still_owns(call_id, attempt):
+                        return
+                    previous = self.run.tool_outcomes[call_id]
+                    self.execution_control.record_tool_outcome(self.run,
+                        previous.model_copy(update={"evidence": evidence}))
         except HarnessError as exc:
             raise ToolException(str(exc)) from exc
 
@@ -385,20 +397,34 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         """The newest entry of a file call owns its effect. An older entry steps aside."""
         if not call_id or name not in _FILE_ORDER_TOOLS:
             return None
-        attempt = self._file_attempts.get(call_id, 0) + 1
-        self._file_attempts[call_id] = attempt
-        # This attempt waits on a fresh event. A previous succeeded or failed
-        # row for the same id belongs to an older entry.
-        self._call_settled[call_id] = asyncio.Event()
-        return attempt
+        with self._attempt_lock:
+            attempt = self._file_attempts.get(call_id, 0) + 1
+            self._file_attempts[call_id] = attempt
+            # This attempt waits on a fresh event. A previous succeeded or failed
+            # row for the same id belongs to an older entry.
+            self._call_settled[call_id] = asyncio.Event()
+            return attempt
 
-    def _note_file_batch(self, request, call_id: str) -> None:
+    def _still_owns(self, call_id: str, attempt: int | None) -> bool:
+        """Caller holds `_attempt_lock`. `None` is an entry that did not claim."""
+        return attempt is None or self._file_attempts.get(call_id) == attempt
+
+    def _owns_file_attempt(self, call_id: str, attempt: int | None) -> bool:
+        if attempt is None:
+            return True
+        with self._attempt_lock:
+            return self._file_attempts.get(call_id) == attempt
+
+    def _note_file_batch(self, request, call_id: str, attempt: int | None = None) -> None:
         if not call_id:
             return
-        self._outcome_attempt[call_id] = self._file_attempts.get(call_id, 0)
-        marker = self._batch_marker(request)
-        if marker is not None:
-            self._outcome_batch[call_id] = marker
+        with self._attempt_lock:
+            if not self._still_owns(call_id, attempt):
+                return
+            self._outcome_attempt[call_id] = self._file_attempts.get(call_id, 0) if attempt is None else attempt
+            marker = self._batch_marker(request)
+            if marker is not None:
+                self._outcome_batch[call_id] = marker
 
     def _selected_batch_index(self, request) -> int:
         _, _, call_id = _tool_call_parts(request)
@@ -430,14 +456,17 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             self._call_settled[call_id] = event
         return event
 
-    def _mark_call_settled(self, call_id: str) -> None:
-        if not call_id or self._approval_pause(self.run.tool_outcomes.get(call_id)):
+    def _mark_call_settled(self, call_id: str, attempt: int | None = None) -> None:
+        if not call_id:
             return
-        event = self._call_settled.get(call_id)
-        if event is None:
-            event = asyncio.Event()
-            self._call_settled[call_id] = event
-        event.set()
+        with self._attempt_lock:
+            if not self._still_owns(call_id, attempt) or self._approval_pause(self.run.tool_outcomes.get(call_id)):
+                return
+            event = self._call_settled.get(call_id)
+            if event is None:
+                event = asyncio.Event()
+                self._call_settled[call_id] = event
+            event.set()
 
     def _rejection_message(self, request, call_id: str) -> ToolMessage | None:
         """An error after the AIMessage this batch selected. Older turns are ignored."""
@@ -457,25 +486,28 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         message = self._rejection_message(request, call_id)
         if message is None:
             return
-        previous = self.run.tool_outcomes.get(call_id)
-        attempt = self._file_attempts.get(call_id, 0)
-        marker = self._batch_marker(request)
-        same_attempt = self._outcome_attempt.get(call_id) == attempt and self._outcome_batch.get(call_id) == marker
-        if same_attempt and previous is not None and previous.outcome == "running":
-            return
-        if same_attempt and previous is not None and previous.outcome == "failed":
-            self._mark_call_settled(call_id)
-            return
-        if same_attempt and previous is not None and previous.outcome not in {"not_dispatched", "failed"}:
-            return
-        detail = message.content if isinstance(message.content, str) else "User rejected this action. The tool was not executed."
-        self.execution_control.record_tool_outcome(self.run, ToolOutcome(
-            call_id=call_id, name=str(message.name or (previous.name if previous is not None else "delete")),
-            outcome="failed", failure_category="permission", recovery_action="continue",
-            detail=str(detail)[:8000], result=message.content,
-            evidence=previous.evidence if previous is not None else {}, updated_at=utc_now()))
-        self._note_file_batch(request, call_id)
-        self._mark_call_settled(call_id)
+        with self._attempt_lock:
+            previous = self.run.tool_outcomes.get(call_id)
+            attempt = self._file_attempts.get(call_id, 0)
+            if previous is not None and previous.outcome == "running" and self._outcome_attempt.get(call_id) != attempt:
+                return
+            marker = self._batch_marker(request)
+            same_attempt = self._outcome_attempt.get(call_id) == attempt and self._outcome_batch.get(call_id) == marker
+            if same_attempt and previous is not None and previous.outcome == "running":
+                return
+            if same_attempt and previous is not None and previous.outcome == "failed":
+                self._mark_call_settled(call_id, attempt)
+                return
+            if same_attempt and previous is not None and previous.outcome not in {"not_dispatched", "failed"}:
+                return
+            detail = message.content if isinstance(message.content, str) else "User rejected this action. The tool was not executed."
+            self.execution_control.record_tool_outcome(self.run, ToolOutcome(
+                call_id=call_id, name=str(message.name or (previous.name if previous is not None else "delete")),
+                outcome="failed", failure_category="permission", recovery_action="continue",
+                detail=str(detail)[:8000], result=message.content,
+                evidence=previous.evidence if previous is not None else {}, updated_at=utc_now()))
+            self._note_file_batch(request, call_id, attempt)
+            self._mark_call_settled(call_id, attempt)
 
     def _attempt_effect_ready(self, request, call_id: str) -> bool:
         """A succeeded or failed row counts only for the attempt that recorded it."""
@@ -508,9 +540,12 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 except TimeoutError:
                     continue
 
-    def _capture_delete_after(self, request):
+    def _capture_delete_after(self, request, attempt: int | None = None):
         name, args, call_id = _tool_call_parts(request)
-        previous = self.run.tool_outcomes.get(call_id)
+        with self._attempt_lock:
+            if not self._still_owns(call_id, attempt):
+                return
+            previous = self.run.tool_outcomes.get(call_id)
         if name != "delete" or previous is None or not previous.evidence.get("expected_absent"):
             return
         from workbench_backend.agents.file_operations import validate_delete_target
@@ -520,11 +555,17 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 **{f"after_{key[7:]}": value for key, value in after.items() if key.startswith("before_")}}
         except (HarnessError, OSError) as error:
             evidence = {**previous.evidence, "after_inspected": False, "after_error": str(error)[:1000]}
-        updated = previous.model_copy(update={"evidence": evidence})
-        if previous.result is not None and previous.outcome in {"succeeded", "failed"}:
-            updated = result_outcome(call_id, name, ToolMessage(name=name, tool_call_id=call_id,
-                content=previous.result, status="error" if previous.outcome == "failed" else "success"), evidence)
-        self.execution_control.record_tool_outcome(self.run, updated)
+        with self._attempt_lock:
+            if not self._still_owns(call_id, attempt):
+                return
+            current = self.run.tool_outcomes.get(call_id)
+            if current is None:
+                return
+            updated = current.model_copy(update={"evidence": evidence})
+            if current.result is not None and current.outcome in {"succeeded", "failed"}:
+                updated = result_outcome(call_id, name, ToolMessage(name=name, tool_call_id=call_id,
+                    content=current.result, status="error" if current.outcome == "failed" else "success"), evidence)
+            self.execution_control.record_tool_outcome(self.run, updated)
 
     @contextmanager
     def _mutation_lease(self, request):
@@ -548,7 +589,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         async with ahold_file_order(path):
             yield
 
-    def _handle_tool_failure(self, request, exc):
+    def _handle_tool_failure(self, request, exc, attempt: int | None = None):
         from langgraph.errors import GraphInterrupt
         name, _, call_id = _tool_call_parts(request)
         previous = self.run.tool_outcomes.get(call_id)
@@ -556,16 +597,23 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             # The owned inline helper finalizer recorded its terminal result.
             # Preserve it; uncertain nested effects have their own scoped rows.
             return None
+        with self._attempt_lock:
+            if not self._still_owns(call_id, attempt):
+                return None
         recoverable = recoverable_tool_error(exc, name=name, call_id=call_id)
         if recoverable is not None:
             return recoverable
         interrupted = isinstance(exc, GraphInterrupt)
-        self.execution_control.record_tool_outcome(self.run, ToolOutcome(call_id=call_id, name=name,
-            outcome="not_dispatched" if interrupted else "uncertain",
-            failure_category=None if interrupted else "runtime", recovery_action="none" if interrupted else "inspect_effects",
-            detail="Waiting for approval or an answer." if interrupted else str(exc),
-            evidence=previous.evidence if previous else {}, updated_at=utc_now()))
-        self._note_file_batch(request, call_id)
+        with self._attempt_lock:
+            if not self._still_owns(call_id, attempt):
+                return None
+            previous = self.run.tool_outcomes.get(call_id)
+            self.execution_control.record_tool_outcome(self.run, ToolOutcome(call_id=call_id, name=name,
+                outcome="not_dispatched" if interrupted else "uncertain",
+                failure_category=None if interrupted else "runtime", recovery_action="none" if interrupted else "inspect_effects",
+                detail="Waiting for approval or an answer." if interrupted else str(exc),
+                evidence=previous.evidence if previous else {}, updated_at=utc_now()))
+            self._note_file_batch(request, call_id, attempt)
         return None
 
     def _authorization_result(self, result):
@@ -610,25 +658,35 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 return blocked
             attempt = self._claim_file_attempt(name, call_id)
             await self._wait_for_earlier_file_calls(request)
-            if attempt is not None and self._file_attempts.get(call_id) != attempt:
+            if not self._owns_file_attempt(call_id, attempt):
                 return None
             with self.execution_control.tool_dispatch(self.run, call_id, name) as dispatch:
                 if not dispatch:
                     return self._browser_action_reconsidered(request)
-                await asyncio.to_thread(self._begin_tool, request)
+                if not self._owns_file_attempt(call_id, attempt):
+                    return None
+                await asyncio.to_thread(self._begin_tool, request, attempt)
+                if not self._owns_file_attempt(call_id, attempt):
+                    return None
                 try:
                     async with self._amutation_lease(request):
                         self._require_dispatch_allowed()
-                        await asyncio.to_thread(self._before_tool_effect, request)
+                        if not self._owns_file_attempt(call_id, attempt):
+                            return None
+                        await asyncio.to_thread(self._before_tool_effect, request, attempt)
+                        if not self._owns_file_attempt(call_id, attempt):
+                            return None
                         try:
-                            result = await self._awrap_tool_call(request, handler)
+                            result = await self._awrap_tool_call(request, handler, attempt)
                         finally:
                             # Shield the post-effect inspection too: the mutation
                             # lease stays owned until its final evidence settles.
-                            inspection = asyncio.create_task(asyncio.to_thread(self._capture_delete_after, request))
+                            inspection = asyncio.create_task(asyncio.to_thread(self._capture_delete_after, request, attempt))
                             _, interrupted = await _settle_owned_task(inspection)
                             if interrupted is not None:
                                 raise interrupted
+                        if not self._owns_file_attempt(call_id, attempt):
+                            return None
                 except BaseException as exc:
                     previous = self.run.tool_outcomes.get(_tool_call_parts(request)[2])
                     # Shielded Windows work may have settled while cancellation was
@@ -637,14 +695,17 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                     if (isinstance(exc, asyncio.CancelledError) and previous is not None
                         and (previous.outcome in {"succeeded", "failed"} or previous.outcome == "uncertain" and previous.result is not None)):
                         raise
-                    result = self._handle_tool_failure(request, exc)
+                    if not self._owns_file_attempt(call_id, attempt):
+                        raise
+                    result = self._handle_tool_failure(request, exc, attempt)
                     if result is None:
                         raise
-                self._record_tool_result(request, result)
+                if not self._owns_file_attempt(call_id, attempt):
+                    return None
+                self._record_tool_result(request, result, attempt)
                 return self._authorization_result(await asyncio.to_thread(self._offload_read_file_image, result))
         finally:
-            if attempt is None or self._file_attempts.get(call_id) == attempt:
-                self._mark_call_settled(call_id)
+            self._mark_call_settled(call_id, attempt)
 
     def _offload_read_file_image(self, result: ToolMessage | Any) -> ToolMessage | Any:
         """Replace a successful native image result with a durable asset path."""
@@ -811,7 +872,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         finish_batch()
         return projected
 
-    async def _awrap_tool_call(self, request, handler):
+    async def _awrap_tool_call(self, request, handler, attempt: int | None = None):
         if self.fixture_bank is None:
             name, _, call_id = _tool_call_parts(request)
             async def invoke() -> Any:
@@ -819,7 +880,9 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 try:
                     result = await handler(request)
                     result = await asyncio.to_thread(self._offload_read_file_image, result)
-                    self._record_tool_result(request, result)
+                    if not self._owns_file_attempt(call_id, attempt):
+                        return result
+                    self._record_tool_result(request, result, attempt)
                     return result
                 finally:
                     CURRENT_TOOL_CALL.reset(token)
