@@ -620,6 +620,41 @@ function makeHarness(options = {}) {
           state.requests.commands.push({ threadId, payload });
           const message = payload.params?.input?.messages?.[0];
           const workbench = payload.params?.metadata?.workbench ?? {};
+          if (workbench.rewind_source_run_id) {
+            const conversationId = [...state.threadByConversation.entries()].find(([, value]) => value === threadId)?.[0];
+            const current = conversationId ? state.conversations[conversationId] : null;
+            if (current) {
+              state.projectedRunIndex += 1;
+              const projected = run(`run_rewind_${state.projectedRunIndex}`, "running", message?.id ?? null, "retried reply");
+              const cutAt = current.transcript.findIndex(item => item.role === "user" && item.run_id === workbench.rewind_source_run_id);
+              const source = cutAt >= 0 ? current.transcript[cutAt] : null;
+              const kept = cutAt >= 0 ? current.transcript.slice(0, cutAt) : [...current.transcript];
+              const content = workbench.rewind_mode === "retry" ? (source?.content ?? message?.content ?? "") : (message?.content ?? "");
+              const runIndex = current.run_ids.indexOf(workbench.rewind_source_run_id);
+              state.streamRuns.set(threadId, projected);
+              state.conversations[conversationId] = {
+                ...current,
+                transcript: [...kept, {
+                  id: message?.id ?? `rewind_${state.projectedRunIndex}`,
+                  role: "user",
+                  content,
+                  at: now(),
+                  run_id: projected.id,
+                  content_blocks: [],
+                }],
+                queue: [],
+                current_run: projected,
+                current_run_id: projected.id,
+                run_ids: [...(runIndex >= 0 ? current.run_ids.slice(0, runIndex) : current.run_ids), projected.id],
+                updated_at: now(),
+              };
+              state.openStreams.get(threadId)?.write(`data: ${JSON.stringify(streamFrame(projected))}\n\n`);
+            }
+            const barrier = state.barriers.command.get(threadId);
+            if (barrier) await barrier.promise;
+            json(res, 200, { type: "success", id: payload.id ?? "cmd", result: {} });
+            return;
+          }
           if (state.commandRejects) {
             const conversationId = [...state.threadByConversation.entries()].find(([, value]) => value === threadId)?.[0];
             let accepted = null;
@@ -3934,6 +3969,72 @@ async function testReopenedMatchingModelReusesObservedDeployment(vite) {
   }
 }
 
+function rewindButton(renderer, runId, label) {
+  const groups = renderer.root.findAll(node => node.type === "div" && node.props["aria-label"] === "Message actions");
+  const group = groups.find(item => item.findAll(node => node.props["data-edit-run"] === runId).length > 0);
+  assert.ok(group, `message actions for ${runId}`);
+  const button = group.findAll(node => node.type === "button" && node.props["aria-label"] === label)[0];
+  assert.ok(button, `${label} for ${runId}`);
+  return button;
+}
+
+function editRowOpen(renderer) {
+  return renderer.root.findAll(node => node.type === "button" && node.props.className === "composer-edit-cancel").length > 0;
+}
+
+async function testAcceptedRetryKeepsOrClosesTheOpenEdit(vite) {
+  const cases = [
+    { editRunId: "run_first", retryRunId: "run_first", unsent: "unsent edit of first", keepRow: true, composer: "unsent edit of first" },
+    { editRunId: "run_second", retryRunId: "run_first", unsent: "unsent edit of second", keepRow: false, composer: "draft before edit" },
+  ];
+  for (const spec of cases) {
+    const second = run("run_second", "completed", "u2", "second answer");
+    second.messages = [
+      { id: "u1", type: "human", content: "first question" },
+      { id: "a1", type: "ai", content: "first answer" },
+      { id: "u2", type: "human", content: "second question" },
+      { id: "a2", type: "ai", content: "second answer" },
+    ];
+    const harness = makeHarness({ aRun: second, threadARun: second });
+    harness.state.conversations.conv_a = conversation("conv_a", "Conversation A", second, {
+      draft: { content: "draft before edit", attachment_ids: [], intended_config: {}, revision: 1, updated_at: now() },
+      transcript: [
+        { id: "u1", role: "user", content: "first question", at: now(), run_id: "run_first", content_blocks: [] },
+        { id: "a1", role: "assistant", content: "first answer", at: now(), run_id: "run_first", content_blocks: [] },
+        { id: "u2", role: "user", content: "second question", at: now(), run_id: "run_second", content_blocks: [] },
+        { id: "a2", role: "assistant", content: "second answer", at: now(), run_id: "run_second", content_blocks: [] },
+      ],
+      run_ids: ["run_first", "run_second"],
+    });
+    const renderer = await renderChat(vite, harness);
+    try {
+      await waitFor(() => button(renderer, "Conversation A"), "history ready");
+      await act(async () => button(renderer, "Conversation A").props.onClick());
+      await waitFor(() => {
+        assert.equal(textarea(renderer).props.value, "draft before edit");
+        assert.notEqual(rewindButton(renderer, spec.editRunId, "Edit").props["aria-disabled"], true);
+        assert.notEqual(rewindButton(renderer, spec.retryRunId, "Retry").props["aria-disabled"], true);
+      }, `ready to edit ${spec.editRunId}`);
+      await act(async () => rewindButton(renderer, spec.editRunId, "Edit").props.onClick());
+      await waitFor(() => {
+        assert.equal(editRowOpen(renderer), true);
+        assert.equal(textarea(renderer).props.value, spec.editRunId === "run_first" ? "first question" : "second question");
+      }, "edit row filled from the message");
+      await act(async () => textarea(renderer).props.onChange({ target: { value: spec.unsent } }));
+      assert.equal(textarea(renderer).props.value, spec.unsent);
+      await act(async () => rewindButton(renderer, spec.retryRunId, "Retry").props.onClick());
+      await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "retry command");
+      const workbench = harness.state.requests.commands[0].payload.params.metadata.workbench;
+      assert.equal(workbench.rewind_mode, "retry");
+      assert.equal(workbench.rewind_source_run_id, spec.retryRunId);
+      await waitFor(() => {
+        assert.equal(editRowOpen(renderer), spec.keepRow, spec.keepRow ? "open edit stays" : "removed edit closes");
+        assert.equal(textarea(renderer).props.value, spec.composer);
+      }, spec.keepRow ? "retry of the open edit keeps the unsent text" : "retry that removes the edited message restores the earlier draft");
+    } finally { await closeHarness(renderer, harness); }
+  }
+}
+
 async function testExecutionPreferencesSurviveDraftAndFreezeAtSubmission(vite) {
   for (const queued of [false, true]) {
     const busy = queued ? run("run_existing", "running") : null;
@@ -4084,6 +4185,7 @@ try {
     ["delete while selection loads", testDeleteWhileSelectionLoadsCannotRestoreDeletedConversation],
     ["late draft save cannot restore deleted chat", testLateDraftSaveCannotRestoreDeletedChat],
     ["user bubbles show submitted content", testUserBubbleUsesSubmittedContent],
+    ["accepted retry keeps or closes the open edit", testAcceptedRetryKeepsOrClosesTheOpenEdit],
     ["late memory selection ownership", testLateMemorySelectionBelongsToConversation],
     ["selected file belongs to project", testSelectedFileBelongsToProject],
     ["project branches group by immutable area", testProjectBranchesGroupByImmutableArea],

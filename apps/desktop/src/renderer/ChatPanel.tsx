@@ -538,11 +538,12 @@ function ChatInteractionStreamContent(props: {
             if (!isCurrentOwner(owner)) {
               return;
             }
+            const acceptedInput = chatHasAcceptedInputMessage(next, pendingSubmit.id);
+            if (acceptedInput) noteRewindResult(pendingSubmit, true);
             updateConversation(next, owner);
             clearPendingSubmit(pendingSubmit);
-            if (chatHasAcceptedInputMessage(next, pendingSubmit.id)) {
+            if (acceptedInput) {
               submissionFailure.current = { inputId: pendingSubmit.id, message: errorMessage(error), accepted: true };
-              noteRewindResult(pendingSubmit, true);
               clearSubmittedDraft(pendingSubmit);
               setMessage("");
               return;
@@ -568,6 +569,7 @@ function ChatInteractionStreamContent(props: {
         if (cancelled || !isCurrentOwner(owner)) return;
         if (chatHasAcceptedInputMessage(next, pendingSubmit.id)) {
           if (submissionFailure.current?.inputId === pendingSubmit.id) submissionFailure.current.accepted = true;
+          noteRewindResult(pendingSubmit, true);
           updateConversationIfCurrentRun(next, owner, conversation.current_run_id ?? null);
           clearSubmittedDraft(pendingSubmit);
           clearPendingSubmit(pendingSubmit);
@@ -592,7 +594,7 @@ function ChatInteractionStreamContent(props: {
       if (timer !== undefined) clearTimeout(timer);
     };
   }, [pendingSubmit, owner.conversationId, owner.threadId, owner.generation, conversation.current_run_id,
-    isCurrentOwner, updateConversationIfCurrentRun, clearSubmittedDraft, clearPendingSubmit, refreshDeployments, setMessage, submissionFailure]);
+    isCurrentOwner, noteRewindResult, updateConversationIfCurrentRun, clearSubmittedDraft, clearPendingSubmit, refreshDeployments, setMessage, submissionFailure]);
 
   return (
     <>
@@ -963,9 +965,13 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const draftRevision = useRef(0);
   const preEditDraft = useRef<{ task: string; attachmentIds: string[] } | null>(null);
   const acceptedEditRun = useRef<string | null>(null);
+  const keptRetryEdit = useRef<{ sourceRunId: string; inputId: string } | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const noteRewindResult = useCallback((pending: PendingChatSubmit, accepted: boolean) => {
     if (pending.rewind_mode === "edit" && !accepted && acceptedEditRun.current === pending.rewind_source_run_id) acceptedEditRun.current = null;
+    if (pending.rewind_mode === "retry" && accepted && pending.rewind_source_run_id) {
+      keptRetryEdit.current = { sourceRunId: pending.rewind_source_run_id, inputId: pending.id };
+    }
   }, []);
   useLayoutEffect(() => {
     if (!editing) return;
@@ -979,6 +985,14 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     if (!editing || !conversation) return;
     const present = conversation.transcript.some(item => item.role === "user" && item.run_id === editing.runId);
     if (present) return;
+    const kept = keptRetryEdit.current;
+    if (kept?.sourceRunId === editing.runId) {
+      // Retry replaces this run id and appends the same message. Keep the unsent edit on that new run.
+      const replacement = conversation.transcript.find(item => item.role === "user" && item.id === kept.inputId && item.run_id);
+      if (replacement?.run_id) setEditing({ runId: replacement.run_id });
+      return;
+    }
+    keptRetryEdit.current = null;
     const accepted = acceptedEditRun.current === editing.runId;
     const draft = preEditDraft.current;
     preEditDraft.current = null;
@@ -1381,6 +1395,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     setEditing(null);
     preEditDraft.current = null;
     acceptedEditRun.current = null;
+    keptRetryEdit.current = null;
     serverDraftRevision.current = 0;
     updateTask("");
     setAttachmentIds([]);
@@ -1701,6 +1716,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     const draft = preEditDraft.current;
     preEditDraft.current = null;
     acceptedEditRun.current = null;
+    keptRetryEdit.current = null;
     setEditing(null);
     if (draft) {
       updateTask(draft.task);
