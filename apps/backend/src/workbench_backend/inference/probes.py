@@ -85,12 +85,12 @@ class _CancellableProbeModel:
 
 def _latest_evidence(manager: Any, deployment: Any, bag: Any, capability: str) -> CapabilityEvidence | None:
     fingerprint = setup_fingerprint(deployment, bag)
-    scoped = proof_scope(setup_identity(deployment, bag))
+    scoped = proof_scope(setup_identity(deployment, bag), capability=capability)
     for raw in reversed(manager.store.list_capability_evidence()):
         if raw.get("capability") != capability:
             continue
         setup = raw.get("setup")
-        if raw.get("fingerprint") == fingerprint or isinstance(setup, dict) and proof_scope(setup) == scoped:
+        if raw.get("fingerprint") == fingerprint or isinstance(setup, dict) and proof_scope(setup, capability=capability) == scoped:
             return CapabilityEvidence.model_validate(raw)
     return None
 

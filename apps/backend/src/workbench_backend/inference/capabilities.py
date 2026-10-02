@@ -97,6 +97,15 @@ _PROOF_IGNORED_STARTUP = frozenset({
     "host", "port", "alias", "threads", "threads_batch", "batch_size", "ubatch_size",
     "op_offload", "mmproj_use_gpu", "load_mode",
 })
+# Sampling, the answer-length ceiling, and preserved thinking do not change
+# what the ten checks observed. A saved Thinking change still drops only the
+# two thinking checks, via _THINKING_REQUEST_KEYS below.
+_PROOF_IGNORED_REQUEST = frozenset({
+    "temperature", "top_k", "top_p", "min_p", "repeat_penalty",
+    "presence_penalty", "frequency_penalty", "max_tokens",
+    "reasoning_preserve",
+})
+_THINKING_REQUEST_KEYS = frozenset({"reasoning", "reasoning_effort"})
 
 
 def _external_template_identity(startup: dict[str, Any]) -> dict[str, Any] | None:
@@ -141,7 +150,7 @@ def _artifact_scope(artifacts: Any) -> dict[str, Any]:
     return {"runtime": runtime, "bundle_files": normalized}
 
 
-def proof_scope(identity: dict[str, Any]) -> dict[str, Any]:
+def proof_scope(identity: dict[str, Any], *, capability: str | None = None) -> dict[str, Any]:
     startup = identity.get("startup") if isinstance(identity.get("startup"), dict) else {}
     # Legacy evidence has no normalized artifact/runtime proof. It stays local
     # to its original exact identity and is never promoted to durable proof.
@@ -170,6 +179,12 @@ def proof_scope(identity: dict[str, Any]) -> dict[str, Any]:
                     for key, value in values.items()
                     if key not in _PROOF_IGNORED_STARTUP and key not in {"n_ctx", "n_batch", "n_ubatch", "n_threads"}}
         scoped["generation_defaults"] = behaviour_defaults(generation)
+    request = scoped.get("request")
+    if isinstance(request, dict):
+        drop = set(_PROOF_IGNORED_REQUEST)
+        if capability not in {"reasoning", "reasoning_replay"}:
+            drop |= _THINKING_REQUEST_KEYS
+        scoped["request"] = {key: value for key, value in request.items() if key not in drop}
     return scoped
 
 
@@ -217,7 +232,7 @@ def applicable_capabilities(deployment: Deployment, per_request: SettingsBag | d
 def capability_support(deployment: Deployment, capability: str, per_request: SettingsBag | dict | None = None) -> ProbeStatus:
     identity = setup_identity(deployment, per_request)
     fingerprint = _identity_fingerprint(identity)
-    scoped = _identity_fingerprint(proof_scope(identity))
+    scoped = _identity_fingerprint(proof_scope(identity, capability=capability))
     for raw in reversed(deployment.capability_evidence):
         if raw.get("capability") != capability:
             continue
@@ -227,6 +242,6 @@ def capability_support(deployment: Deployment, capability: str, per_request: Set
         if raw.get("fingerprint") == fingerprint:
             return status
         setup = raw.get("setup")
-        if isinstance(setup, dict) and _identity_fingerprint(proof_scope(setup)) == scoped:
+        if isinstance(setup, dict) and _identity_fingerprint(proof_scope(setup, capability=capability)) == scoped:
             return status
     return "untested"

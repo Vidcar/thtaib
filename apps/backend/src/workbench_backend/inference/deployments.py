@@ -152,6 +152,7 @@ class DeploymentService:
         agent = profile.bags.agent.requested if profile else {}
         from workbench_backend.inference.configurations import model_default_values
         initial_startup, publisher_defaults = model_default_values(self.store, bundle, startup=requested_startup)
+        context_length = _model_context_length(self.store, bundle)
         bags = resolve_bags(
             startup=requested_startup,
             startup_defaults=initial_startup,
@@ -159,7 +160,7 @@ class DeploymentService:
             agent=agent,
             per_request_defaults=publisher_defaults,
         )
-        _require_valid_managed_startup(bags.startup)
+        _require_valid_managed_startup(bags.startup, context_length=context_length)
         # A stopped record does not reserve an OS port. Recheck at launch.
         host = str(bags.startup.applied.get("host") or "127.0.0.1")
         port = int(bags.startup.applied.get("port") or 8080)
@@ -172,7 +173,7 @@ class DeploymentService:
             startup_overrides=overrides,
             per_request_defaults=publisher_defaults,
         )
-        _require_valid_managed_startup(bags.startup)
+        _require_valid_managed_startup(bags.startup, context_length=context_length)
         deployment = Deployment(
             id=new_id("deploy"),
             display_name=f"managed:{bundle.display_name}",
@@ -866,20 +867,48 @@ def _verified_loaded_template(bundle: ModelBundle, applied_startup: dict[str, An
     return configuration.template_origin
 
 
-def _require_valid_managed_startup(startup: Any) -> None:
+def _model_context_length(store: Any, bundle: Any) -> int | None:
+    """GGUF context length for this bundle, or None when the file does not say."""
+    from workbench_backend.inference.inspect import read_gguf_runtime_metadata
+    from workbench_backend.inference.inspection_cache import cached_inspection
+    from workbench_backend.inference.schemas import GgufRuntimeMetadata
+
+    try:
+        metadata, _, _ = cached_inspection(store, bundle, "runtime", GgufRuntimeMetadata,
+            lambda: read_gguf_runtime_metadata(Path(bundle.primary_path or "")))
+    except (OSError, ValueError, KeyError, TypeError, ManagerError):
+        return None
+    length = metadata.context_length
+    return length if type(length) is int and length >= 1 else None
+
+
+def _require_valid_managed_startup(startup: Any, *, context_length: int | None = None) -> None:
     unsupported = list(getattr(startup, "unsupported", []) or [])
     retired = list(getattr(startup, "retired", []) or [])
-    if not unsupported and not retired:
+    if unsupported or retired:
+        retired_keys = [note.key for note in retired]
+        keys = [*unsupported, *retired_keys]
+        raise ManagerError(
+            "Invalid managed startup settings: "
+            f"{', '.join(keys)}. Correct or remove these settings before starting llama-server.",
+            code="managed_startup_invalid",
+            status_code=400,
+            details={"unsupported": unsupported, "retired": retired_keys},
+        )
+    applied = getattr(startup, "applied", None) or {}
+    value = applied.get("ctx_size")
+    # 0 remains the saved full-context sentinel. It does not allocate a chosen
+    # token count. An explicit size must be a safe integer through the model maximum.
+    if value is None or type(value) is int and value == 0:
         return
-    retired_keys = [note.key for note in retired]
-    keys = [*unsupported, *retired_keys]
-    raise ManagerError(
-        "Invalid managed startup settings: "
-        f"{', '.join(keys)}. Correct or remove these settings before starting llama-server.",
-        code="managed_startup_invalid",
-        status_code=400,
-        details={"unsupported": unsupported, "retired": retired_keys},
-    )
+    maximum = context_length if type(context_length) is int and context_length >= 1 else None
+    if type(value) is not int or value < 1 or value > 2**31 - 1 or (maximum is not None and value > maximum):
+        raise ManagerError(
+            "Context size must be a whole number of tokens from 1 through this model's context length.",
+            code="managed_startup_invalid",
+            status_code=400,
+            details={"ctx_size": value, "maximum": maximum},
+        )
 
 
 def _endpoint_port(endpoint: str | None) -> int | None:

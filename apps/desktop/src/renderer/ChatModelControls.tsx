@@ -4,12 +4,13 @@ import { Icon } from "./Icon";
 import { MenuPopover } from "./MenuPopover";
 import { Notice } from "./Notice";
 import { SettingRow } from "./CompactControls";
-import { ContextSlider, tokenLabel } from "./ModelControls";
+import { ContextSlider } from "./ModelControls";
 import { ResponseSettingsEditor } from "./ResponseSettingsEditor";
-import { ModelHardwareEstimate } from "./ModelHardwareEstimate";
 import { mergedStartup } from "./deploymentSettings";
+import { formatBytes } from "./display";
 import { errorMessage } from "./errors";
 import { defaultSettingDisplay, useSetupPreview } from "./effectiveSettings";
+import { estimateModel } from "./modelEstimateApi";
 import { workspaceApi } from "./workspaceApi";
 import type { BundleConfigurationOptions, Deployment, ModelBundle, RunProfile } from "./types";
 import type { SetupConfiguration } from "./workspaceApi";
@@ -22,6 +23,9 @@ function thinkingSettings(configuration: SetupConfiguration): Record<string, unk
 }
 function remembered(configuration: SetupConfiguration): Record<string, ModelOverride> {
   return (configuration as SetupConfiguration & { model_overrides?: Record<string, ModelOverride> }).model_overrides ?? {};
+}
+function loadableContextSize(value: number | null, maximum: number | null): value is number {
+  return value !== null && maximum !== null && Number.isSafeInteger(maximum) && Number.isSafeInteger(value) && value >= 1 && value <= maximum;
 }
 export function chatTuningCandidate(configuration: SetupConfiguration, thinking: Record<string, unknown>, context: number | null): SetupConfiguration {
   const startup = { ...(configuration.startup_overrides ?? {}) };
@@ -90,7 +94,6 @@ export interface ChatModelControlsProps {
 export function ChatModelControls({ bundles, deployments, profiles, selectedDeploymentId, selectedConfigurationId, configuration, projectId = null, agentSetupVersionId = null, conversationId = null, selectionGeneration = 0, disabled = false, runtimeBusy = false, fixedModel = false, onManageAgent, openRequest, onApply, onReloaded, onBusyChange }: ChatModelControlsProps) {
   const [fallbackBundles, setFallbackBundles] = useState<ModelBundle[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [tuningOpen, setTuningOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [highlighted, setHighlighted] = useState(0);
   const choicesRef = useRef<HTMLDivElement>(null);
@@ -106,9 +109,12 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   const [busy, setBusy] = useState(false);
   const [loadingChoice, setLoadingChoice] = useState("");
   const [error, setError] = useState("");
-  const [tuningRefreshFailure, setTuningRefreshFailure] = useState<{ detail: string; settingsApplied: boolean } | null>(null);
+  const [memory, setMemory] = useState("Unknown");
   const contextDrafts = useRef(new Map<string, { context: number | null; base: number | null }>());
   const pending = useRef<object | null>(null);
+  const thinkingPending = useRef<object | null>(null);
+  const contextQueued = useRef<{ value: number | null } | null>(null);
+  const acceptedThinking = useRef(thinkingSettings(configuration));
   const scopeKey = [selectionGeneration, conversationId, projectId, agentSetupVersionId].join(":");
   const ownerKey = [scopeKey, configuration.model_configuration_id ?? selectedConfigurationId].join(":");
   const contextDraftKey = [conversationId, projectId, agentSetupVersionId, configuration.model_configuration_id ?? selectedConfigurationId].join(":");
@@ -116,22 +122,24 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   if (owner.current.key !== ownerKey) owner.current = { key: ownerKey, generation: owner.current.generation + 1 };
   const currentGeneration = owner.current.generation;
   useEffect(() => {
-    pending.current = null; setBusy(false); setLoadingChoice("");
-    return () => { pending.current = null; };
+    pending.current = null; thinkingPending.current = null; contextQueued.current = null; setBusy(false); setLoadingChoice("");
+    return () => { pending.current = null; contextQueued.current = null; };
   }, [scopeKey]);
   useEffect(() => { onBusyChange?.(busy); return () => onBusyChange?.(false); }, [busy, onBusyChange]);
   function ownsOperation(operation: object) { return pending.current === operation && owner.current.generation === currentGeneration; }
   function finishOperation(operation: object) {
     if (pending.current !== operation) return;
+    const queued = contextQueued.current;
+    contextQueued.current = null;
     pending.current = null; setBusy(false); setLoadingChoice("");
+    if (queued) void commitContext(queued.value);
   }
-  const latest = useRef({ configuration, onApply, onReloaded, runtimeBusy });
-  latest.current = { configuration, onApply, onReloaded, runtimeBusy };
   const incomingThinking = JSON.stringify(thinkingSettings(configuration));
   const incomingContext = typeof configuration.startup_overrides?.ctx_size === "number" ? configuration.startup_overrides.ctx_size : null;
-  useEffect(() => { setTuningRefreshFailure(null); }, [ownerKey]);
   useEffect(() => {
-    setThinking(JSON.parse(incomingThinking) as Record<string, unknown>);
+    const nextThinking = JSON.parse(incomingThinking) as Record<string, unknown>;
+    acceptedThinking.current = nextThinking;
+    setThinking(nextThinking);
     const draft = contextDrafts.current.get(contextDraftKey);
     const next = draft && draft.context !== draft.base ? draft.context : incomingContext;
     contextDrafts.current.set(contextDraftKey, { context: next, base: incomingContext }); setContext(next); setError("");
@@ -141,6 +149,8 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   const selectedProfile = profiles.find(item => item.id === (configuration.model_configuration_id ?? selectedConfigurationId));
   const selectedDeployment = deployments.find(item => item.id === selectedDeploymentId);
   const selectedBundleId = selectedProfile?.bundle_id ?? selectedDeployment?.bundle_id;
+  const latest = useRef({ configuration, onApply, onReloaded, runtimeBusy, selectedProfile, selectedDeployment, selectedBundleId });
+  const contextLimit = useRef<number | null>(null);
   const selectedBundle = availableBundles.find(item => item.id === selectedBundleId);
   const selectedName = selectedBundle ? modelLabel(selectedBundle, availableBundles) : selectedDeployment?.display_name.replace(/^(managed|connected):/, "") ?? "Choose model";
   const savedRevision = `${selectedProfile?.id ?? ""}:${selectedProfile?.revision ?? 0}`;
@@ -161,20 +171,20 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   }
   const selectedState = observed(selectedProfile ?? null, selectedDeployment?.scope === "connected" ? selectedDeployment : null);
   const previewConfiguration = chatTuningCandidate(configuration, thinking, context);
-  const preview = useSetupPreview(previewConfiguration, projectId, agentSetupVersionId, "conversation", savedRevision, tuningOpen);
+  const preview = useSetupPreview(previewConfiguration, projectId, agentSetupVersionId, "conversation", savedRevision, pickerOpen);
   const facts = preview.data?.effective_values ?? {};
   const optionStartup = JSON.stringify(previewConfiguration.startup_overrides ?? {});
   const optionOwnerKey = JSON.stringify([selectedBundleId, selectedProfile?.id, selectedProfile?.revision, selectedDeployment?.id]);
   const optionKey = JSON.stringify([optionOwnerKey, optionStartup]);
   const [optionsResult, setOptionsResult] = useState<{ key: string; ownerKey: string; data: BundleConfigurationOptions } | null>(null);
   useEffect(() => {
-    if (!tuningOpen || (!selectedBundleId && !selectedDeployment?.id)) return;
+    if (!pickerOpen || (!selectedBundleId && !selectedDeployment?.id)) return;
     let cancelled = false;
     const request = selectedBundleId ? api.modelConfiguration(selectedBundleId, selectedDeployment?.id, false, { configuration_id: selectedProfile?.id, startup: JSON.parse(optionStartup) as Record<string, unknown> })
       : api.deploymentConfiguration(selectedDeployment!.id);
     void request.then(data => { if (!cancelled) setOptionsResult({ key: optionKey, ownerKey: optionOwnerKey, data }); }).catch(failure => { if (!cancelled) setError(errorMessage(failure)); });
     return () => { cancelled = true; };
-  }, [tuningOpen, optionKey, selectedBundleId, selectedDeployment?.id]);
+  }, [pickerOpen, optionKey, selectedBundleId, selectedDeployment?.id]);
   const options = optionsResult?.ownerKey === optionOwnerKey ? optionsResult.data : null;
   function preferredConfiguration(bundle: ModelBundle): RunProfile | undefined {
     return profiles.find(item => item.bundle_id === bundle.id && item.id === selectedProfile?.id)
@@ -243,66 +253,76 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
     } finally { finishOperation(operation); }
   }
 
+  function rememberChoice(current: SetupConfiguration, next: SetupConfiguration) {
+    const key = latest.current.selectedBundleId ?? latest.current.selectedDeployment?.id;
+    if (!key) return next;
+    return { ...next, model_overrides: { ...remembered(current), [key]: { model_configuration_id: latest.current.selectedProfile?.id ?? null, startup_overrides: next.startup_overrides, per_request_overrides: next.per_request_overrides } } };
+  }
   async function applyThinking(nextThinking: Record<string, unknown>) {
-    if (pending.current || disabled) return;
-    const operation = {}; pending.current = operation; setBusy(true); setThinking(nextThinking); setError("");
+    // A context reload must not drop or delay the next message's Thinking change.
+    // Chat echoes that reload's busy state back through disabled.
+    if (thinkingPending.current || (disabled && !busy)) return;
+    const operation = {}; thinkingPending.current = operation; acceptedThinking.current = nextThinking; setThinking(nextThinking); setError("");
     try {
       const current = latest.current.configuration;
       const currentContext = typeof current.startup_overrides?.ctx_size === "number" ? current.startup_overrides.ctx_size : null;
-      const next = chatTuningCandidate(current, nextThinking, currentContext);
-      const key = selectedBundleId ?? selectedDeployment?.id;
-      if (key) Object.assign(next, { model_overrides: { ...remembered(current), [key]: { model_configuration_id: selectedProfile?.id ?? null, startup_overrides: next.startup_overrides, per_request_overrides: next.per_request_overrides } } });
+      const next = rememberChoice(current, chatTuningCandidate(current, nextThinking, currentContext));
+      if (thinkingPending.current !== operation || owner.current.generation !== currentGeneration) return;
       await latest.current.onApply(next);
-    } catch (failure) { if (ownsOperation(operation)) { setThinking(thinkingSettings(latest.current.configuration)); setError(errorMessage(failure)); } }
-    finally { finishOperation(operation); }
-  }
-  async function refreshTuningStatus(settingsApplied: boolean): Promise<boolean> {
-    try {
-      await latest.current.onReloaded();
-      if (owner.current.generation === currentGeneration) setTuningRefreshFailure(null);
-      return true;
     } catch (failure) {
-      if (owner.current.generation === currentGeneration) setTuningRefreshFailure({ detail: errorMessage(failure), settingsApplied });
-      return false;
-    }
-  }
-  async function retryTuningStatus() {
-    if (pending.current || disabled || !tuningRefreshFailure) return;
-    const operation = {}; pending.current = operation; setBusy(true);
-    try { await refreshTuningStatus(tuningRefreshFailure.settingsApplied); }
-    finally { finishOperation(operation); }
-  }
-  async function applyTuning(close: () => void) {
-    if (pending.current || disabled || preview.loading || preview.error || !preview.data || (context !== null && (!Number.isInteger(context) || context < 0))) return;
-    const operation = {}; pending.current = operation; setBusy(true); setError(""); setTuningRefreshFailure(null);
-    let loadAttempted = false, settingsApplied = false;
-    try {
-      const current = latest.current.configuration;
-      const next = chatTuningCandidate(current, thinking, context);
-      const startup = next.startup_overrides ?? {};
-      const key = selectedBundleId ?? selectedDeployment?.id;
-      if (key) Object.assign(next, { model_overrides: { ...remembered(current), [key]: { model_configuration_id: selectedProfile?.id ?? null, startup_overrides: startup, per_request_overrides: next.per_request_overrides } } });
-      if (!latest.current.runtimeBusy && selectedProfile?.bundle_id) {
-        loadAttempted = true;
-        const loaded = await api.applyChatStartupOverrides(selectedProfile.bundle_id, selectedProfile.id, startup);
-        if (!loaded.health?.healthy || loaded.status !== "running") throw new Error(loaded.error ?? "Model did not become ready.");
-        next.deployment_id = loaded.id;
+      if (thinkingPending.current === operation && owner.current.generation === currentGeneration) {
+        const restored = thinkingSettings(latest.current.configuration);
+        acceptedThinking.current = restored; setThinking(restored); setError(errorMessage(failure));
       }
-      if (!ownsOperation(operation)) return;
+    } finally { if (thinkingPending.current === operation) thinkingPending.current = null; }
+  }
+  async function commitContext(nextContext: number | null) {
+    // Parent disabled echoes this control's own busy state and an in-flight send.
+    // Queue the latest choice; do not drop it.
+    if (pending.current) { contextQueued.current = { value: nextContext }; return; }
+    const maximum = contextLimit.current;
+    if (nextContext !== null && !loadableContextSize(nextContext, maximum)) return;
+    const profile = latest.current.selectedProfile;
+    const deployment = latest.current.selectedDeployment;
+    const accepted = typeof latest.current.configuration.startup_overrides?.ctx_size === "number" ? latest.current.configuration.startup_overrides.ctx_size : null;
+    const savedRequested = profile?.bags.startup.requested.ctx_size;
+    const saved = typeof savedRequested === "number" ? savedRequested : null;
+    const reported = deployment?.server_props?.n_ctx;
+    const requestedLoaded = deployment?.settings?.startup?.requested?.ctx_size;
+    const loadedSize = typeof reported === "number" ? reported : typeof requestedLoaded === "number" ? requestedLoaded : null;
+    const effective = nextContext ?? saved;
+    // 0 is the saved full-context sentinel. Any other explicit size must fit the model.
+    const effectiveLoadable = effective === null || effective === 0 || loadableContextSize(effective, maximum);
+    const healthy = !latest.current.runtimeBusy && Boolean(profile?.bundle_id) && deployment?.status === "running" && Boolean(deployment.health?.healthy) && loadedSize !== null;
+    if (healthy && effective !== loadedSize && !effectiveLoadable) {
+      setError("Context must be a whole number of tokens from 1 through this model's maximum.");
+      return;
+    }
+    // A cleared context with no numeric saved size still differs from a loaded n_ctx.
+    const reload = healthy && effective !== loadedSize && effectiveLoadable;
+    if (nextContext === accepted && !reload) return;
+    const operation = {}; pending.current = operation; setBusy(true); setError("");
+    let loadedId: string | undefined;
+    try {
+      if (reload && profile?.bundle_id) {
+        const startup = chatTuningCandidate(latest.current.configuration, acceptedThinking.current, nextContext).startup_overrides ?? {};
+        const loaded = await api.applyChatStartupOverrides(profile.bundle_id, profile.id, startup);
+        if (!loaded.health?.healthy || loaded.status !== "running") throw new Error(loaded.error ?? "Model did not become ready.");
+        loadedId = loaded.id;
+      }
+      if (!ownsOperation(operation) || contextQueued.current) return;
+      const current = latest.current.configuration;
+      const next = rememberChoice(current, chatTuningCandidate(current, acceptedThinking.current, nextContext));
+      if (loadedId) next.deployment_id = loadedId;
       await latest.current.onApply(next);
       if (!ownsOperation(operation)) return;
-      contextDrafts.current.set(contextDraftKey, { context, base: context });
-      settingsApplied = true;
+      if (loadedId) {
+        try { await latest.current.onReloaded(); }
+        catch (failure) { if (ownsOperation(operation)) setError(errorMessage(failure)); }
+      }
     } catch (failure) {
       if (ownsOperation(operation)) setError(errorMessage(failure));
-    } finally {
-      // The accepted candidate owns the chat binding; observation cannot undo it.
-      if (ownsOperation(operation)) {
-        const refreshed = !loadAttempted || await refreshTuningStatus(settingsApplied);
-        if (settingsApplied && refreshed && ownsOperation(operation)) close();
-      }
-      finishOperation(operation);
-    }
+    } finally { finishOperation(operation); }
   }
 
   function choiceRow(profile: RunProfile | null, connected: Deployment | null, label: string, close: () => void, className = "chat-model-choice", description = "", details = description) {
@@ -321,16 +341,28 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
     </button>;
   }
   const baseContext = facts["startup.ctx_size"]?.inherited_value;
-  const contextSupported = Boolean(selectedProfile?.bundle_id) && options?.context_size.supported !== false;
-  const tuningChanged = context !== incomingContext;
+  const contextMaximum = typeof options?.context_size.maximum === "number" && Number.isSafeInteger(options.context_size.maximum) && options.context_size.maximum >= 1 ? options.context_size.maximum : null;
+  const contextSupported = Boolean(selectedProfile?.bundle_id) && options?.context_size.supported !== false && contextMaximum !== null;
   const contextDefault = defaultSettingDisplay(facts["startup.ctx_size"], "configuration", "ctx_size");
   const thinkingFacts = residency.data?.effective_values ?? facts;
-  const loadedContext = selectedDeployment?.server_props?.n_ctx;
   const selectedContext = typeof baseContext === "number" ? baseContext : selectedProfile?.bags.startup.requested.ctx_size;
-  const contextMaximum = options?.context_size.maximum;
-  const capacityLabel = (size: unknown) => size === 0 ? contextMaximum ? `Full · ${tokenLabel(contextMaximum)} tokens` : "Full model capacity" : typeof size === "number" && size > 0 ? `${tokenLabel(size)} tokens` : "Auto";
-  const displayedContext = context === 0 ? contextMaximum ?? null : context ?? (selectedContext === 0 ? contextMaximum ?? null : typeof selectedContext === "number" ? selectedContext : null);
-  const needsReload = tuningChanged || !runtimeBusy && selectedState.tone !== "ready";
+  const displayedContext = context === 0 ? contextMaximum : context ?? (selectedContext === 0 ? contextMaximum : typeof selectedContext === "number" ? selectedContext : null);
+  const contextReason = selectedDeployment?.scope === "connected" && !selectedProfile?.bundle_id ? "Context is managed by this connection." : options?.context_size.supported === false ? "Context control unavailable." : "";
+  const contextHelp = contextReason || (runtimeBusy ? "A context change waits for the next message." : "A context change reloads the model.");
+  latest.current = { configuration, onApply, onReloaded, runtimeBusy, selectedProfile, selectedDeployment, selectedBundleId };
+  contextLimit.current = contextMaximum;
+  useEffect(() => {
+    if (!pickerOpen || !selectedBundleId) { setMemory("Unknown"); return; }
+    const controller = new AbortController();
+    setMemory("Unknown");
+    const startup = mergedStartup(selectedProfile?.bags.startup.requested ?? {}, previewConfiguration.startup_overrides ?? {});
+    void estimateModel({ bundle_id: selectedBundleId, startup }, false, controller.signal).then(data => {
+      if (controller.signal.aborted) return;
+      const known = data.gpu_bytes != null || data.ram_bytes != null;
+      setMemory(known ? formatBytes((data.gpu_bytes ?? 0) + (data.ram_bytes ?? 0)) : "Unknown");
+    }).catch(() => { if (!controller.signal.aborted) setMemory("Unknown"); });
+    return () => controller.abort();
+  }, [pickerOpen, selectedBundleId, optionStartup]);
   const term = search.trim().toLocaleLowerCase();
   const visibleBundles = availableBundles.filter(item => (item.status === "ready" || item.disk_matches) && [modelLabel(item, availableBundles), modelDetails(item), ...profiles.filter(profile => profile.bundle_id === item.id).map(profile => profile.display_name)].join(" ").toLocaleLowerCase().includes(term));
   const visibleConnected = connectedChoices.filter(item => item.display_name.toLocaleLowerCase().includes(term));
@@ -369,28 +401,16 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
           {!visibleKeys.length && (availableBundles.length || connectedChoices.length) ? <p className="hint">No models match this search.</p> : null}
           {!availableBundles.length && !deployments.length ? <p className="hint">Add a model in Models.</p> : null}
         </div>
-        {error ? <Notice tone="error">{error}</Notice> : null}
-      </>}
-    </MenuPopover>
-    <MenuPopover label="Tune model" trigger={<Icon name="tune" size={16} />} className="chat-tuning" panelClassName="chat-model-controls-panel chat-tuning-panel" disabled={disabled || (!selectedProfile && !selectedDeployment)} onOpenChange={setTuningOpen}>
-      {close => <>
-        <div className="chat-tuning-body">
-        <header className="chat-tuning-heading"><strong>This chat</strong></header>
-        <div className="setting-rows chat-thinking-settings">
-          <ResponseSettingsEditor part="thinking-only" layout="models" value={thinking} facts={facts} presentationFacts={thinkingFacts} options={options} loading={preview.loading} disabled={busy} onChange={next => void applyThinking(next)} />
-        </div>
-        <section className="chat-capacity-settings" aria-label="Context">
-          <SettingRow layout="models" label="Context" help={<>Total shared context in tokens. Apply this chat's settings changes loading settings; current and queued work keep their accepted settings.<code>{options?.context_size.flag ?? "--ctx-size"}</code></>} provenance={context === null ? contextDefault.source : "This chat"} onReset={context !== null && !busy ? () => stageContext(null) : undefined} resetLabel="Reset" resetTitle={contextDefault.title}>
-            <ContextSlider label="Chat context" value={displayedContext} maximum={contextMaximum ?? null} disabled={busy || !contextSupported} onChange={stageContext} />
+        <div className="chat-model-settings">
+          <ResponseSettingsEditor part="thinking-only" value={thinking} facts={facts} presentationFacts={thinkingFacts} options={options} loading={preview.loading} disabled={disabled} onChange={next => void applyThinking(next)} />
+          <SettingRow label="Context" help={contextHelp} onReset={context !== null && !busy ? () => { stageContext(null); void commitContext(null); } : undefined} resetLabel="Reset" resetTitle={contextDefault.title}>
+            <div className="chat-context-line">
+              <ContextSlider label="Chat context" value={displayedContext} maximum={contextMaximum} disabled={Boolean(contextReason) || !contextSupported} title={contextHelp} onChange={next => { if (!loadableContextSize(next, contextMaximum)) return; stageContext(next); void commitContext(next); }} />
+              <span className="chat-context-memory">{memory}</span>
+            </div>
           </SettingRow>
-          <dl className="chat-capacity-state"><div><dt>Selected</dt><dd>{capacityLabel(incomingContext ?? selectedContext)}</dd></div><div><dt title="Maximum tokens for one request on the loaded model. Simultaneous requests share its context pool.">Loaded per request</dt><dd>{loadedContext == null ? "Not reported" : capacityLabel(loadedContext)}</dd></div>{tuningChanged || runtimeBusy && incomingContext !== null && incomingContext !== loadedContext ? <div data-pending="true"><dt>Pending</dt><dd>{capacityLabel(context ?? selectedContext)}</dd></div> : null}</dl>
-          {contextSupported && selectedProfile && context !== null && Number.isSafeInteger(context) && context >= 0 ? <ModelHardwareEstimate active={tuningOpen} selection={{ bundle_id: selectedBundleId, startup: mergedStartup(selectedProfile.bags.startup.requested, previewConfiguration.startup_overrides ?? {}) }} /> : null}
-          {!contextSupported ? <span className="hint">{selectedDeployment?.scope === "connected" ? "Context is managed by this connection." : "Context control unavailable."}</span> : null}
-        </section>
-        {error || preview.error ? <Notice tone="error">{error || preview.error}</Notice> : null}
-        {tuningRefreshFailure ? <Notice tone="warn" action={<button type="button" disabled={busy} onClick={() => void retryTuningStatus()}>Refresh status</button>}>{tuningRefreshFailure.settingsApplied ? "Settings applied. " : ""}Model status could not refresh. {tuningRefreshFailure.detail}</Notice> : null}
         </div>
-        <div className="actions chat-model-controls-actions"><button type="button" className="primary-button" disabled={!contextSupported || !needsReload || busy || preview.loading || !preview.data || Boolean(preview.error) || (context !== null && (!Number.isInteger(context) || context < 0))} onClick={() => void applyTuning(close)}>{busy ? "Applying…" : runtimeBusy ? "Stage for next message" : "Apply this chat's settings"}</button></div>
+        {error ? <Notice tone="error">{error}</Notice> : null}
       </>}
     </MenuPopover>
   </>;

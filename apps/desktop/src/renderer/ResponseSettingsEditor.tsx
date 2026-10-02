@@ -19,6 +19,7 @@ export function ResponseSettingsEditor({ value, onChange, facts, presentationFac
   const reset = (key: string) => ({ onReset: Object.hasOwn(value, key) && !disabled ? () => follow(key) : undefined, resetLabel: "Reset", resetTitle: target(key).title });
   const supported = (key: string) => descriptor(key)?.supported !== false;
   const readout = (key: string) => {
+    if (part === "thinking-only") return undefined;
     const shown = Object.hasOwn(value, key) ? { value: value[key], source: "Set value", known: true, inherited: false, requires_reload: false } : presentation(key);
     const display = effectiveSettingDisplay(shown, false, key);
     return <span className="model-effective-readout"><strong>{display.value}</strong>{display.source ? ` · ${loading && !Object.hasOwn(value, key) ? "Last checked" : display.source}` : ""}</span>;

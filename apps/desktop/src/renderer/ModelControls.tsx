@@ -61,21 +61,21 @@ export function contextSliderValues(maximum: number | null, shown: number | null
 }
 
 /** One 1024-token slider, with the exact metadata maximum as its final endpoint. */
-export function ContextSlider({ id, label = "Context", value, maximum, span, unknownLabel = "Not reported", disabled, onChange }: {
-  id?: string; label?: string; value: number | null; maximum: number | null; span?: number; unknownLabel?: string; disabled?: boolean; onChange: (tokens: number) => void;
+export function ContextSlider({ id, label = "Context", value, maximum, span, unknownLabel = "Not reported", disabled, title, onChange }: {
+  id?: string; label?: string; value: number | null; maximum: number | null; span?: number; unknownLabel?: string; disabled?: boolean; title?: string; onChange: (tokens: number) => void;
 }) {
   const values = contextSliderValues(maximum, value, span);
   const index = value == null ? 0 : Math.max(0, values.indexOf(value));
   return <div className="context-slider-control">
-    <CompactSliderInput id={id} label={label} values={values} index={index} value={value} disabled={disabled} onChange={onChange} />
+    <CompactSliderInput id={id} label={label} values={values} index={index} value={value} disabled={disabled} title={title} onChange={onChange} />
     <output htmlFor={id}>{value == null ? unknownLabel : `${tokenLabel(value)} tokens`}</output>
   </div>;
 }
 
-function CompactSliderInput({ id, label, values, index, value, disabled, onChange }: {
-  id?: string; label: string; values: number[]; index: number; value: number | null; disabled?: boolean; onChange: (tokens: number) => void;
+function CompactSliderInput({ id, label, values, index, value, disabled, title, onChange }: {
+  id?: string; label: string; values: number[]; index: number; value: number | null; disabled?: boolean; title?: string; onChange: (tokens: number) => void;
 }) {
   const maximum = Math.max(0, values.length - 1);
   const fill = maximum > 0 ? Math.min(100, Math.max(0, index / maximum * 100)) : 0;
-  return <input id={id} type="range" min={0} max={maximum} step={1} value={index} style={{ "--range-fill": `${fill}%` } as CSSProperties} data-token-value={value ?? undefined} aria-label={label} aria-valuetext={value == null ? "Not reported" : `${value.toLocaleString()} tokens`} disabled={disabled || values.length < 2} onChange={event => { const next = values[Number(event.target.value)]; if (next != null) onChange(next); }} />;
+  return <input id={id} type="range" min={0} max={maximum} step={1} value={index} style={{ "--range-fill": `${fill}%` } as CSSProperties} data-token-value={value ?? undefined} aria-label={label} aria-valuetext={value == null ? "Not reported" : `${value.toLocaleString()} tokens`} title={title} disabled={disabled || values.length < 2} onChange={event => { const next = values[Number(event.target.value)]; if (next != null) onChange(next); }} />;
 }

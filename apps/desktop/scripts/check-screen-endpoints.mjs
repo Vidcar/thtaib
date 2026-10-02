@@ -108,6 +108,7 @@ try {
   const badges = models.root.findAll(node => node.type === "span" && String(node.props.className).startsWith("badge "));
   assert.equal(badges.some(node => text(node) === "Ready"), false, "a failed load is not labelled Ready");
 
+  failManaged = false;
   const chatProfile = { ...profile, bags: { startup: bag({ ctx_size: 8192 }), per_request: bag({ reasoning: "on" }), agent: bag({}) } };
   const chatDeployment = { ...running, settings: chatProfile.bags };
   await act(async () => {
@@ -118,39 +119,41 @@ try {
     }));
     await tick();
   });
-  const tune = chat.root.findAll(node => node.type === "button" && node.props["aria-label"] === "Tune model")[0];
-  await act(async () => { if (!tune.props["aria-expanded"]) tune.props.onClick(); await tick(); });
-  await act(async () => ownerControl(chat.root.findAllByType("input").find(node => node.props["aria-label"] === "Chat context"), "ContextSlider").props.onChange(12288));
-  for (let attempt = 0; attempt < 8 && button(chat, "Apply this chat's settings")?.props.disabled; attempt += 1) await act(async () => { await tick(); });
-  assert.equal(button(chat, "Reload"), undefined, "chat tuning does not say Reload");
+  const modelMenu = chat.root.findAll(node => node.type === "button" && String(node.props["aria-label"]).startsWith("Chat model:"))[0];
+  assert.ok(modelMenu, "chat uses the model menu");
+  await act(async () => { if (!modelMenu.props["aria-expanded"]) modelMenu.props.onClick(); await tick(); await tick(); });
+  assert.equal(chat.root.findAll(node => node.props.name === "tune" || node.props["aria-label"] === "Tune model").length, 0, "the chat menu has no tune icon");
+  assert.equal(button(chat, "Apply this chat's settings"), undefined, "a context choice has no Apply button");
+  assert.equal(button(chat, "Stage"), undefined, "a context choice has no Stage button");
+  assert.equal(button(chat, "Reload"), undefined, "chat context does not say Reload");
   const helpText = node => node == null ? "" : Array.isArray(node) ? node.map(helpText).join("") : typeof node === "object" ? helpText(node.props?.children) : String(node);
   const contextHelp = chat.root.findAll(node => node.type?.name === "SettingRow" && node.props.label === "Context")[0];
-  assert.match(helpText(contextHelp.props.help), /Apply this chat's settings changes loading settings/);
+  assert.match(helpText(contextHelp.props.help), /A context change reloads the model/);
   const beforeChat = managedCalls().length;
-  await act(async () => { button(chat, "Apply this chat's settings").props.onClick(); await tick(); });
+  await act(async () => { ownerControl(chat.root.findAllByType("input").find(node => node.props["aria-label"] === "Chat context"), "ContextSlider").props.onChange(12288); await tick(); await tick(); });
   const applied = managedCalls().at(-1);
   assert.equal(managedCalls().length, beforeChat + 1);
   assert.equal(applied.method, "POST");
   assert.equal(applied.body.profile_id, "config");
   assert.equal(applied.body.auto_start, true);
-  assert.equal(applied.body.startup.ctx_size, 12288, "chat apply posts that chat's startup overrides");
-  assert.equal(calls.filter(call => call.path.includes("/reload")).length, 1, "chat apply does not call reload");
+  assert.equal(applied.body.startup.ctx_size, 12288, "an idle context choice posts that chat's startup overrides");
+  assert.equal(calls.filter(call => call.path.includes("/reload")).length, 1, "an idle context choice does not call reload");
 
-  failManaged = false;
+  let refreshApplied = false;
   await act(async () => {
     failedRefresh = create(React.createElement(ChatModelControls, {
       bundles: [bundle], deployments: [chatDeployment], profiles: [chatProfile], selectedDeploymentId: "running-1", selectedConfigurationId: "config",
       configuration: { model_configuration_id: "config", deployment_id: "running-1", startup_overrides: { ctx_size: 8192 } },
-      conversationId: "chat-2", onApply: async () => {}, onReloaded: async () => { throw new Error("Model status could not refresh"); }, onManageAgent: () => {},
+      conversationId: "chat-2", onApply: async () => { refreshApplied = true; }, onReloaded: async () => { throw new Error("Model status could not refresh"); }, onManageAgent: () => {},
     }));
     await tick();
   });
-  const failedTune = failedRefresh.root.findAll(node => node.type === "button" && node.props["aria-label"] === "Tune model")[0];
-  await act(async () => { if (!failedTune.props["aria-expanded"]) failedTune.props.onClick(); await tick(); });
-  await act(async () => ownerControl(failedRefresh.root.findAllByType("input").find(node => node.props["aria-label"] === "Chat context"), "ContextSlider").props.onChange(16384));
-  for (let attempt = 0; attempt < 8 && button(failedRefresh, "Apply this chat's settings")?.props.disabled; attempt += 1) await act(async () => { await tick(); });
-  await act(async () => { button(failedRefresh, "Apply this chat's settings").props.onClick(); await tick(); });
-  assert.match(text(failedRefresh.root), /Model status could not refresh/, "a failed model refresh stays visible after chat settings are applied");
+  const failedMenu = failedRefresh.root.findAll(node => node.type === "button" && String(node.props["aria-label"]).startsWith("Chat model:"))[0];
+  await act(async () => { if (!failedMenu.props["aria-expanded"]) failedMenu.props.onClick(); await tick(); });
+  await act(async () => { ownerControl(failedRefresh.root.findAllByType("input").find(node => node.props["aria-label"] === "Chat context"), "ContextSlider").props.onChange(16384); await tick(); await tick(); });
+  assert.equal(refreshApplied, true, "a failed model refresh still keeps the applied context choice");
+  assert.match(text(failedRefresh.root), /Model status could not refresh/, "a failed model refresh stays visible after the context choice");
+  assert.equal(failedRefresh.root.findAll(node => node.type === "button" && text(node) === "Refresh status").length, 0, "status refresh has no retry button");
   let attentionFailed = false;
   globalThis.fetch = async (url) => {
     if (String(url).endsWith("/v1/desktop/attention")) {

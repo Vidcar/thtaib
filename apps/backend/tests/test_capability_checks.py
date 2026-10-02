@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 from tests.test_capability_probes import make_deployment
 from workbench_backend.errors import ManagerError
@@ -145,12 +145,69 @@ class CapabilityCheckTests(unittest.TestCase):
             lambda d: d.inference_identity["bundle_files"][0].update(sha256="new-weights"),
             lambda d: d.inference_identity["bundle_files"][1].update(sha256="new-projector"),
             lambda d: setattr(d.server_props, "chat_template", "different-template"),
-            lambda d: d.settings.per_request.applied.update(temperature=0.8),
-            lambda d: d.settings.per_request.applied.update(reasoning_preserve=False),
         ):
             changed = copy.deepcopy(self.manager.get_deployment(original.id))
             mutation(changed)
             self.assertEqual(capability_support(changed, "text_stream"), "untested")
+
+    def test_sampling_keeps_every_check_and_saved_thinking_drops_only_thinking(self):
+        original = self.manager.get_deployment(self.deployment.id)
+        names = (
+            "text_stream", "tools", "structured_native", "structured_tools",
+            "structured_with_tools", "structured_tools_with_tools", "reasoning",
+            "reasoning_replay", "image", "tool_image",
+        )
+        for name in names:
+            self.record(original, name)
+        current = self.manager.get_deployment(original.id)
+        sampling = copy.deepcopy(current)
+        sampling.settings.per_request.applied.update(
+            temperature=0.8, top_k=10, top_p=0.9, min_p=0.05, repeat_penalty=1.1,
+            presence_penalty=0.1, frequency_penalty=0.1, max_tokens=256,
+        )
+        for name in names:
+            self.assertEqual(capability_support(sampling, name), "passed", name)
+        thinking = copy.deepcopy(current)
+        thinking.settings.per_request.applied.update(reasoning="on", reasoning_effort="low")
+        for name in names:
+            expected = "untested" if name in {"reasoning", "reasoning_replay"} else "passed"
+            self.assertEqual(capability_support(thinking, name), expected, name)
+        history = copy.deepcopy(current)
+        history.settings.per_request.applied.update(reasoning_preserve=False)
+        for name in names:
+            self.assertEqual(capability_support(history, name), "passed", name)
+
+    def test_only_missing_reruns_thinking_after_a_saved_thinking_change(self):
+        original = self.manager.get_deployment(self.deployment.id)
+        reasoning = self.record(original, "reasoning")
+        replay = self.record(original, "reasoning_replay")
+        stream = self.record(original, "text_stream")
+        current = self.manager.get_deployment(original.id)
+        current.settings.per_request.applied.update(reasoning="on", reasoning_effort="low")
+        self.store.put_deployment(current)
+        calls = []
+
+        class Answer:
+            def invoke(self, _messages):
+                calls.append("invoke")
+                return AIMessage(content="391", additional_kwargs={"reasoning_content": "worked"})
+
+            def stream(self, _messages):
+                calls.append("stream")
+                yield AIMessageChunk(content="READY")
+
+        kept = run_capability_probe(self.manager, current.id, CapabilityProbeRequest(capability="text_stream"),
+            model_factory=lambda *_args, **_kwargs: Answer(), only_missing=True)
+        self.assertEqual(kept.id, stream.id)
+        self.assertEqual(calls, [])
+        rerun = run_capability_probe(self.manager, current.id, CapabilityProbeRequest(capability="reasoning"),
+            model_factory=lambda *_args, **_kwargs: Answer(), only_missing=True)
+        self.assertNotEqual(rerun.id, reasoning.id)
+        self.assertEqual(calls, ["invoke"])
+        replayed = run_capability_probe(self.manager, current.id, CapabilityProbeRequest(capability="reasoning_replay"),
+            model_factory=lambda *_args, **_kwargs: Answer(), only_missing=True)
+        self.assertNotEqual(replayed.id, replay.id)
+        self.assertGreater(len(calls), 1)
 
     def test_external_template_bytes_invalidate_without_rehashing_weights(self):
         template = Path(self.temporary.name) / "template.jinja"
