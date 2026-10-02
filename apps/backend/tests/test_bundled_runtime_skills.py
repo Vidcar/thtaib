@@ -74,12 +74,19 @@ class BundledRuntimeSkillsTests(unittest.TestCase):
 
     def test_templates_use_real_installed_ids_without_changing_access(self):
         empty = self.client.get("/v1/agent-setup-templates").json()
-        self.assertEqual(len(empty), 6)
+        self.assertEqual(len(empty), 7)
         self.assertTrue(all(not item["configuration"]["skill_entry_ids"] for item in empty))
-        installed = self.install("project-change")
+        installed = {slug: self.install(slug) for slug in SKILL_IDS}
         templates = self.client.get("/v1/agent-setup-templates").json()
         builder = next(item for item in templates if item["id"] == "guarded-project-builder")
-        self.assertEqual(builder["configuration"]["skill_entry_ids"], [installed["id"]])
+        trusted = next(item for item in templates if item["id"] == "trusted-project-builder")
+        trusted_skills = ["project-change", "failure-diagnosis", "windows-execution", "verify-delivery"]
+        self.assertEqual(builder["configuration"]["skill_entry_ids"], [])
+        self.assertEqual(trusted["configuration"]["skill_entry_ids"], [installed[slug]["id"] for slug in trusted_skills])
+        self.assertEqual(trusted["suggested_chat_access"], "full_access")
+        starters = [item for item in templates if item["id"] != "trusted-project-builder"]
+        self.assertTrue(all(item["suggested_chat_access"] == "ask" for item in starters))
+        self.assertTrue(all(not item["configuration"]["skill_entry_ids"] for item in starters))
         for item in templates:
             config = item["configuration"]
             self.assertIsNone(config["approval_mode"])

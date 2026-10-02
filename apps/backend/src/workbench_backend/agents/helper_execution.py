@@ -19,6 +19,7 @@ from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.schemas import SettingsBags
 from workbench_backend.agents.memory_skills import memory_selection_notice, plan_knowledge_materialization, reference_context
 from workbench_backend.agents.input_sources import build_input_sources, reference_source_mode, skill_selection_error
+from workbench_backend.agents.tool_disclosure import append_selected_tools_index, selected_tools_index
 from workbench_backend.agents.helpers import require_accepted_model_identity
 
 
@@ -115,9 +116,16 @@ def _resolve_child_setup(owner, parent, snapshot, config, input_policy, deployme
             presented.append("read_reference")
         if input_policy.tool_loading == "when_needed" and presented and "tool:find_tools" not in input_policy.excluded_sources and "find_tools" in parent.presented_tools and "find_tools" not in presented:
             presented.append("find_tools")
+        setup.system_prompt = append_selected_tools_index(setup.system_prompt, presented, input_policy)
         setup.input_sources = build_input_sources(policy=input_policy, instruction_layers=snapshot.instruction_layers,
             knowledge_versions=versions, profile=None, deployment=deployment.model_copy(update={"settings": setup.bags}), presented_tools=presented,
             selected_agent=True, surface_text=snapshot.role, project_id=parent.project_id)
+        # This row is the helper index. The other helper rows stay without stored content.
+        index = selected_tools_index(presented, input_policy=input_policy)
+        for row in setup.input_sources:
+            if row.id == "selected_tools":
+                row.content = index
+                break
     for version in versions:
         if version.kind == "skill" and reference_source_mode(input_policy, version.entry_id, "skill") == "always":
             error = skill_selection_error(version, tool_names=presented,

@@ -495,9 +495,25 @@ class ChatService:
                 reason="Earlier messages, tool results and native summaries may contain previously supplied material. Exact retained input is captured at dispatch.",
                 content="\n\n".join(f"{message.role}: {message.content}" for message in conversation.transcript) if include_content else None,
                 available=not bool(conversation.source_checkpoint_id)))
+        from types import SimpleNamespace
+        from workbench_backend.agents.harness_presentation import resolve_capture_routes
+        from workbench_backend.agents.schemas import ToolMode
+        # A chat folder can be bound before it has a saved project id. Admission uses that path.
+        _session, capture_routes = resolve_capture_routes(self.harness, SimpleNamespace(
+            thread_id=conversation.thread_id, source_surface="chat", tool_mode=ToolMode.live_tool,
+            presented_tools=conversation.presented_tools))
+        candidate = request or ChatStartRequest(task="Preview")
+        # Saved memory and skill ids only. Resolving the helper here would validate a removed model.
+        from workbench_backend.agents.helpers import index_helper_refs
+        helpers = index_helper_refs(self._setups(), selection.configuration.helper_agent_ids,
+            project_id=conversation.project_id)
         return create_input_preview(selection, include_content=include_content, knowledge=self.knowledge,
             manager=self.manager, additional_sources=additional,
-            connection_tool_definitions=self.harness.connections.tool_definitions)
+            connection_tool_definitions=self.harness.connections.tool_definitions,
+            project_path=conversation.project_path,
+            retained_asset_ids=self._selected_document_ids(conversation, candidate),
+            retrieval_project_paths=list(conversation.retrieval_project_paths),
+            capture_routes=capture_routes, work_mode=conversation.work_mode, helpers=helpers)
 
     def _context_input_sources(self, conversation: ChatConversation, request: ChatStartRequest,
         policy: AgentInputPolicy | None, *, include_content: bool = False) -> list[InputSourceRow]:

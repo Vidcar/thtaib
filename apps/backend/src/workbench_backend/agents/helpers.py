@@ -1,6 +1,8 @@
 """Freeze selected named agents without recursively resolving a helper catalogue."""
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from workbench_backend.agents.setup_schemas import FrozenHelperSelection, SetupConfiguration
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.schemas import Deployment, ManagedDeploymentRequest, SettingsBags
@@ -94,6 +96,41 @@ def prepare_frozen_model(manager, configuration, settings, *, error_type=Harness
         selected = manager.create_managed(ManagedDeploymentRequest(bundle_id=configuration.bundle_id,
             profile_id=configuration.profile_id, startup=startup, auto_start=False))
     return configuration.model_copy(update={"deployment_id": selected.id})
+
+
+def index_helper_refs(service, agent_ids, project_id=None):
+    """Helper memory and skill ids for the Inputs index, including project defaults.
+
+    Entry ids use the same union as setup merge. A set helper version-ref list replaces
+    the project list; an unset list keeps it. This does not resolve or validate the helper.
+    A removed model stays inspectable, and the helper's tools are not copied onto the parent.
+    """
+    project = service.store.get_project(project_id) if project_id else None
+    defaults = project.defaults if project is not None else None
+    refs = []
+    for ident in dict.fromkeys(agent_ids or []):
+        record = service.store.get_agent_setup(ident)
+        if record is None or not record.active:
+            continue
+        config = service.get_version(record.current_version_id).configuration
+        refs.append(SimpleNamespace(configuration=SimpleNamespace(
+            memory_entry_ids=_merged_entry_ids(defaults, config, "memory_entry_ids"),
+            memory_version_refs=_merged_version_refs(defaults, config, "memory_version_refs"),
+            skill_entry_ids=_merged_entry_ids(defaults, config, "skill_entry_ids"),
+            skill_version_refs=_merged_version_refs(defaults, config, "skill_version_refs"),
+        )))
+    return refs
+
+
+def _merged_entry_ids(defaults, config, field):
+    return list(dict.fromkeys([*(getattr(defaults, field, None) or []), *(getattr(config, field, None) or [])]))
+
+
+def _merged_version_refs(defaults, config, field):
+    selected = getattr(config, field, None)
+    if selected is not None:
+        return list(selected)
+    return list(getattr(defaults, field, None) or [])
 
 
 def freeze_helpers(service, agent_ids, *, project_id=None, parent_configuration=None, latest_knowledge=False,

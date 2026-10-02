@@ -19,7 +19,7 @@ from workbench_backend.errors import HarnessError
 from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.agents.setup_schemas import AgentInputPolicy
 from workbench_backend.agents.tool_results import OwnedToolResults, continuation_notice, result_reader_tool
-from workbench_backend.agents.tools import OPT_IN_TOOL_NAMES, catalogue_projection, standard_context_key
+from workbench_backend.agents.tools import FILESYSTEM_TOOL_NAMES, OPT_IN_TOOL_NAMES, catalogue_projection, standard_context_key
 from workbench_backend.app import create_app
 from workbench_backend.assets.schemas import RetainedUploadRequest
 from workbench_backend.assets.service import RetainedAssetService
@@ -242,7 +242,7 @@ class ResearcherTemplateTests(AuditHarnessTests):
         self.assertEqual(installed.status_code, 200, installed.text)
         for loading in ("when_needed", "always"):
             with self.subTest(loading=loading):
-                setup = self._save_template(input_policy=self._policy(loading))
+                setup = self._save_template(input_policy=self._policy(loading), skill_entry_ids=[installed.json()["id"]])
                 self.assertEqual(setup["configuration"]["skill_entry_ids"], [installed.json()["id"]])
                 self.assertIn("glob", setup["configuration"]["presented_tools"])
                 admitted = self._read_attachment(setup, "SKILL_RECEIPT_77", task="Read the attached source with the research skill.")
@@ -406,17 +406,20 @@ class RetainedReaderTemplateTests(AuditHarnessTests):
 
     def test_stock_templates_can_read_a_late_marker_without_shell(self) -> None:
         templates = [item for item in self.client.get("/v1/agent-setup-templates").json()
-            if item["id"] not in {"browser-validator", "windows-validator"}]
-        self.assertGreaterEqual(len(templates), 4)
+            if item["id"] not in {"browser-validator", "windows-validator"}
+            and "read_tool_result" in item["configuration"]["presented_tools"]]
+        self.assertGreaterEqual(len(templates), 3)
         for template in templates:
             pins = template["configuration"]["input_policy"]["pinned_tools"]
             self.assertIn("read_tool_result", template["configuration"]["presented_tools"])
-            if template["id"] in {"guarded-project-builder", "trusted-project-builder"}:
-                self.assertNotIn("read_tool_result", pins)
+            if template["id"] == "evidence-researcher":
+                self.assertEqual(pins, ["read_attachment", "read_tool_result"])
             else:
-                self.assertIn("read_tool_result", pins)
+                self.assertNotIn("read_tool_result", pins)
             setup = self._save(template["name"] + " retained", template["configuration"])
-            extra = {"project_path": str(self.project)} if template["configuration"].get("requires_project") else {}
+            # Pinned filesystem tools still need a folder when the draft does not require a project.
+            needs_folder = template["configuration"].get("requires_project") or bool(set(pins) & set(FILESYSTEM_TOOL_NAMES))
+            extra = {"project_path": str(self.project)} if needs_folder else {}
             chat = self._chat(agent_setup_id=setup["id"], **extra)
             seeded = self._seed(chat["thread_id"])
             read = self._read(chat, seeded["path"])
@@ -433,7 +436,11 @@ class RetainedReaderTemplateTests(AuditHarnessTests):
         ):
             template = next(item for item in self.client.get("/v1/agent-setup-templates").json() if item["id"] == template_id)
             self.assertIn("read_tool_result", template["configuration"]["presented_tools"])
-            self.assertIn("read_tool_result", template["configuration"]["input_policy"]["pinned_tools"])
+            pins = template["configuration"]["input_policy"]["pinned_tools"]
+            if template_id == "browser-validator":
+                self.assertEqual(pins, ["browser_navigate", "browser_snapshot"])
+            else:
+                self.assertEqual(pins, ["desktop_inspect"])
             setup = self._save(template["name"], template["configuration"])
             chat = self._chat(agent_setup_id=setup["id"], work_mode="work")
             started = self.client.post(f"/v1/chat/conversations/{chat['id']}/start", json={"task": "Inspect."})

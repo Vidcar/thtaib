@@ -23,8 +23,11 @@ class AgentSetupTemplate(BaseModel):
 def setup_templates(knowledge) -> list[AgentSetupTemplate]:
     installed = {entry.package_source: entry.id for entry in knowledge.list_entries()
         if entry.kind == "skill" and entry.scope == "user" and entry.enabled}
-    reads = ["ls", "read_file", "glob", "grep", "read_attachment", "read_tool_result", "ask_user", "write_todos"]
-    builder = [*reads, "write_file", "edit_file", "execute"]
+    project = ["ls", "read_file", "write_file", "edit_file", "glob", "grep"]
+    file_pins = ["ls", "read_file", "edit_file", "write_file"]
+    reviewer = ["ls", "read_file", "glob", "grep", "read_attachment", "ask_user", "write_todos"]
+    trusted_reads = [*reviewer, "read_tool_result"]
+    trusted_tools = [*trusted_reads, "write_file", "edit_file", "execute"]
     browser = ["ask_user", "read_tool_result", "browser_navigate", "browser_navigate_back", "browser_tabs", "browser_snapshot",
         "browser_find", "browser_click", "browser_hover", "browser_press_key", "browser_type",
         "browser_select_option", "browser_fill_form", "browser_resize", "browser_console_messages",
@@ -32,37 +35,48 @@ def setup_templates(knowledge) -> list[AgentSetupTemplate]:
         "browser_take_screenshot", "browser_wait_for", "browser_handle_dialog"]
     desktop = ["ask_user", "read_tool_result", "desktop_list_windows", "desktop_inspect", "desktop_search", "desktop_wait",
         "desktop_invoke", "desktop_set_value", "desktop_send_keys", "desktop_screenshot"]
+    trusted_role = "Implement and verify explicitly trusted local project work."
     specs = [
-        ("guarded-project-builder", "Guarded project builder", "Implement and verify bounded local project work.", builder,
-            ["glob", "grep", "edit_file", "write_file", "execute"],
-            ["project-change", "failure-diagnosis", "windows-execution", "verify-delivery"],
+        ("general", "General", "Finish the requested result.",
+            "Finish the requested result in the bound project. A send needs that folder. Use a tool result or a page structure before claiming a file, a page, or a headline. For a page or a game, write the project files, start the preview, and read the page. For news, open the page and quote the page structure. Ask only when a missing choice changes the result. Hand a separable check to the matching helper and use the helper's evidence.",
+            [*project, "execute", "start_preview", "stop_preview", "preview_status", "browser_navigate", "browser_snapshot", "browser_find", "write_todos", "ask_user", "read_tool_result"],
+            file_pins, [], False, False, "work", "ask", "off",
+            "Use Ask in Chat. Helpers are chosen after they are saved. This draft does not select skills."),
+        ("guarded-project-builder", "Guarded project builder", "Change only the requested project files.",
+            "Change only the requested project files. Run the check that applies. Report the command result or the file you read. Do not widen the task.",
+            [*project, "execute", "write_todos", "ask_user"], file_pins, [], True, True,
             "work", "ask", "off", "Use Ask in Chat. Project file changes can be granted separately in Settings; commands still require their own approval."),
-        ("trusted-project-builder", "Trusted project builder", "Implement and verify explicitly trusted local project work.", builder,
-            ["glob", "grep", "edit_file", "write_file", "execute"],
-            ["project-change", "failure-diagnosis", "windows-execution", "verify-delivery"],
+        ("trusted-project-builder", "Trusted project builder", trusted_role,
+            trusted_role + " Preserve unrelated work and report only observed evidence.",
+            trusted_tools, ["glob", "grep", "edit_file", "write_file", "execute"],
+            ["project-change", "failure-diagnosis", "windows-execution", "verify-delivery"], True, True,
             "work", "full_access", "off", "Choose Full access deliberately in Chat only for trusted work. Commands run on the real host with inherited environment; the project folder is not a sandbox."),
-        ("read-only-reviewer", "Read-only reviewer", "Review concrete changes and existing evidence without executing or modifying the project.", reads,
-            ["glob", "grep", "read_tool_result"], ["project-change", "failure-diagnosis", "verify-delivery"],
+        ("read-only-reviewer", "Read-only reviewer", "Report what is in the files.",
+            "Report what is in the files. Do not edit them.",
+            reviewer, ["ls", "read_file"], [], True, False,
             "plan", "ask", "off", "Use Plan in Chat. This draft selects source reading only: it cannot run tests, edit files, start previews or contact integrations."),
-        ("browser-validator", "Browser validator", "Test a selected web flow with fresh targets and visual evidence.", browser,
-            ["browser_snapshot", "browser_find", "browser_wait_for", "read_tool_result"], ["browser-validation", "failure-diagnosis", "verify-delivery"],
+        ("browser-validator", "Browser validator", "Open the requested page.",
+            "Open the requested page. Read headlines and links from the page structure. Use a screenshot only as a picture, not as the source of the words.",
+            browser, ["browser_navigate", "browser_snapshot"], [], False, False,
             "work", "ask", "off", "Use Ask and select Browser in Chat. Screenshots require verified image reading. Add preview tools only when an owned local server is needed; uploads remain unselected."),
-        ("evidence-researcher", "Evidence researcher", "Read selected documents and public sources with precise citations and coverage.", reads,
-            ["read_attachment", "read_tool_result"], ["evidence-research"],
-            "plan", "ask", "off", "Use Plan in Chat. Select the actual public-web connection in the editor when web sources are needed; no account connection is added by this template."),
-        ("windows-validator", "Windows validator", "Inspect and test a live selected Windows application without expanding its scope.", desktop,
-            ["desktop_list_windows", "desktop_inspect", "desktop_search", "read_tool_result"], ["desktop-validation", "failure-diagnosis", "verify-delivery"],
+        ("evidence-researcher", "Evidence researcher", "Quote the page or the file you actually read.",
+            "Quote the page or the file you actually read. Say when a line was not opened.",
+            [*reviewer, "read_tool_result", "browser_navigate", "browser_snapshot", "browser_find"],
+            ["read_attachment", "read_tool_result"], [], False, False,
+            "work", "ask", "off", "Use Ask in Chat. Page tools stay discoverable until needed. This draft does not select a public-web connection."),
+        ("windows-validator", "Windows validator", "Inspect the named window.",
+            "Inspect the named window. Do not operate other windows.",
+            desktop, ["desktop_inspect"], [], False, False,
             "work", "ask", "selected", "Use Ask and choose the current live window in Chat. Saving this agent supplies no window grant; screenshots require verified image reading."),
     ]
     return [AgentSetupTemplate(id=slug, name=name, role=role,
-        configuration=SetupConfiguration(instructions=role + " Preserve unrelated work and report only observed evidence.",
+        configuration=SetupConfiguration(instructions=instructions,
             presented_tools=tools, connection_ids=[], helper_agent_ids=[], memory_entry_ids=[],
             skill_entry_ids=[installed[str((PACK_ROOT / skill).resolve())] for skill in skills
                 if str((PACK_ROOT / skill).resolve()) in installed], protected_instruction_entry_ids=[],
             inherit_deployment_settings=True, review=ReviewConfiguration(enabled=False),
-            requires_project=slug in {"guarded-project-builder", "trusted-project-builder", "read-only-reviewer"},
-            requires_host_shell=slug in {"guarded-project-builder", "trusted-project-builder"},
+            requires_project=requires_project, requires_host_shell=requires_shell,
             input_policy=AgentInputPolicy(tool_loading="when_needed", pinned_tools=pins)),
         recommended_skills=skills, suggested_chat_mode=mode, suggested_chat_access=access,
         suggested_desktop_access=desktop_access, note=note)
-        for slug, name, role, tools, pins, skills, mode, access, desktop_access, note in specs]
+        for slug, name, role, instructions, tools, pins, skills, requires_project, requires_shell, mode, access, desktop_access, note in specs]

@@ -13,12 +13,9 @@ from workbench_backend.agents.effective_setup import resolve_effective_setup
 from workbench_backend.agents.execution_policy import PLAN_INSTRUCTIONS, require_setup_capabilities
 from workbench_backend.agents.harness_backend import canonical_root
 from workbench_backend.agents.harness_presentation import (
-    apply_automatic_read_paths,
-    apply_disclosure_and_plan_filter,
-    apply_filesystem_shell_gates,
+    gate_presented_names,
     load_connection_snapshots,
     resolve_capture_routes,
-    resolve_catalogue_and_retrieval,
     validate_required_presentation,
 )
 from workbench_backend.agents.helpers import (
@@ -58,7 +55,9 @@ from workbench_backend.agents.setup_service import (
     configuration_from_request,
 )
 from workbench_backend.agents.structured import response_format_for_run
-from workbench_backend.agents.tool_disclosure import deferred_tools, discovery_context
+from workbench_backend.agents.tool_disclosure import (
+    append_selected_tools_index, deferred_tools, discovery_context,
+)
 from workbench_backend.agents.tools import (
     enabled_for_project,
     tools_for_names,
@@ -258,21 +257,13 @@ def _resolve_admitted_presentation(service, admitted, execution_snapshot):
         filesystem_blocked,
         shell_blocked,
         retrieval_requested,
-        recorded,
         embedding_deployment,
         retrieval_documents,
         retrieval_presented,
-    ) = resolve_catalogue_and_retrieval(
-        service, request, project_path, knowledge_plan, capture_routes, external_names,
-    )
-    presented = apply_filesystem_shell_gates(
-        input_policy, presented, filesystem_blocked, shell_blocked,
-    )
-    presented, framework_read_paths = apply_automatic_read_paths(
-        request, knowledge_plan, presented, retrieval_presented, capture_routes, recorded,
-    )
-    presented = apply_disclosure_and_plan_filter(
-        request, input_policy, helpers, knowledge_plan, presented, connection_snapshots,
+        framework_read_paths,
+    ) = gate_presented_names(
+        service, request, input_policy, helpers, project_path, knowledge_plan,
+        capture_routes, external_names, connection_snapshots,
     )
     required_tools = validate_required_presentation(
         service, request, input_policy, knowledge_plan, project_path,
@@ -466,6 +457,7 @@ def _compose_admitted_setup(service, admitted, execution_snapshot):
     selected_reference_context = reference_context(knowledge_plan)
     if selected_reference_context and selected_reference_context not in setup.system_prompt:
         setup.system_prompt += "\n\n" + selected_reference_context
+    setup.system_prompt = append_selected_tools_index(setup.system_prompt, presented, input_policy)
     guidance = discovery_context(SimpleNamespace(input_policy=input_policy, presented_tools=presented,
         work_mode=request.work_mode, framework_read_paths=framework_read_paths, connection_snapshots=connection_snapshots))
     if guidance and guidance not in setup.system_prompt:
