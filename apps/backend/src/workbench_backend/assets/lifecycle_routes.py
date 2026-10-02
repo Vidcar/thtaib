@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import logging
-
 from fastapi import APIRouter, HTTPException, Request
 from workbench_backend.state.checkpointer import submit_checkpoint_task
 
@@ -15,7 +13,6 @@ from workbench_backend.assets.lifecycle import (
 )
 
 router = APIRouter()
-log = logging.getLogger(__name__)
 
 
 def get_lifecycle(request: Request) -> AssetLifecycleService:
@@ -66,6 +63,10 @@ def delete_conversation(
                 # A failed stop cannot leave a deleted chat's authenticated
                 # browser running without its owner. Confirm before deletion.
                 submit_checkpoint_task(manager.paths.checkpoints_db, browser.delete_chat(thread_id)).result(timeout=30)
+            preview_owner = getattr(request.app.state, "preview", None)
+            if thread_id and preview_owner is not None and not preview_owner.stop(thread_id):
+                raise HTTPException(status_code=409, detail={"code": "preview_stop_unconfirmed",
+                    "message": "The preview stop is unconfirmed. Retry Stop in this chat before deleting it."})
             result = get_lifecycle(request).delete_conversation(
                 conversation_id,
                 include_diagnostics=body.include_diagnostics,
@@ -79,7 +80,4 @@ def delete_conversation(
         desktop = getattr(request.app.state, "desktop_automation", None)
         if desktop is not None:
             desktop.clear_scope(thread_id)
-        preview = getattr(request.app.state, "preview", None)
-        if preview is not None and not preview.stop(thread_id):
-            log.warning("Conversation %s was deleted with an unconfirmed preview state", conversation_id)
     return result

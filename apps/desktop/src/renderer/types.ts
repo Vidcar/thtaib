@@ -205,6 +205,7 @@ export interface Deployment {
   bundle_id: string | null;
   profile_id?: string | null;
   endpoint: string | null;
+  router_preset_id?: string | null;
   applied_startup: Record<string, unknown>;
   requested_startup?: Record<string, unknown>;
   startup_overrides?: Record<string, unknown>;

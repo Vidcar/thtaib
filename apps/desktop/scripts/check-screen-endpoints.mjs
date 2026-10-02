@@ -20,7 +20,7 @@ let deployments = [];
 let failManaged = false;
 const profile = { id: "config", bundle_id: "model", display_name: "Default", revision: 1, bags: { startup: bag({ ctx_size: 8192 }), per_request: bag({}), agent: bag({}) } };
 const bundle = { id: "model", display_name: "Example", source: { kind: "local" }, default_configuration_id: "config", disk_matches: true, files: [], companions: [], status: "ready" };
-const running = { id: "running-1", bundle_id: "model", profile_id: "config", display_name: "Example", scope: "managed", status: "running", health: { healthy: true }, server_props: { n_ctx: 8192 }, applied_startup: { ctx_size: 8192 }, settings: profile.bags, updated_at: "current", endpoint: "http://127.0.0.1:8080" };
+const running = { id: "running-1", bundle_id: "model", profile_id: "config", display_name: "Example", scope: "managed", status: "running", health: { healthy: true }, server_props: { n_ctx: 8192 }, applied_startup: { ctx_size: 8192 }, settings: profile.bags, updated_at: "current", endpoint: "http://127.0.0.1:8080", resource_usage: { available: true, rss_bytes: 64 * 1024 * 1024 } };
 const stopped = { ...running, id: "stopped-1", status: "stopped", health: null, server_props: null, updated_at: "earlier" };
 deployments = [running, stopped];
 
@@ -68,6 +68,20 @@ try {
     await tick();
   });
   assert.ok(button(models, "Load"), "a clean saved setup offers Load");
+  const modelsProps = { selectedBundleId: "model", initialBundles: [bundle], initialProfiles: [profile] };
+  const loadedRow = () => models.root.findAllByProps({ className: "running-model" }).find(node => text(node).includes("On this computer"));
+  assert.match(text(loadedRow()), /64\.0 MB RAM/, "a direct owned child reports its measured RAM");
+  const refreshModelObservation = async observed => {
+    deployments = [observed, stopped];
+    await act(async () => { models.update(React.createElement(DeploymentsPanel, { ...modelsProps, active: false })); await tick(); });
+    await act(async () => { models.update(React.createElement(DeploymentsPanel, { ...modelsProps, active: true })); await tick(); });
+  };
+  await refreshModelObservation({ ...running, router_preset_id: "running-1", resource_usage: { available: true, rss_bytes: 218 * 1024 * 1024 } });
+  assert.match(text(loadedRow()), /RAM unavailable/, "a routed model never displays shared parent RSS as its RAM, including older saved observations");
+  assert.doesNotMatch(text(loadedRow()), /218\.0 MB RAM/);
+  await refreshModelObservation({ ...running, resource_usage: { available: false, reason: "Measurement unavailable" } });
+  assert.match(text(loadedRow()), /RAM unavailable/, "an unavailable direct-process observation stays explicit");
+  await refreshModelObservation(running);
   assert.ok(button(models, "Reload saved setup"), "a managed record offers Reload in loaded-model details");
   assert.equal(button(models, "Load").props.title.includes("saved setup"), true);
   const beforeSave = managedCalls().length;

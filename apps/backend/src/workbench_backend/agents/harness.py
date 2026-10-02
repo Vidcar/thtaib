@@ -700,7 +700,7 @@ class HarnessService:
                     code=code,
                     status_code=400,
                 ) from exc
-            from workbench_backend.state.preferences import PreferenceStore, chat_confirmation_thread
+            from workbench_backend.state.preferences import HOST_COMMAND_ACTIONS, PreferenceStore, chat_confirmation_thread
             grants = PreferenceStore(self.store)
             for action, decision in zip(pending.action_requests, request.decisions, strict=True):
                 if decision.type != "approve":
@@ -711,7 +711,7 @@ class HarnessService:
                         code="interrupt_tool_unavailable",
                         status_code=409,
                     )
-                if action.name == "execute" and chat_confirmation_thread(run):
+                if action.name in HOST_COMMAND_ACTIONS and chat_confirmation_thread(run):
                     grants.confirm_host_shell(run.thread_id)
                 # An excluded file is one edit. Session and Always allow do not widen the grant.
                 if decision.scope != "once" and not grants.excluded_file_edit(run, action.name, action.args):
@@ -1228,6 +1228,26 @@ class HarnessService:
                 mutation()
             self._persist_and_notify(run)
 
+    def _record_managed_command_outcome(self, control, run: AgentRun, outcome: ToolOutcome) -> None:
+        def publish():
+            with self._lock:
+                if run is not control.root:
+                    # A helper can finish before its job times out. Preserve
+                    # the source evidence even when that helper is terminal.
+                    run.updated_at = utc_now()
+                    run.failure = failure_for_run(run)
+                    if run.status is AgentRunStatus.completed and run.failure is not None and run.failure.category == "uncertain_effects":
+                        run.status, run.stop_reason = AgentRunStatus.failed, "effects_unconfirmed"
+                        run.error = run.error or "An owned job was interrupted and its changes may be partial. Inspect effects before continuing."
+                        for activity in control.root.child_runs:
+                            if activity.run_id == run.id:
+                                activity.status, activity.error = "failed", run.error
+                    self.store.put_execution_runs([run, control.root])
+                    self._persist_and_notify(control.root, persisted=True)
+                else:
+                    control.publish()
+        control.record_tool_outcome(run, outcome, publish=publish)
+
     def _finish(self, run: AgentRun, status: AgentRunStatus, stop_reason: str) -> None:
         commands_settled = True
         if self.managed_commands is not None and run.status not in TERMINAL_RUN_LIFECYCLE_STATUSES:
@@ -1279,6 +1299,13 @@ class HarnessService:
                 cancel = self._cancels.get(run.id)
                 if commands_settled and cancel is not None and cancel.is_set() and status is not AgentRunStatus.cancelled:
                     status, stop_reason = AgentRunStatus.cancelled, "cancelled"
+            # A managed job may time out during the final model response, after
+            # the graph's last dispatch check. Keep the terminal result truthful.
+            if status is AgentRunStatus.completed and any(item.name == "start_command"
+                    and item.outcome == "uncertain" and not item.evidence.get("acknowledged_at")
+                    for item in run.tool_outcomes.values()):
+                run.error = run.error or "An owned job was interrupted and its changes may be partial. Inspect effects before continuing."
+                status, stop_reason = AgentRunStatus.failed, "effects_unconfirmed"
             self._commit_terminal_run(run, status, stop_reason)
 
     @staticmethod
@@ -1858,18 +1885,27 @@ class HarnessService:
                 if run.finalization_phase == "saving_changes" and run.settled_status is not None:
                     settled.append(self._runs.setdefault(run.id, run))
                     continue
-                if (
+                resumable_interrupt = (
                     run.status is not AgentRunStatus.cancel_requested
                     and run.pending_interrupt is not None
                     and self._has_resume_checkpoint(run)
-                ):
+                )
+                lost_running_job = any(
+                    item.name == "start_command" and item.outcome == "running"
+                    and item.call_id == "managed-command:" + str(item.evidence.get("command_id", ""))
+                    for item in run.tool_outcomes.values()
+                )
+                if resumable_interrupt and not lost_running_job:
                     live = self._runs.setdefault(run.id, run)
                     self._cancels.setdefault(run.id, threading.Event())
                     self._decision_ready.setdefault(run.id, threading.Event())
                     self._pending_decisions.setdefault(run.id, None)
                     self._persist_and_notify(live)
                     continue
-                self._mark_orphaned_run(run)
+                # A valid approval checkpoint does not restore process ownership.
+                # Stop this run's lifecycle so its lost job can use the existing
+                # inspect/acknowledge recovery before any resumed dispatch.
+                self._mark_orphaned_run(run, missing_checkpoint=run.pending_interrupt is not None and not resumable_interrupt)
             self._startup_reconciled = True
         for run, status, reason in retries:
             try:
@@ -1886,12 +1922,13 @@ class HarnessService:
                     self._startup_reconciled = False
                 raise
 
-    def _mark_orphaned_run(self, run: AgentRun) -> None:
+    def _mark_orphaned_run(self, run: AgentRun, *, missing_checkpoint: bool | None = None) -> None:
         with self._lock:
             live = self._runs.setdefault(run.id, run)
             if not is_run_lifecycle_live(live.status):
                 return
-            missing_checkpoint = live.pending_interrupt is not None
+            if missing_checkpoint is None:
+                missing_checkpoint = live.pending_interrupt is not None
             cancelling = live.status is AgentRunStatus.cancel_requested
             live.finalization_phase = None
             live.activity_phase = None
@@ -1959,8 +1996,8 @@ class HarnessService:
     def _persist(self, run: AgentRun) -> None:
         self.store.put_execution_run(run)
 
-    def _persist_and_notify(self, run: AgentRun, *, telemetry: bool = False) -> None:
-        if not telemetry:
+    def _persist_and_notify(self, run: AgentRun, *, telemetry: bool = False, persisted: bool = False) -> None:
+        if not telemetry and not persisted:
             self._persist(run)
         if run.parent_run_id:
             # Inline children share the parent's graph thread. Their audit is
@@ -2143,8 +2180,8 @@ def _fallback_interrupt_id(run: AgentRun) -> str:
 
 def _with_shell_folder(run: AgentRun, pending: PendingInterrupt) -> PendingInterrupt:
     """The card shows the resolved folder. A model-supplied path is not the grant."""
-    from workbench_backend.state.preferences import resolved_starting_folder
-    if not any(action.name == "execute" for action in pending.action_requests):
+    from workbench_backend.state.preferences import HOST_COMMAND_ACTIONS, resolved_starting_folder
+    if not any(action.name in HOST_COMMAND_ACTIONS for action in pending.action_requests):
         return pending
     try:
         folder = resolved_starting_folder(run)
@@ -2152,7 +2189,7 @@ def _with_shell_folder(run: AgentRun, pending: PendingInterrupt) -> PendingInter
         return pending
     actions = []
     for action in pending.action_requests:
-        if action.name != "execute":
+        if action.name not in HOST_COMMAND_ACTIONS:
             actions.append(action)
             continue
         args = dict(action.args)

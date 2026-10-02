@@ -118,6 +118,15 @@ try {
     await respond(take("second", "POST", "/reset"), { state: "closed" });
     assert.equal(button("Preview page").props.disabled, false, "lost ownership has an explicit recovery before starting another preview");
     await poll();
+    await respond(take("second"), { state: "lost", stop_pending: true, error: "Preview stop unconfirmed" });
+    assert.match(view(), /Stop unconfirmed/);
+    assert.ok(button("Stop"), "an unconfirmed stop retains a retry through its owned identity");
+    assert.equal(button("Clear lost preview"), undefined, "a live owned process cannot be cleared as historical lost state");
+    assert.equal(button("Preview page").props.disabled, true, "a new launch is blocked until owned cleanup is confirmed");
+    await act(async () => button("Stop").props.onClick());
+    await respond(take("second", "DELETE"), { state: "closed", stop_pending: false });
+    assert.equal(button("Preview page").props.disabled, false, "successful cleanup restores ordinary preview controls");
+    await poll();
     await respond(take("second"), { state: "active", url: "http://remote.invalid/" });
     assert.equal(renderer.root.findAllByType("a").length, 0, "the preview control never opens a non-loopback destination");
     assert.ok(button("Stop"), "owned processes remain stoppable even when no safe URL is available");

@@ -8,10 +8,13 @@ from types import SimpleNamespace
 from typing import ClassVar
 import unittest
 
+from deepagents.backends import StateBackend
+from deepagents.middleware.subagents import SubAgentMiddleware
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain.tools import ToolRuntime
 from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.runnables import RunnableLambda
 from langchain_core.tools import StructuredTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.checkpoint.memory import InMemorySaver
@@ -31,9 +34,12 @@ from tests.scripted_model import RECEIVED_PROMPTS, ScriptedChatModel, reset_rece
 
 class SchemaRecordingModel(ScriptedChatModel):
     offered: ClassVar[list[set[str]]] = []
+    schemas: ClassVar[list[list[dict]]] = []
 
     def bind_tools(self, tools, **kwargs):
-        type(self).offered.append({convert_to_openai_tool(item)["function"]["name"] for item in tools})
+        schemas = [convert_to_openai_tool(item) for item in tools]
+        type(self).schemas.append(schemas)
+        type(self).offered.append({item["function"]["name"] for item in schemas})
         return super().bind_tools(tools, **kwargs)
 
 
@@ -69,6 +75,35 @@ class _Loader:
 class NativeToolDisclosureTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         SchemaRecordingModel.offered.clear()
+        SchemaRecordingModel.schemas.clear()
+
+    async def test_native_helper_identities_and_roles_survive_both_disclosure_modes(self):
+        helpers = [
+            {"name": "agent_researcher_exact_id", "description": "Evidence researcher: Browse official sources and cite verified evidence.",
+             "runnable": RunnableLambda(lambda state: state)},
+            {"name": "agent_reviewer_exact_id", "description": "Read-only reviewer: Inspect project code without browsing or making changes.",
+             "runnable": RunnableLambda(lambda state: state)},
+        ]
+        for loading in ("when_needed", "always"):
+            with self.subTest(tool_loading=loading):
+                SchemaRecordingModel.schemas.clear()
+                native = SubAgentMiddleware(backend=StateBackend(), subagents=helpers,
+                    task_description="Delegate a self-contained task to a selected helper.\n{available_agents}")
+                original = convert_to_openai_tool(native.tools[0])["function"]
+                disclosure = ToolDisclosureMiddleware(run_for(["find_tools", "task"],
+                    policy=AgentInputPolicy(tool_loading=loading, pinned_tools=[])))
+                script = ([call("find_tools", {"query": "task"})] if loading == "when_needed" else [])
+                graph = create_agent(SchemaRecordingModel([*script, AIMessage(content="done")]),
+                    middleware=[native, disclosure], checkpointer=InMemorySaver())
+                await graph.ainvoke({"messages": [{"role": "user", "content": "Choose the helper suited to this task."}]},
+                    {"configurable": {"thread_id": "helper-advertisement-" + loading}})
+                submitted = next(item["function"] for item in SchemaRecordingModel.schemas[-1]
+                    if item["function"]["name"] == "task")
+                for helper in helpers:
+                    self.assertIn(helper["name"], submitted["description"])
+                    self.assertIn(helper["description"], submitted["description"])
+                self.assertEqual(submitted["description"], original["description"])
+                self.assertEqual(submitted["parameters"], original["parameters"])
 
     async def test_bounded_discovery_native_dynamic_runtime_and_next_turn_reset(self):
         effects = []

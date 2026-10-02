@@ -250,7 +250,8 @@ def _assemble_compiled_tools(service, parts, run, *, inspection_only, external_t
             if tool.name in run.presented_tools)
     commands = getattr(service, "managed_commands", None)
     if commands is not None:
-        tools.extend(tool for tool in commands.tools_for_run(run, cancel_requested=cancel_requested)
+        tools.extend(tool for tool in commands.tools_for_run(run, cancel_requested=cancel_requested,
+            record_outcome=lambda outcome: service._record_managed_command_outcome(parts.execution_control, run, outcome))
             if tool.name in run.presented_tools)
     if not inspection_only:
         if service.preview is not None:

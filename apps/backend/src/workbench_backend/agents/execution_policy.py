@@ -247,9 +247,15 @@ class ExecutionControl:
         # All owned graphs execute on the shared checkpoint loop.
         return self._model_locks.setdefault(deployment_id, asyncio.Lock())
 
-    def record_tool_outcome(self, run, outcome) -> None:
+    @contextmanager
+    def synchronized_update(self):
+        """Acquire authority before an owner's publication lock, including settlement."""
+        with self._lock:
+            yield
+
+    def record_tool_outcome(self, run, outcome, *, publish=None) -> None:
         with self._lock:
             run.tool_outcomes[outcome.call_id] = outcome
             if run is not self.root:
                 self.root.tool_outcomes[f"{run.id}:{outcome.call_id}"] = outcome
-            self.publish()
+            (publish or self.publish)()

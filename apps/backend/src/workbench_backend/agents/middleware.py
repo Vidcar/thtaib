@@ -19,6 +19,11 @@ import time
 from contextlib import asynccontextmanager, contextmanager
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
+from deepagents.middleware.summarization import (
+    SummarizationState,
+    SUMMARIZATION_EVENT_KEY,
+    SUMMARIZATION_SESSION_ID_KEY,
+)
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.errors import GraphInterrupt
@@ -89,6 +94,19 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
     Tool-selection may narrow *presentation* for a call. The enabled catalogue
     on the run is never rewritten here.
     """
+
+    state_schema = SummarizationState
+
+    def before_agent(self, state, runtime):
+        if self.run.rewind_clear_messages:
+            # A first-turn rewind resumes this thread's latest checkpoint.
+            # Removing its messages must also reset native summary state;
+            # these private keys are deliberately filtered from graph inputs.
+            return {SUMMARIZATION_EVENT_KEY: None, SUMMARIZATION_SESSION_ID_KEY: None}
+        return None
+
+    async def abefore_agent(self, state, runtime):
+        return self.before_agent(state, runtime)
 
     def __init__(
         self,

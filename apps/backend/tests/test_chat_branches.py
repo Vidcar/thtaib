@@ -7,10 +7,14 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from langchain_core.messages import AIMessage
+from deepagents.middleware.summarization import SummarizationMiddleware, SUMMARIZATION_EVENT_KEY
 
 from tests.scripted_model import (
     ScriptedChatModel,
+    RECEIVED_PROMPTS,
+    reset_received_prompts,
     set_generate_hold,
     wait_for_generate_hold,
 )
@@ -281,6 +285,55 @@ class ChatBranchTests(unittest.TestCase):
             self.assertNotIn("first answer", checkpoint_text)
             self.assertNotIn("retried answer", checkpoint_text)
             self.assertIn("cleared again", checkpoint_text)
+
+    def test_first_turn_edit_after_native_compaction_uses_only_edited_request(self) -> None:
+        self._rewind_first_turn_after_native_compaction("edit")
+
+    def test_first_turn_retry_after_native_compaction_uses_only_original_request(self) -> None:
+        self._rewind_first_turn_after_native_compaction("retry")
+
+    def _rewind_first_turn_after_native_compaction(self, mode: str) -> None:
+        from workbench_backend.state.checkpointer import conversation_state
+
+        old_summary = "DISCARDED-LATER-INSTRUCTION: continue the old task"
+        self.install_model([
+            AIMessage(content="first answer"),
+            AIMessage(content=old_summary),
+            AIMessage(content="second answer"),
+            AIMessage(content="rewound answer"),
+        ])
+        reset_received_prompts()
+        conversation = self.create_conversation()
+        # Exercise the installed native middleware and the real application
+        # checkpoint path. Only its threshold changes to keep the fixture short.
+        def short_compaction(**kwargs):
+            return SummarizationMiddleware(**kwargs, trigger=("messages", 3), keep=("messages", 1))
+
+        with patch("workbench_backend.agents.harness.create_summarization_middleware", side_effect=short_compaction):
+            first = self.start_turn(conversation["id"], "ORIGINAL-FIRST-REQUEST")
+            self.assertIsNone(first["pre_run_checkpoint_id"])
+            self.start_turn(conversation["id"], "LATER-REQUEST-TO-DISCARD")
+            state = conversation_state(self.app.state.manager.paths.checkpoints_db, conversation["thread_id"])
+            event = state.get(SUMMARIZATION_EVENT_KEY)
+            self.assertIsNotNone(event, "fixture must actually compact through the native engine")
+            self.assertGreater(event["cutoff_index"], 1)
+            self.assertIn(old_summary, str(event["summary_message"]))
+            reset_received_prompts()
+            response = self.rewind(conversation["id"], first["id"], mode, "NEW-EDITED-REQUEST")
+            self.assertEqual(response.status_code, 200, response.text)
+            finished = wait_for_run(self.client, response.json()["current_run_id"])
+            self.assertEqual(finished["status"], "completed", finished.get("error"))
+
+        self.assertEqual(len(RECEIVED_PROMPTS), 1, "rewind should make one ordinary model request")
+        expected = "NEW-EDITED-REQUEST" if mode == "edit" else "ORIGINAL-FIRST-REQUEST"
+        self.assertIn(expected, RECEIVED_PROMPTS[0])
+        self.assertNotIn(old_summary, RECEIVED_PROMPTS[0])
+        self.assertNotIn("LATER-REQUEST-TO-DISCARD", RECEIVED_PROMPTS[0])
+        body = self.client.get(f"/v1/chat/conversations/{conversation['id']}").json()
+        self.assertEqual(body["thread_id"], conversation["thread_id"])
+        self.assertNotIn("LATER-REQUEST-TO-DISCARD", str(body["transcript"]))
+        retained = conversation_state(self.app.state.manager.paths.checkpoints_db, conversation["thread_id"])
+        self.assertIsNone(retained.get(SUMMARIZATION_EVENT_KEY))
 
     def interaction_text(self, conversation_id: str) -> str:
         response = self.client.get(f"/v1/agent-interaction/threads/{conversation_id}/state")

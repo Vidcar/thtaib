@@ -191,48 +191,50 @@ class ApplicationStore(ChatStateStoreMixin, InteractionStoreMixin, SetupStoreMix
         return self._put_run_record(run)
 
     def _put_run_record(self, run: AgentRun) -> AgentRun:
-        payload = run.model_dump_json(exclude={"model_requests"})
-        # Linkage and Chat completion belong to one run write. Roll back
-        # failures before another store operation can commit a partial update.
+        self.put_execution_runs([run])
+        return run
+
+    def put_execution_runs(self, runs: list[AgentRun]) -> list[AgentRun]:
+        """Commit related run evidence and linkage together, without capture copies."""
+        if any(not isinstance(run, AgentRun) for run in runs):
+            raise TypeError("Only complete AgentRun records can be persisted.")
+        records = [(run, run.model_dump_json(exclude={"model_requests"})) for run in runs]
+        # Scoped helper outcomes and their root authority cannot half-commit.
+        # Linkage and Chat completion retain the same transaction owner.
         with self._lock, self._conn:
             self._conn.execute("BEGIN IMMEDIATE")
-            self._conn.execute(
-                """
-                INSERT INTO runs(
-                    id, payload, thread_id, profile_id, deployment_id, workspace_id,
-                    project_path, parent_run_id, source_surface, status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    payload=excluded.payload,
-                    thread_id=excluded.thread_id,
-                    profile_id=excluded.profile_id,
-                    deployment_id=excluded.deployment_id,
-                    workspace_id=excluded.workspace_id,
-                    project_path=excluded.project_path,
-                    parent_run_id=excluded.parent_run_id,
-                    source_surface=excluded.source_surface,
-                    status=excluded.status,
-                    updated_at=excluded.updated_at
-                """,
-                (
-                    run.id,
-                    payload,
-                    run.thread_id,
-                    run.profile_id,
-                    run.deployment_id,
-                    run.workspace_id,
-                    run.project_path,
-                    run.parent_run_id,
-                    run.source_surface,
-                    run.status.value,
-                    run.created_at,
-                    run.updated_at,
-                ),
+            for run, payload in records:
+                self._write_run_record_locked(run, payload)
+        return runs
+
+    def _write_run_record_locked(self, run: AgentRun, payload: str) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO runs(
+                id, payload, thread_id, profile_id, deployment_id, workspace_id,
+                project_path, parent_run_id, source_surface, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                payload=excluded.payload,
+                thread_id=excluded.thread_id,
+                profile_id=excluded.profile_id,
+                deployment_id=excluded.deployment_id,
+                workspace_id=excluded.workspace_id,
+                project_path=excluded.project_path,
+                parent_run_id=excluded.parent_run_id,
+                source_surface=excluded.source_surface,
+                status=excluded.status,
+                updated_at=excluded.updated_at
+            """,
+            (
+                run.id, payload, run.thread_id, run.profile_id, run.deployment_id,
+                run.workspace_id, run.project_path, run.parent_run_id, run.source_surface,
+                run.status.value, run.created_at, run.updated_at,
             )
-            self._replace_checkpoints_locked(run.id, run.thread_id, run.checkpoint_ids)
-            self._replace_files_locked(run.id, run.related_files)
-            self._reconcile_chat_completion_locked(run)
-        return run
+        )
+        self._replace_checkpoints_locked(run.id, run.thread_id, run.checkpoint_ids)
+        self._replace_files_locked(run.id, run.related_files)
+        self._reconcile_chat_completion_locked(run)
 
     def run_status(self, run_id: str | None) -> str | None:
         if not run_id:

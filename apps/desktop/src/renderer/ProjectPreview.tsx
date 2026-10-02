@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { request } from "./api";
 import { errorMessage } from "./errors";
 
-interface Preview { state: "active" | "closed" | "lost"; url?: string | null; entry_path?: string | null; error?: string | null }
+interface Preview { state: "active" | "closed" | "lost"; stop_pending?: boolean; url?: string | null; entry_path?: string | null; error?: string | null }
 interface PreviewProps { threadId?: string | null; selectedPath: string; enabled: boolean; revision?: string }
 
 export function ProjectPreview(props: PreviewProps) {
@@ -58,10 +58,10 @@ function ThreadPreview({ threadId, selectedPath, enabled, revision }: PreviewPro
     }
   }
   return <section className="project-preview" aria-label="Project preview"><div className="project-preview-actions">
-    <strong>Preview</strong><span className="hint">{state === "active" ? "Running" : state === "lost" ? "Lost" : state === "closed" ? "Stopped" : "Checking…"}</span>
+    <strong>Preview</strong><span className="hint">{preview?.stop_pending ? "Stop unconfirmed" : state === "active" ? "Running" : state === "lost" ? "Lost" : state === "closed" ? "Stopped" : "Checking…"}</span>
     {canOpen ? <a href={preview!.url!} target="_blank" rel="noreferrer">Open</a> : null}
-    {state === "active" ? <button type="button" disabled={busy} onClick={() => void act("stop")}>Stop</button> : null}
-    {state === "lost" ? <button type="button" disabled={busy} title="Clear the lost status without stopping any unverified process" onClick={() => void act("reset")}>Clear lost preview</button> : null}
+    {state === "active" || preview?.stop_pending ? <button type="button" disabled={busy} onClick={() => void act("stop")}>Stop</button> : null}
+    {state === "lost" && !preview?.stop_pending ? <button type="button" disabled={busy} title="Clear the lost status without stopping any unverified process" onClick={() => void act("reset")}>Clear lost preview</button> : null}
     {html ? <button type="button" disabled={!enabled || busy || state === "lost"} title={enabled ? "Open this HTML page through a local server" : "Enable project preview in Browser tools first"} onClick={() => void act("start")}>Preview page</button> : null}
     </div>{preview?.entry_path ? <small className="hint">{preview.entry_path}</small> : null}
     {error || preview?.error ? <p className="tool-call-error" role="status">{error || preview?.error}</p> : null}

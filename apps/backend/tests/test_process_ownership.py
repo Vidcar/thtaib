@@ -79,7 +79,7 @@ class HealthyProbe:
     def health(self, endpoint: str) -> HealthReport:
         return HealthReport(healthy=True, endpoint=endpoint, checked=utc_now(), detail="fixture")
 
-    def smoke(self, endpoint: str) -> tuple[bool, str]:
+    def smoke(self, endpoint: str, *, model: str, autoload: bool = True) -> tuple[bool, str]:
         return True, "fixture"
 
 
