@@ -44,4 +44,4 @@
 
 ## 6. Delivery check
 
-- [ ] 6.1 Run the affected backend tests and the desktop build through the repository verifier for the scopes this change touches, and record the command and result. Do not treat that run as live desktop acceptance.
+- [x] 6.1 Run the affected backend tests and the desktop build through the repository verifier for the scopes this change touches, and record the command and result. Do not treat that run as live desktop acceptance.
