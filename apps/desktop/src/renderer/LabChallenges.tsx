@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Help } from "./ModelControls";
 import { LabAnswer, labDate } from "./LabResults";
 import { labIsActive, labStatus } from "./labPresentation";
 import type { LabChallenge, LabChallengeWrite, LabRun } from "./labTypes";
@@ -13,15 +14,15 @@ export function LabChallenges({ challenges, runs, busy, canRun, onRun, onSave, o
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState<LabChallengeWrite>({ ...emptyChallenge });
   function edit(challenge?: LabChallenge) { setEditing(challenge?.id ?? "new"); setDraft(challenge ? { name: challenge.name, task: challenge.task, required_text: challenge.required_text, required_tool: challenge.required_tool } : { ...emptyChallenge }); }
-  return <div className="lab-challenges-view"><div className="section-heading"><h3>Challenges</h3><button type="button" disabled={busy} onClick={() => edit()}>Add challenge</button></div>
+  return <div className="lab-challenges-view"><div className="section-heading"><h3>Challenges</h3><Help label="Challenges">Add another task and an exact check. Each result keeps the task and check used when it ran.</Help><button type="button" disabled={busy} onClick={() => edit()}>Add challenge</button></div>
     {editing ? <form className="card lab-challenge-editor" onSubmit={event => { event.preventDefault(); void onSave(draft, editing === "new" ? undefined : editing).then(saved => { if (saved) setEditing(null); }); }}>
-      <h3>{editing === "new" ? "Add challenge" : "Edit challenge"}</h3><label>Name<input aria-label="Challenge name" value={draft.name} maxLength={160} autoFocus disabled={busy} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label>
+      <h3>{editing === "new" ? "Add challenge" : "Edit challenge"}<Help label="Challenge check">Require answer text, a tool, or both. Only Echo and Clock are available.</Help></h3><label>Name<input aria-label="Challenge name" value={draft.name} maxLength={160} autoFocus disabled={busy} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label>
       <label>Task<textarea aria-label="Challenge task" rows={3} value={draft.task} maxLength={16000} disabled={busy} onChange={event => setDraft({ ...draft, task: event.target.value })} /></label>
       <label>Required answer text<input aria-label="Required answer text" value={draft.required_text} maxLength={4000} disabled={busy} onChange={event => setDraft({ ...draft, required_text: event.target.value })} /></label>
       <label>Required tool<select aria-label="Required tool" value={draft.required_tool ?? ""} disabled={busy} onChange={event => setDraft({ ...draft, required_tool: event.target.value === "echo" || event.target.value === "time_now" ? event.target.value : null })}><option value="">None</option><option value="echo">Echo</option><option value="time_now">Clock</option></select></label>
-      <p className="hint">Require answer text, a tool, or both. Only Echo and Clock are available.</p><div className="actions"><button type="submit" className="primary-button" disabled={busy || !draft.name.trim() || !draft.task.trim() || !draft.required_text.trim() && !draft.required_tool}>Save challenge</button><button type="button" disabled={busy} onClick={() => setEditing(null)}>Cancel</button></div>
+      <div className="actions"><button type="submit" className="primary-button" disabled={busy || !draft.name.trim() || !draft.task.trim() || !draft.required_text.trim() && !draft.required_tool}>Save challenge</button><button type="button" disabled={busy} onClick={() => setEditing(null)}>Cancel</button></div>
     </form> : null}
-    {!challenges.length ? <div className="empty-state"><h3>No challenges</h3><p>Add a task and its exact check to create a challenge.</p></div> : <div className="lab-challenge-cards">{challenges.map(challenge => {
+    {!challenges.length ? <div className="empty-state"><h3>No challenges</h3></div> : <div className="lab-challenge-cards">{challenges.map(challenge => {
       const history = runs.filter(run => run.request.challenge_id === challenge.id);
       const latest = history[0];
       const result = latest?.measurements[0];
@@ -34,7 +35,6 @@ export function LabChallenges({ challenges, runs, busy, canRun, onRun, onSave, o
         {history.length > 1 ? <details className="lab-challenge-history"><summary>Earlier results ({history.length - 1})</summary>{history.slice(1).map(run => <ChallengeResult key={run.id} run={run} onDelete={onDeleteRun} />)}</details> : null}
       </article>;
     })}</div>}
-    <p className="hint">Add another task and an exact check. Each result keeps the task and check used when it ran.</p>
     {runs.some(run => !challenges.some(challenge => challenge.id === run.request.challenge_id)) ? <details className="card"><summary>Results from deleted challenges</summary>{runs.filter(run => !challenges.some(challenge => challenge.id === run.request.challenge_id)).map(run => <ChallengeResult key={run.id} run={run} onDelete={onDeleteRun} />)}</details> : null}
   </div>;
 }

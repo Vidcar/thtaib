@@ -7,6 +7,8 @@ import {
 import type { PresentationSettings, PresentationTheme } from "./types";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { CompactSwitch, SegmentedChoice, SettingRow, SettingSection } from "./CompactControls";
+import { EmptyState } from "./EmptyState";
+import { HoverHelp } from "./HoverHelp";
 import { Icon } from "./Icon";
 import { ProjectFileGrantControls } from "./ProjectFileGrantControls";
 import "./packet03Panels.css";
@@ -155,7 +157,7 @@ export function RecoverySettingsPanel({ onPreferencesChanged, children, defaults
   return (
     <section className="packet03-panel settings-surface" aria-label="Recovery and settings">
       <header className="settings-head">
-        <div><h2>Settings</h2><p className="hint">How the Workbench looks, notifies and keeps your work safe on this computer.</p></div>
+        <div className="entity-head"><h2>Settings</h2><HoverHelp title="Settings">Appearance, notifications, defaults, connections, and permissions on this computer.</HoverHelp></div>
         <button type="button" className="quiet-button" disabled={busy || preferencesBusy} onClick={() => void refresh()}>
           <Icon name="refresh" size={14} /> Refresh
         </button>
@@ -184,10 +186,10 @@ export function RecoverySettingsPanel({ onPreferencesChanged, children, defaults
       <div hidden={category !== "Connections"} className="settings-category-content">{connectionsPanel}</div>
 
       <div className="settings-category-content settings-permissions" hidden={category !== "Permissions"}>
-        <SettingSection title="Saved permissions" description="Exact approvals retain their original inputs. Project file grants cover only the listed native operations and paths. Revoke one to be asked again in Ask mode." actions={<span className="badge">{grants.length || "None"}</span>}>
+        <SettingSection title="Saved permissions" description={<>Exact approvals retain their original inputs. Project file grants cover only the listed native operations and paths. Revoke one to be asked again in Ask mode.{grants.length === 0 ? " In Ask mode, choose Allow for this session or Always allow on an action's approval card to save it here. Approve once and Full access do not save permissions." : ""}</>} actions={<span className="badge">{grants.length || "None"}</span>}>
           {category === "Permissions" ? <ProjectFileGrantControls onSaved={async () => { setGrants(await packet03Api.grants()); setMessage("Project file grant saved."); }} /> : null}
           {grants.length === 0 ? (
-            <p className="hint">In Ask mode, choose <strong>Allow for this session</strong> or <strong>Always allow</strong> on an action's approval card to save it here. Approve once and Full access do not save permissions.</p>
+            <EmptyState title="No saved permissions" />
           ) : grants.map((grant) => (
             <SettingRow key={grant.id} inline label={grantLabel(grant)} provenance={<>{grant.kind === "project_files" ? <>{grant.operations?.join(", ")} · Excludes: {grant.excluded_paths?.join(", ") || "None"}</> : argumentSummary(grant.arguments)}{grant.project_path ? <> · Project: {grant.project_path}</> : null}</>}>
               <button type="button" disabled={busy} onClick={() => void revoke(grant.id)}>

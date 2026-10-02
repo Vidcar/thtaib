@@ -40,6 +40,7 @@ try {
   await checkMessageTaskActions(MessageTaskActions);
   await checkChatMeasurements(ChatMeasurements);
   await checkAttentionTargets(AttentionPanel);
+  await checkAttentionEmpty(AttentionPanel);
   await checkBlockedAttentionNavigationPreservesItem(AttentionPanel);
 } finally {
   await vite.close();
@@ -98,7 +99,8 @@ async function checkLibraryScopeNamesAndStaleActions(LibraryPanel) {
 
     await act(async () => renderer.root.findByProps({ "aria-label": "File location" }).props.onChange({ target: { value: "project" } }));
     const beforeTarget = requests.length;
-    assert.match(textOf(renderer.root), /Select a project to see its saved files/);
+    assert.equal(textOf(renderer.root.findByProps({ className: "file-browser-empty" }).findByType("strong")), "Choose a project");
+    assert.doesNotMatch(textOf(renderer.root), /Select a project to see its saved files/);
     assert.equal(renderer.root.findByProps({ "aria-label": "Project" }).findAllByType("option").filter(node => textOf(node) === "Writing project").length, 1, "canonical project paths share one readable option");
     await act(async () => renderer.root.findByProps({ "aria-label": "Project" }).props.onChange({ target: { value: "D:\\ProjectA" } }));
     assert.equal(requests.length, beforeTarget + 1);
@@ -268,6 +270,14 @@ async function checkChatMeasurements(ChatMeasurements) {
     assert.equal(renderer.root.findAllByProps({ className: "hover-help-bubble chat-usage-bubble" }).length, 0);
     await act(async () => trigger.props.onFocus());
     assert.equal(renderer.root.findAllByProps({ className: "hover-help-bubble chat-usage-bubble" }).length, 1, "keyboard focus opens the same context details");
+    await act(async () => renderer.update(React.createElement(ChatMeasurements, { run, onInspect() {} })));
+    const usageTrigger = renderer.root.findByProps({ className: "chat-usage-trigger" });
+    await act(async () => usageTrigger.props.onFocus());
+    const bubble = renderer.root.findByProps({ className: "hover-help-bubble chat-usage-bubble" });
+    const inputs = bubble.findAll((node) => node.type === "button" && textOf(node).trim() === "Inputs");
+    assert.equal(inputs.length, 1, "the open context bubble has one Inputs control");
+    assert.equal(inputs[0].props.title, "Instructions, memories, skills, and files for the next message.");
+    assert.doesNotMatch(textOf(renderer.root), /What the agent sees/);
   } finally {
     if (renderer) await act(async () => renderer.unmount());
     Object.assign(globalThis, originals);
@@ -291,6 +301,26 @@ async function checkAttentionTargets(AttentionPanel) {
     const buttons = renderer.root.findAll(node => node.type === "button" && textOf(node).includes("Open"));
     await act(async () => { await Promise.all(buttons.map((target) => Promise.resolve(target.props.onClick()))); });
     assert.deepEqual(opened, items, "Attention preserves the exact conversation or task target rather than dropping non-Chat identity");
+  } finally {
+    if (renderer) await act(async () => renderer.unmount());
+    globalThis.fetch = originalFetch;
+  }
+}
+
+async function checkAttentionEmpty(AttentionPanel) {
+  const originalFetch = globalThis.fetch;
+  let renderer;
+  globalThis.fetch = async () => jsonResponse([]);
+  try {
+    await act(async () => {
+      renderer = create(React.createElement(AttentionPanel));
+      await tick();
+    });
+    const empty = renderer.root.findAll((node) => node.props?.className === "empty-state");
+    assert.equal(empty.length, 1, "a successful empty attention read has one empty state");
+    assert.equal(textOf(empty[0].findByType("h3")), "Nothing waiting");
+    assert.doesNotMatch(textOf(renderer.root), /You're all caught up\./);
+    assert.equal(renderer.root.findAll((node) => node.type === "p" && textOf(node) === "Loading…").length, 0, "the loading line is not the empty title");
   } finally {
     if (renderer) await act(async () => renderer.unmount());
     globalThis.fetch = originalFetch;

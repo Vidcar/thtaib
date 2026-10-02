@@ -31,11 +31,12 @@ export function ApprovalModeControl(props: {
             aria-label={mode.label}
             aria-checked={props.value === mode.id}
             className={props.value === mode.id ? "is-selected" : ""}
+            title={mode.hint}
             disabled={props.disabled}
             onClick={() => props.onChange(mode.id)}
           >
             <Icon name={mode.id === "full_access" ? "shield" : "attention"} size={16} />
-            <span><strong>{mode.label}</strong><small>{mode.hint}</small></span>
+            <span><strong>{mode.label}</strong></span>
             <Icon name={props.value === mode.id ? "check" : "minus"} size={14} />
           </button>
         ))}

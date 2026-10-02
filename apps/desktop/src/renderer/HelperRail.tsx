@@ -97,7 +97,7 @@ function HelperRailContent({ stream, runs, currentRunId, selectedHelperKey, onSe
   const visibleRuns = streamedRun ? [...runs.filter(run => run.id !== streamedRun.id), streamedRun] : runs;
   const children = helperEntries(visibleRuns, stream.subagents.values(), streamedRun?.id ?? currentRunId);
   const selected = children.find(child => child.key === selectedId);
-  if (!children.length) return <p className="hint">Helpers used in this chat will appear here.</p>;
+  if (!children.length) return <p className="hint">No helpers</p>;
   if (selected) return <div className="helper-rail helper-rail-detail">
     <button type="button" className="quiet-button helper-rail-back" onClick={() => select("")}>← All helpers</button>
     <div className="helper-rail-heading"><strong>{selected.name}</strong><span>{selected.status.replaceAll("_", " ")}</span></div>
@@ -111,6 +111,6 @@ function HelperRailContent({ stream, runs, currentRunId, selectedHelperKey, onSe
 }
 
 export function HelperRail({ runs, currentRunId, threadId, conversationId, selectedHelperKey, onSelectHelper, detailedStreams = false }: { runs: AgentRun[]; currentRunId?: string; threadId: string | null; conversationId: string; selectedHelperKey?: string; onSelectHelper?: (key: string) => void; detailedStreams?: boolean }) {
-  if (!threadId) return <p className="hint">Helpers used in this chat will appear here.</p>;
+  if (!threadId) return <p className="hint" title="Helpers used in this chat will appear here.">No chat</p>;
   return <InteractionStream threadId={threadId}>{stream => <HelperRailContent stream={stream} runs={runs} currentRunId={currentRunId} selectedHelperKey={selectedHelperKey} onSelectHelper={onSelectHelper} conversationId={conversationId} detailedStreams={detailedStreams} />}</InteractionStream>;
 }

@@ -14,7 +14,7 @@ export function CompactDialog(props: { title: string; labelledBy: string; busy?:
     >
       <header>
         <h3 id={props.labelledBy}>{props.title}</h3>
-        <button type="button" className="icon-button" aria-label="Close" disabled={props.busy} onClick={props.onClose}><Icon name="close" /></button>
+        <button type="button" className="icon-button" aria-label="Close" title="Close" disabled={props.busy} onClick={props.onClose}><Icon name="close" /></button>
       </header>
       {props.children}
     </dialog>

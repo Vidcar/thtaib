@@ -63,7 +63,7 @@ export function AppearanceSettings({ theme }: { theme: PresentationTheme }) {
       </SettingSection>
       <section className="setting-section appearance-studio">
         <header className="setting-section-head">
-          <div><h3>All appearance settings</h3><p>Every colour, size and spacing value the Workbench uses.</p></div>
+          <div className="entity-head"><h3>All appearance settings</h3><HoverHelp title="All appearance settings">Every colour, size and spacing value the Workbench uses.</HoverHelp></div>
           <div className="setting-section-actions">
             <button type="button" className="quiet-button appearance-customize" aria-expanded={customize} onClick={() => setCustomize(value => !value)}>{customize ? "Hide advanced controls" : "Customize appearance"}</button>
           </div>

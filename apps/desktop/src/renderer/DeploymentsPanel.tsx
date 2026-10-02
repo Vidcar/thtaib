@@ -11,6 +11,7 @@ import { EmptyState } from "./EmptyState";
 import { Notice } from "./Notice";
 import { SettingsNotes } from "./settingsNotes";
 import { StatusBadge } from "./StatusBadge";
+import { HoverHelp } from "./HoverHelp";
 import { Icon } from "./Icon";
 import { ResponseSettingsEditor } from "./ResponseSettingsEditor";
 import { defaultSettingDisplay, effectiveSettingDisplay, settingValue } from "./effectiveSettings";
@@ -521,7 +522,7 @@ export function DeploymentsPanel({
       {generation[d.id] ? <p role="status">{generation[d.id]}</p> : null}
       <details className="technical-details"><summary>Details &amp; applied settings</summary>
         <dl className="model-facts"><div><dt>Connection</dt><dd>{d.endpoint}</dd></div><div><dt>Deployment ID</dt><dd><code>{d.id}</code></dd></div><div><dt>Context reported by server</dt><dd>{ctx ? `${ctx.toLocaleString()} tokens` : "Not reported"}</dd></div><div><dt>Concurrent requests reported by server</dt><dd>{d.server_props?.total_slots ?? "Not reported"}</dd></div><div><dt>Engine version</dt><dd>{d.server_props?.build_info ?? "Not reported"}</dd></div><div><dt>Settings last reported</dt><dd>{d.server_props?.fetched ? new Date(d.server_props.fetched).toLocaleString() : "Not reported"}</dd></div></dl>
-        <h4>Launch settings</h4><p className="hint">Values sent when this model was started. Automatic choices may be adjusted by the engine.</p>{readout(d.applied_startup)}
+        <h4>Launch settings <HoverHelp title="Launch settings">Values sent when this model was started. Automatic choices may be adjusted by the engine.</HoverHelp></h4>{readout(d.applied_startup)}
         {Object.keys(sampling).length ? <><h4>Engine-reported response defaults</h4>{readout(sampling)}</> : null}
         <SettingsNotes unsupported={d.settings?.startup.unsupported} retired={d.settings?.startup.retired} />
         {d.profile_id ? <><button type="button" disabled={Boolean(busy)} onClick={() => void action(`profile-${d.id}`, async () => { const result = await api.deploymentProfileChanges(d.id); setProfileChanges(previous => ({ ...previous, [d.id]: result })); })}>Compare with saved configuration</button>
@@ -558,7 +559,7 @@ export function DeploymentsPanel({
     {selected && !editorReady ? <p role="status">Loading saved setups…</p> : selected ? <section className="model-setup" aria-label="Selected model">
       <header className="model-refresh-header">
         <div className="model-title-line">
-          <button type="button" className="icon-button models-browse-button" aria-label="Browse models" onClick={onBrowseModels}><Icon name="panel" /></button>
+          <button type="button" className="icon-button models-browse-button" aria-label="Browse models" title="Browse models" onClick={onBrowseModels}><Icon name="panel" /></button>
           {renamingModel ? <input className="model-rename-input" aria-label="Rename model" autoFocus value={modelName} maxLength={160} onChange={event => setModelName(event.target.value)} onKeyDown={event => { if (event.key === "Escape") { renameCancelled.current = true; setRenamingModel(false); } if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); } }} onBlur={() => { setRenamingModel(false); if (!renameCancelled.current && modelName.trim() && modelName.trim() !== selected.display_name) void action("rename-model", async () => { await api.renameModel(selected.id, modelName.trim()); await onBundlesChanged?.(); }); }} /> : <h3 className="selected-model-name" title={selected.display_name}>{selected.display_name}</h3>}
           <button type="button" className="icon-button" aria-label="Rename model" title="Rename model" disabled={Boolean(busy)} onClick={() => { renameCancelled.current = false; setModelName(selected.display_name); setRenamingModel(true); }}><Icon name="edit" size={16} /></button>
           {selected.source.repo_id ? <button type="button" className="icon-button" aria-label="Model card" title="Model card" onClick={() => setCardOpen(true)}><Icon name="knowledge" /></button> : null}
@@ -632,7 +633,7 @@ export function DeploymentsPanel({
         </SettingSection>
       </div></div>
       <footer className="model-refresh-footer"><div className="model-save-state" data-dirty={dirty.current}><Icon name={dirty.current ? "edit" : "check"} /><span><strong>{!profileId ? "Setup not saved" : dirty.current ? "Unsaved edits" : "Setup saved"}</strong><small>{configurationName}</small></span></div><div className="model-footer-actions"><button type="submit" disabled={Boolean(busy) || Boolean(profileId) && !dirty.current}>{busy === "save" ? "Saving…" : "Save"}</button>{selectedActive ? <button type="button" disabled={Boolean(busy)} onClick={() => void action("unload", async () => { await api.stop(selectedActive.id); await refresh(); })}>Unload</button> : null}<button type="button" className="primary-button" title="Load this saved setup. Unsaved edits stay in this editor." disabled={Boolean(busy) || !selectedProfile || !runtimeReady || !selected.disk_matches} onClick={() => void action("load", loadSavedSetup)}>{busy === "load" ? "Loading…" : dirty.current ? "Load saved" : "Load"}</button></div></footer>
-      </form> : <div className="model-empty-setup"><EmptyState title={modelProfiles.length ? "Choose a saved setup" : "Create your first setup"}>A named setup keeps the settings you want to load.<button type="button" onClick={() => { setVariantName(""); setSetupDialog("create"); }}>Create setup</button></EmptyState><details className="models-disclosure"><summary>Files &amp; maintenance <span className="models-show-hide" /></summary>{modelInformation}</details></div>}
-    </section> : <EmptyState title="Choose a model to get started">Select one from your library, or add a new model.</EmptyState>}
+      </form> : <div className="model-empty-setup"><EmptyState title={modelProfiles.length ? "Choose a saved setup" : "No saved setup"}><button type="button" onClick={() => { setVariantName(""); setSetupDialog("create"); }}>Create setup</button></EmptyState><details className="models-disclosure"><summary>Files &amp; maintenance <span className="models-show-hide" /></summary>{modelInformation}</details></div>}
+    </section> : <EmptyState title="No model selected" />}
   </section>;
 }

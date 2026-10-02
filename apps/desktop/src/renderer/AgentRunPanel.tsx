@@ -207,7 +207,7 @@ function AgentRunStreamContent(props: {
           />
         </div>
       ) : (
-        <EmptyState title="Ready for a task">Choose a model and describe what to do.</EmptyState>
+        <EmptyState title="No task yet" />
       )}
     </>
   );
@@ -390,8 +390,8 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled, onNavigate }
         <h3>Run a task</h3>
         <div className="setup-grid">
         <div className="run-configuration-controls"><ChatModelControls deployments={deployments} profiles={profiles} selectedDeploymentId={deploymentId} configuration={configuration} disabled={starting || Boolean(pendingSubmit)} runtimeBusy={Boolean(liveRunId)} onReloaded={refresh} onApply={async next => { const resolved = await workspaceApi.resolveSetup(null, null, next); setConfiguration(next); setDeploymentId(resolved.configuration.deployment_id ?? next.deployment_id ?? (next.model_configuration_id ? "" : deploymentId)); }} /><MenuPopover label="Workflow access" trigger={<><Icon name="shield" size={16} />{approvalModeLabel(approvalMode)}</>}><ApprovalModeControl value={approvalMode} onChange={setApprovalMode} disabled={starting || Boolean(pendingSubmit)} /></MenuPopover></div>
-        <label>
-          Retrieval model (optional)
+        <label title="Optional. None leaves retrieval off.">
+          Retrieval model
           <select
             value={embeddingDeploymentId}
             onChange={(event) => setEmbeddingDeploymentId(event.target.value)}
@@ -417,7 +417,7 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled, onNavigate }
         {projectPath.trim() ? <p className="hint"><Icon name="terminal" size={14} /> Shell commands can access this computer. {approvalMode === "full_access" ? "Enabled shell tools run without approval pauses." : "Shell tools follow approval rules and saved permissions."}</p> : null}
         <label>
           Task
-          <textarea value={task} onChange={(event) => updateTask(event.target.value)} placeholder="What would you like to get done?" />
+          <textarea value={task} onChange={(event) => updateTask(event.target.value)} />
         </label>
         <div className="actions">
           <button type="submit" disabled={(!deploymentId && !configuration.model_configuration_id) || !task.trim() || Boolean(liveRunId) || Boolean(pendingSubmit) || starting}>
@@ -448,7 +448,7 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled, onNavigate }
           }}
         />
       ) : (
-        <EmptyState title="Ready for a task">Choose a model and describe what to do.</EmptyState>
+        <EmptyState title="No task yet" />
       )}
       {message ? <Notice tone="error" action={attentionFailed && attentionRunId ? <button type="button" disabled={starting} onClick={() => setAttentionAttempt(current => current + 1)}>Retry</button> : undefined}>{message}</Notice> : null}
       {showInputs ? <AgentInputs configuration={configuration} onChange={setConfiguration} onClose={() => setShowInputs(false)} onEditSource={onNavigate} /> : null}

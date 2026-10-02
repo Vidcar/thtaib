@@ -93,7 +93,7 @@ export function AttentionPanel({ onOpenItem }: AttentionPanelProps) {
       </div>
 
       {message ? <Notice role="status">{message}</Notice> : null}
-      {items.length === 0 && !message ? busy ? <p className="hint">Loading…</p> : <EmptyState title="You're all caught up." /> : null}
+      {items.length === 0 && !message ? busy ? <p className="hint">Loading…</p> : <EmptyState title="Nothing waiting" /> : null}
 
       <ul className="packet03-list">
         {items.map((item) => (

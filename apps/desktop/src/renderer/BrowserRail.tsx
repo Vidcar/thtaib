@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { api, streamBrowserEvents } from "./api";
 import { errorMessage } from "./errors";
+import { HoverHelp } from "./HoverHelp";
 import { Icon } from "./Icon";
 import type { BrowserAction, BrowserActionRequest, BrowserFrame, BrowserSessionStatus, BrowserViewport } from "./types";
 import "./BrowserRail.css";
@@ -234,11 +235,11 @@ export function BrowserRail({ threadId, visible, enabled, projectBound, attachme
       {active || status?.state === "lost" ? <button type="button" disabled={Boolean(busy)} onClick={() => threadId && void perform("close", () => api.closeBrowserSession(threadId))}>Close</button> : null}
       <button type="button" disabled={!threadId || Boolean(busy)} onClick={() => setResetConfirm(true)}>Reset</button>
     </div>
-    {!threadId ? <p className="hint">Create a chat to start its browser.</p> : null}
-    {!enabled ? <p className="hint">Enable Browser tools in <button type="button" onClick={onConfigure}>Agents</button> and switch to Work to start or control pages.</p> : null}
+    {!threadId ? <p className="hint" title="Create a chat to start its browser.">No chat</p> : null}
+    {!enabled ? <p className="hint">Browser tools off <button type="button" onClick={onConfigure}>Agents</button><HoverHelp title="Browser tools off">Enable Browser tools in Agents and switch to Work to start or control pages.</HoverHelp></p> : null}
     {status?.worker.chrome_available === false ? <p role="alert">Chrome is unavailable. Install Chrome, then reopen this tab.</p> : null}
-    {status?.worker.installed === false ? <p className="hint">Install the browser worker in <button type="button" onClick={onSettings}>Settings</button>.</p> : null}
-    {status?.state === "lost" ? <p className="hint">Close this session, then start Chrome again to keep this chat’s sign-ins. The new session opens fresh pages.</p> : null}
+    {status?.worker.installed === false ? <p className="hint">Browser worker missing <button type="button" onClick={onSettings}>Settings</button><HoverHelp title="Browser worker missing">Install the browser worker in Settings.</HoverHelp></p> : null}
+    {status?.state === "lost" ? <HoverHelp title="Browser connection lost">Close this session, then start Chrome again to keep this chat’s sign-ins. The new session opens fresh pages.</HoverHelp> : null}
     {resetConfirm ? <div className="browser-confirm" role="alertdialog" aria-label="Reset this chat browser"><p>Reset closes Chrome and clears this chat’s sign-ins and browser data.</p><button type="button" disabled={Boolean(busy)} onClick={() => { setResetConfirm(false); if (threadId) void perform("reset", () => api.resetBrowserSession(threadId)); }}>Clear sign-ins and reset</button><button type="button" onClick={() => setResetConfirm(false)}>Cancel</button></div> : null}
     <div className="browser-navigation">
       <button type="button" aria-label="Browser back" title="Back" disabled={!canControl} onClick={() => send({ type: "back" })}><Icon name="back" size={14} /></button>

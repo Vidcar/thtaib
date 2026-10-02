@@ -48,7 +48,7 @@ export function ModelInspector({ view, onClose, onTarget, content, children }: {
     <div className="model-editor-main" inert={view && !docked ? true : undefined}>{children}</div>
     {view && !docked ? <div className="model-inspector-backdrop" onClick={onClose} /> : null}
     {view ? <aside ref={panel} className="model-inspector" role={docked ? "complementary" : "dialog"} aria-modal={!docked || undefined} aria-labelledby="model-inspector-title">
-      <header><h3 id="model-inspector-title">{titles[view]}</h3><button type="button" className="icon-button" aria-label="Close model details" onClick={onClose}><Icon name="close" /></button></header>
+      <header><h3 id="model-inspector-title">{titles[view]}</h3><button type="button" className="icon-button" aria-label="Close model details" title="Close model details" onClick={onClose}><Icon name="close" /></button></header>
       <div ref={onTarget} className="model-inspector-body">{content}</div>
     </aside> : null}
   </div>;

@@ -120,7 +120,7 @@ export function ChatMeasurements({ run, ownerKey, starting = false, stopping = f
           </li>)}
         </ol>
       </details> : null}
-      {onInspect ? <button type="button" onClick={onInspect}>What the agent sees</button> : null}
+      {onInspect ? <button type="button" title="Instructions, memories, skills, and files for the next message." onClick={onInspect}>Inputs</button> : null}
     </HoverHelp>
   </span>;
 }

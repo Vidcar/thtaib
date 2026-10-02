@@ -2108,19 +2108,17 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         <div className="chat-conversation">
         {loadError ? <Notice tone="error" action={<button type="button" onClick={() => { void refresh(); void readCatalogue("Projects", workspaceApi.projects, setProjects); void readCatalogue("Agents", workspaceApi.agentSetups, setAgentSetups); }}>Retry</button>}>{loadError}</Notice> : null}
         <div className="transcript">
-          {props.restoringSelection ? <EmptyState title="Opening conversation">Restoring your last conversation.</EmptyState> : !conversation && (!deploymentsLoaded || !bundlesLoaded || loadErrors.Models || loadErrors["Model files"]) ? (
-            <EmptyState title={loadErrors.Models || loadErrors["Model files"] ? "Models unavailable" : "Checking models"}>Your saved models have not been verified.</EmptyState>
+          {props.restoringSelection ? <EmptyState title="Opening conversation" /> : !conversation && (!deploymentsLoaded || !bundlesLoaded || loadErrors.Models || loadErrors["Model files"]) ? (
+            <EmptyState title={loadErrors.Models || loadErrors["Model files"] ? "Models unavailable" : "Checking models"} />
           ) : deploymentsLoaded && bundlesLoaded && bundles.length === 0 && deployments.length === 0 && !conversation ? (
-            <EmptyState title="Your workspace for local AI">
+            <EmptyState title="No models">
               <button type="button" onClick={() => navigateAway("models")}><Icon name="plus" size={16} /> Add a model</button>
             </EmptyState>
           ) : selectionLoading && !conversation ? (
-            <EmptyState title="Loading conversation">
-              Opening {conversationTitle(selectionLoading)}.
-            </EmptyState>
+            <EmptyState title="Loading conversation">{conversationTitle(selectionLoading)}</EmptyState>
           ) : !conversation && transcript.length === 0 ? (
-            <EmptyState title={profileId || deploymentId ? "What are we working on?" : "Choose a model to start"}>
-              {profileId || deploymentId ? (projectId || projectPath ? <span>Start a conversation in {projects.find(project => project.id === projectId)?.name ?? projectPath.split(/[\\/]/).filter(Boolean).at(-1) ?? "this project"}.</span> : <button type="button" className="quiet-button" onClick={() => props.onCreateProject?.()}><Icon name="folder" size={16} /> Add a project</button>) : <span>Choose a model in the composer below.</span>}
+            <EmptyState title={profileId || deploymentId ? "No messages" : "Choose a model to start"}>
+              {(profileId || deploymentId) && !(projectId || projectPath) ? <button type="button" className="quiet-button" onClick={() => props.onCreateProject?.()}><Icon name="folder" size={16} /> Add a project</button> : null}
             </EmptyState>
           ) : canObserveInteraction && interactionThreadId && conversation ? (
             <ChatInteractionStream
@@ -2177,9 +2175,9 @@ export function ChatPanel(props: ChatPanelProps = {}) {
           )}
         </div>
 
-        {recoveryRun && conversation?.run_ids.includes(recoveryRun.id) ? <section className="run-failure" aria-label="Unconfirmed effects">
-          <strong>Some effects could not be confirmed automatically</strong>
-          <p>Available file evidence has been checked. Review these actions before continuing; previous actions will not be replayed.</p>
+        {recoveryRun && conversation?.run_ids.includes(recoveryRun.id) ? <section className="run-failure" aria-label="Uncertain effects">
+          <strong>Uncertain effects</strong>
+          <HoverHelp title="Uncertain effects">Available file evidence has been checked. Review these actions before continuing. Previous actions will not be replayed.</HoverHelp>
           <ul>{Object.values(recoveryRun.tool_outcomes ?? {}).filter(item => item.outcome === "uncertain" && !item.evidence?.acknowledged_at).map(item => <li key={item.call_id}><strong>{item.name}</strong>{item.evidence?.path ? ` · ${String(item.evidence?.path)}` : ""}<p>{item.detail}</p></li>)}</ul>
           <button type="button" disabled={recoveringEffects} onClick={() => void acknowledgeEffects()}>Continue with current state</button>
           <button type="button" disabled={recoveringEffects} onClick={() => setRecoveryRun(null)}>Keep paused</button>

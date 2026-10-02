@@ -95,6 +95,7 @@ function makeHarness() {
     cancels: [],
     cancelBarrier: heldCancel,
     streamRuns: new Map(),
+    commandHold: null,
   };
   const server = createServer((req, res) => {
     let body = "";
@@ -160,7 +161,8 @@ function makeHarness() {
       const streamMatch = url.pathname.match(/^\/v1\/agent-interaction\/threads\/([^/]+)\/stream\/events$/);
       if (req.method === "POST" && streamMatch) {
         let runValue = state.streamRuns.get(streamMatch[1]);
-        for (let index = 0; !runValue && index < 50; index += 1) {
+        const heldCommand = Boolean(state.commandHold);
+        for (let index = 0; !runValue && index < (heldCommand ? 400 : 50); index += 1) {
           await new Promise((resolve) => setTimeout(resolve, 5));
           runValue = state.streamRuns.get(streamMatch[1]);
         }
@@ -180,6 +182,7 @@ function makeHarness() {
         const runId = threadId === "thread_1" ? "run_1" : "run_2";
         const message = payload.params?.input?.messages?.[0];
         const task = typeof message?.content === "string" ? message.content : threadId;
+        if (state.commandHold) await state.commandHold.promise;
         state.streamRuns.set(threadId, run(runId, "completed", task, message?.id ?? null));
         json(res, 200, { type: "success", id: payload.id ?? "cmd", result: {} });
         return;
@@ -244,6 +247,17 @@ function startForm(renderer) {
   return found[0];
 }
 
+function interactionStreams(renderer) {
+  return renderer.root.findAll((node) => node.type?.name === "InteractionStream");
+}
+
+function assertNoTaskYet(renderer, where) {
+  const titles = renderer.root.findAll((node) => node.props?.className === "empty-state").map((node) => textOf(node.findByType("h3")));
+  assert.deepEqual(titles, ["No task yet"], where);
+  assert.doesNotMatch(allText(renderer), /Ready for a task/);
+  assert.doesNotMatch(allText(renderer), /Choose a model and describe what to do\./);
+}
+
 function cancelButton(renderer) {
   const found = renderer.root.findAll((node) => node.type === "button" && textOf(node).includes("Cancel"));
   assert.ok(found.length > 0, "expected cancel button");
@@ -283,10 +297,23 @@ try {
     await Promise.resolve();
   });
   await waitFor(() => assert.equal(textarea(renderer).props.value, "first task"), "first draft applied");
-  await act(async () => {
-    startForm(renderer).props.onSubmit({ preventDefault() {} });
-    await Promise.resolve();
-  });
+  assertNoTaskYet(renderer, "the workflow page is empty before a task starts");
+  assert.equal(interactionStreams(renderer).length, 0, "the page empty state is not the stream");
+  const heldCommand = deferred();
+  harness.state.commandHold = heldCommand;
+  try {
+    await act(async () => {
+      startForm(renderer).props.onSubmit({ preventDefault() {} });
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      assert.equal(interactionStreams(renderer).length, 1, "the stream is mounted before a run exists");
+      assertNoTaskYet(renderer, "a registered task with no run stays empty inside the stream");
+    }, "stream has no run yet");
+  } finally {
+    heldCommand.resolve();
+    harness.state.commandHold = null;
+  }
   await waitFor(() => assert.match(allText(renderer), /first task/), "first run projection");
   assert.equal(harness.state.commands[0].payload.params.metadata.workbench.approval_mode, "full_access", "the displayed access reaches the workflow submission");
   assert.equal(harness.state.commands[0].payload.params.metadata.workbench.model_configuration_id, "configuration-one", "applied canonical model reaches the workflow submission");

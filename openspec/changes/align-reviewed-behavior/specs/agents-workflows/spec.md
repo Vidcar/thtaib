@@ -499,11 +499,11 @@ Retry and Edit SHALL sit on the person's own sent messages. Copy SHALL stay on a
 
 ### Requirement: AGT-038 - Preview the next message without storing the request
 
-The product MUST NOT persist a copy of the request the model received. There SHALL be no stored actual-request list, no redaction setting for those copies, and no paste-a-capture box. "What the agent sees" SHALL preview only the next message: which instructions, memories, skills, and files will go out. The person MAY replace agent instructions for this chat and MAY explicitly save those instructions back onto the agent. Opening the preview MUST NOT call the model. Earlier turns remain the chat messages, not a stored request dump. Deep Agents compaction MAY keep its own scratch note of summarized turns; that note is not this preview and MUST NOT be shown as a stored request inspector.
+The product MUST NOT persist a copy of the request the model received. There SHALL be no stored actual-request list, no redaction setting for those copies, and no paste-a-capture box. Inputs SHALL preview only the next message: which instructions, memories, skills, and files will go out. The person MAY replace agent instructions for this chat and MAY explicitly save those instructions back onto the agent. Opening the preview MUST NOT call the model. Earlier turns remain the chat messages, not a stored request dump. Deep Agents compaction MAY keep its own scratch note of summarized turns; that note is not this preview and MUST NOT be shown as a stored request inspector.
 
 #### Scenario: Preview the next message only
 
-- **WHEN** a person opens What the agent sees
+- **WHEN** a person opens Inputs
 - **THEN** the preview shows only the next message, including which instructions, memories, skills, and files will go out
 - **AND** opening it MUST NOT call the model, and earlier turns remain the chat messages rather than a stored request dump.
 
@@ -529,7 +529,7 @@ The product MUST NOT persist a copy of the request the model received. There SHA
 
 ### Requirement: AGT-002 - Capture the actual model request
 **Reason**: The product does not keep a copy of the request the model received. A requirement titled as capture would keep that store.
-**Migration**: What the agent sees previews only the next message. Deep Agents may still keep its own scratch note of summarized turns. That note is not a request inspector.
+**Migration**: Inputs previews only the next message. Deep Agents may still keep its own scratch note of summarized turns. That note is not a request inspector.
 
 ### Requirement: AGT-012 - Distinguish branches, answer regeneration and effectful retry
 **Reason**: Regenerate and a second conversation (Branch) are removed.

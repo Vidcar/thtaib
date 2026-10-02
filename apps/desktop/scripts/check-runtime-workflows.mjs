@@ -43,7 +43,7 @@ async function checkExplicitProjectGrant(Component) {
     assert.equal(button(renderer, "Saving…").props.disabled, true);
     await act(async () => { resolveSave(json({ id: "grant" })); await tick(); });
     assert.equal(saved, 1); assert.equal(field(renderer, "Project", "select").props.value, "");
-    assert.match(text(renderer.root), /Commands, deletion, browser and account actions keep their own approvals/);
+    assert.match(renderer.root.findByProps({ title: "About project file grants" }).props.children, /Commands, deletion, browser and account actions keep their own approvals/);
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
 
@@ -86,11 +86,19 @@ async function checkTemplateDraft(Component) {
   };
   try {
     await act(async () => { renderer = create(React.createElement(Component)); await tick(); await tick(); });
+    const inputs = button(renderer, "Inputs");
+    assert.ok(inputs, "the agent editor has an Inputs control");
+    assert.equal(text(inputs), "Inputs");
+    assert.equal(inputs.props.title, "Instructions, memories, skills, and files for the next message.");
+    assert.doesNotMatch(text(renderer.root), /What the agent sees/);
+    assert.equal(renderer.root.findAll(node => node.props?.placeholder === "How should this agent work?" || node.props?.placeholder === "Name this reusable agent").length, 0, "agent name, role, and instructions have no example placeholders");
     await act(async () => field(renderer, "Starting template", "select").props.onChange({ target: { value: template.id } }));
     await act(async () => button(renderer, "Use template").props.onClick());
     assert.equal(renderer.root.findByProps({ id: "agent-draft-name" }).props.value, template.name);
-    assert.match(text(renderer.root), /1 already installed personal skills selected/);
-    assert.match(text(renderer.root), /Chat access remains your current choice/);
+    assert.match(text(renderer.root), /Template applied/);
+    assert.equal(renderer.root.findByProps({ title: "Template applied" }).props.children, "Use Ask in Chat. Commands require their own approval. Recommended skills: project-change. 1 already installed personal skills selected; add others through Knowledge when useful. Chat access remains your current choice.");
+    assert.equal(renderer.root.findByProps({ title: "Starting template" }).props.children, "Templates populate this draft for review. Save when ready; model settings and live grants stay under their existing owners.");
+    assert.doesNotMatch(text(renderer.root), /Templates populate this draft for review/);
     assert.equal(calls.filter(call => call.method !== "GET" && call.route !== "/v1/setup-resolution").length, 0, "a template is a reviewable draft, not a saved setup or access change");
     await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }));
     const editor = () => renderer.root.find(node => typeof node.type === "function" && node.type.name === "SetupConfigurationEditor");

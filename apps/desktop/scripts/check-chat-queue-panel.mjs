@@ -145,7 +145,9 @@ async function checkProjectWait(ChatQueuePanel) {
   try {
     await act(async () => { renderer = create(React.createElement(ChatQueuePanel, { conversation: waiting, deployments, profiles,
       onUpdated() {}, onError(message) { assert.fail(message); }, onOpenOwner: id => opened.push(id) })); });
-    assert.match(textOf(renderer.root), /Waiting for project · position 2 · Finish the game · effects need review/);
+    assert.match(textOf(renderer.root), /Waiting for project · position 2 · Finish the game · Uncertain effects/);
+    assert.doesNotMatch(textOf(renderer.root), /effects need review/);
+    assert.equal(renderer.root.findByProps({ className: "queue-project-wait" }).findByType("span").props.title, "Effects from the active chat were not confirmed. This message waits until they are reviewed.");
     assert.equal(button(renderer, "Cancel waiting message").props.disabled, false, "a project-blocked queued message stays cancellable");
     await act(async () => button(renderer, "Open active chat").props.onClick());
     assert.deepEqual(opened, ["thread-owner"], "project wait navigation opens the actual lease owner's chat");

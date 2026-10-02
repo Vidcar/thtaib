@@ -337,6 +337,13 @@ try {
   const unknownRow = choices(renderer).find(node => text(node).includes("Custom Weights"));
   assert.ok(unknownRow, "an unknown weight name stays selectable");
   assert.doesNotMatch(text(unknownRow), /Q\d|IQ\d|F16|F32|BF16/, "an unknown name does not invent a quantization");
+  const mtpBundle = { id: "bundle_mtp", display_name: "QwenDavidAU", quantization: "IQ4_XS", primary_path: "C:/models/QwenDavidAU-IQ4_XS-MTP.gguf", status: "ready", disk_matches: true, default_configuration_id: "config_mtp" };
+  await update({ bundles: [mtpBundle], profiles: [profile("config_mtp", "bundle_mtp", "Default")], deployments: [], selectedDeploymentId: "", selectedConfigurationId: "config_mtp", configuration: { model_configuration_id: "config_mtp" }, fixedModel: false });
+  const triggerBadge = aria(renderer, "Chat model: QwenDavidAU").findAll(node => node.props.className === "chat-model-quantization");
+  assert.equal(triggerBadge.length, 1, "the closed trigger has one quantization token");
+  assert.equal(text(triggerBadge[0]), "IQ4_XS");
+  assert.doesNotMatch(text(triggerBadge[0]), /MTP|\.gguf/, "the closed trigger does not append speculation or a filename");
+  assert.match(text(choices(renderer)[0]), /IQ4_XS · MTP/, "an open model row can still name a filename MTP variant");
   const memoryFigure = () => { const node = renderer.root.findAll(item => item.props.className === "chat-context-memory")[0]; assert.ok(node, "context shows a memory figure"); return text(node); };
   await update({ bundles, profiles, deployments: [deployment("dep_a", "bundle_a", "config_a", { ctx_size: 32768 })], selectedDeploymentId: "dep_a", selectedConfigurationId: "config_a", configuration: { model_configuration_id: "config_a", deployment_id: "dep_a", startup_overrides: { ctx_size: 32768 } }, conversationId: "chat_memory", runtimeBusy: false, fixedModel: false });
   await open(renderer, "Chat model: Qwen");
@@ -415,6 +422,11 @@ async function assertEverydayLabels() {
     assert.match(String(grantHelp?.props.children), /In Ask mode, selected Create\/Edit tools/, "the project-edit explanation is available on hover or keyboard focus");
     await act(async () => { task = create(React.createElement(AgentRunPanel, {})); }); await flush();
     assert.match(text(task.root), /Run a task/);
+    const taskEmpty = task.root.findAll(node => node.props?.className === "empty-state");
+    assert.equal(taskEmpty.length, 1, "a workflow with no thread has one empty state");
+    assert.equal(text(taskEmpty[0].findByType("h3")), "No task yet");
+    assert.doesNotMatch(text(task.root), /Ready for a task/);
+    assert.doesNotMatch(text(task.root), /Choose a model and describe what to do\./);
     const menu = task.root.findAll(node => String(node.props.className ?? "").includes("chat-model-controls"))[0];
     assert.ok(menu, "the one-task page uses the chat model menu");
     assert.equal(menu.findAll(node => node.props.name === "tune" || node.props["aria-label"] === "Tune model").length, 0, "the one-task menu has no tune icon");
