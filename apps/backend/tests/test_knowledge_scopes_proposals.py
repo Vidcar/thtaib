@@ -67,8 +67,9 @@ class KnowledgeScopeProposalTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         saved = self.knowledge.propose_memory(run_id=self.run.id, content='project automatic', scope='project', scope_id=self.project['id'])
         pending = self.knowledge.propose_memory(run_id=self.run.id, content='personal requires review')
-        self.assertEqual(saved.status, 'accepted')
-        self.assertTrue(saved.automatic)
+        self.assertEqual(saved.status, 'pending')
+        self.assertFalse(saved.automatic)
+        self.assertEqual(self.knowledge.list_entries(), [])
         self.assertEqual(pending.status, 'pending')
         protected = self.create(kind='protected_instruction')
         with self.assertRaisesRegex(Exception, 'protected instructions'):

@@ -506,7 +506,8 @@ def _validate_admitted_history(service, admitted):
     setup = admitted.setup
     structured_output = admitted.structured_output
 
-    if request.resume_checkpoint_id:
+    checkpoint_id = request.resume_checkpoint_id or request.fork_checkpoint_id
+    if checkpoint_id:
         now = utc_now()
         validation_run = AgentRun(
             id=new_id("agent_validation"),
@@ -565,9 +566,11 @@ def _validate_admitted_history(service, admitted):
         snapshot = graph_checkpoint_snapshot(
             validation_agent,
             request.thread_id,
-            request.resume_checkpoint_id,
+            checkpoint_id,
         )
         saved_state = dict(snapshot.values)
+    elif request.rewind_clear_messages:
+        saved_state = {}
     else:
         saved_state = conversation_state(service.manager.paths.checkpoints_db, request.thread_id) if request.thread_id else {}
     retained = list(saved_state.get("messages", []))
@@ -674,6 +677,8 @@ def _persist_admitted_run(service, admitted):
         retrieval_project_paths=list(request.retrieval_project_paths),
         thread_id=request.thread_id or None,
         resume_checkpoint_id=request.resume_checkpoint_id,
+        fork_checkpoint_id=request.fork_checkpoint_id,
+        rewind_clear_messages=request.rewind_clear_messages,
         related_files=harness_module._initial_related_files(project_path),
         effective_setup=setup,
         starting_snapshot_id=starting_snapshot_id,
@@ -699,11 +704,19 @@ def _persist_admitted_run(service, admitted):
     # Agent-run / Lab own one thread per run. Chat follow-ups pass the
     # conversation thread so LangGraph resumes the same checkpointer state.
     run.thread_id = request.thread_id or run.id
-    if request.thread_id:
+    if request.fork_checkpoint_id:
+        run.pre_run_checkpoint_id = request.fork_checkpoint_id
+    elif request.thread_id:
         try:
             run.pre_run_checkpoint_id = checkpoint_head_id(service.manager.paths.checkpoints_db, run.thread_id)
         except CheckpointReadError as exc:
             raise HarnessError(str(exc), code="checkpoint_linkage_failed", status_code=409) from exc
+    if request.fork_checkpoint_id or request.rewind_clear_messages:
+        if request.rewind_clear_messages:
+            kept: list = []
+        else:
+            kept = list(service.checkpoint_state_for_run(run, request.fork_checkpoint_id).get("values", {}).get("messages") or [])
+        service._rewind_kept_messages[run.id] = kept
     with service._lock:
         cancel = service._start_cancel_guards.get((request.thread_id, input_message_id)) or threading.Event()
         if cancel.is_set():

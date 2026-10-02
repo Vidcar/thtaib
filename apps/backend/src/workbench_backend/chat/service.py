@@ -572,9 +572,10 @@ class ChatService:
     def start(self, conversation_id: str, request: ChatStartRequest) -> ChatConversationView:
         if not request.input_message_id:
             request = request.model_copy(update={"input_message_id": new_id("input")})
-        task = request.task.strip()
-        if not task and not request.content_blocks and not request.attachment_ids:
-            raise ChatError("Compose text is required.", code="task_required", status_code=400)
+        if not request.rewind_source_run_id:
+            task = request.task.strip()
+            if not task and not request.content_blocks and not request.attachment_ids:
+                raise ChatError("Compose text is required.", code="task_required", status_code=400)
         with self.store.conversation_lock(conversation_id):
             conversation = self._require(conversation_id)
             if request.input_message_id in conversation.accepted_inputs:
@@ -607,6 +608,19 @@ class ChatService:
                         conversation = self.store.put(updated)
                     else:
                         conversation, _terminal = self._reconcile_terminal_assistant(conversation, current)
+            if request.rewind_source_run_id:
+                # Queueing is not acceptance. A refused rewind must put this
+                # snapshot back, including messages removed only in memory.
+                snapshot = conversation.model_copy(deep=True)
+                cut, request, fork_id, clear = self._prepare_rewind(conversation, request)
+                try:
+                    self.store.put(cut)
+                    return self._view(self._dispatch_request(
+                        cut, request, fork_checkpoint_id=fork_id, rewind_clear_messages=clear))
+                except Exception:
+                    if self._find_chat_run_by_input(snapshot, request.input_message_id) is None:
+                        self.store.put(snapshot)
+                    raise
             # Another chat may use this folder. Queue only behind this chat's own items.
             if conversation.project_path and any(item.status == "queued" for item in conversation.queue):
                 return self._view(self._append_queue_item(conversation, request))
@@ -616,6 +630,66 @@ class ChatService:
                 if exc.code != "project_busy":
                     raise
                 return self._view(self._append_queue_item(self._require(conversation.id), request))
+
+    def _prepare_rewind(
+        self, conversation: ChatConversation, request: ChatStartRequest,
+    ) -> tuple[ChatConversation, ChatStartRequest, str | None, bool]:
+        """Cut later transcript and queue in memory. The caller persists the cut only with an accepted run."""
+        if request.rewind_mode not in {"retry", "edit"}:
+            raise ChatError("Choose retry or edit.", code="rewind_mode_required", status_code=400)
+        source_id = request.rewind_source_run_id or ""
+        if source_id not in conversation.run_ids:
+            raise ChatError("This reply does not belong to the conversation.", code="rewind_source_missing", status_code=404)
+        try:
+            source = self.harness.get_run(source_id)
+        except HarnessError as exc:
+            raise ChatError("This reply does not belong to the conversation.", code="rewind_source_missing", status_code=404) from exc
+        if source.thread_id != conversation.thread_id:
+            raise ChatError("This chat has no checkpoint to rewind to.", code="rewind_checkpoint_missing", status_code=409)
+        index = conversation.run_ids.index(source.id)
+        user_message = next((
+            message for message in conversation.transcript
+            if message.role == "user" and (message.run_id == source.id or message.id == source.input_message_id)
+        ), None)
+        if request.rewind_mode == "retry":
+            if user_message is None:
+                raise ChatError("This reply does not belong to the conversation.", code="rewind_source_missing", status_code=404)
+            attachments = list(user_message.attachment_ids)
+            request = request.model_copy(update={
+                "task": user_message.content,
+                "attachment_ids": attachments,
+                "document_asset_ids": attachments,
+                "content_blocks": None,
+            })
+        if not request.task.strip() and not request.content_blocks and not request.attachment_ids:
+            raise ChatError("Compose text is required.", code="task_required", status_code=400)
+        fork_id: str | None = None
+        clear = False
+        if source.pre_run_checkpoint_id:
+            try:
+                self.harness.checkpoint_state_for_run(source, source.pre_run_checkpoint_id)
+            except HarnessError as exc:
+                raise ChatError("This chat has no checkpoint to rewind to.", code="rewind_checkpoint_missing", status_code=409) from exc
+            fork_id = source.pre_run_checkpoint_id
+        elif index == 0:
+            clear = True
+        else:
+            raise ChatError("This chat has no checkpoint to rewind to.", code="rewind_checkpoint_missing", status_code=409)
+        cut_at = next((
+            position for position, message in enumerate(conversation.transcript)
+            if message.run_id == source.id or (source.input_message_id and message.id == source.input_message_id)
+        ), None)
+        if cut_at is None:
+            raise ChatError("This reply does not belong to the conversation.", code="rewind_source_missing", status_code=404)
+        kept_messages = list(conversation.transcript[:cut_at])
+        kept_ids = {message.id for message in kept_messages if message.id}
+        cut = conversation.model_copy(deep=True)
+        cut.transcript = kept_messages
+        cut.queue = []
+        cut.run_ids = conversation.run_ids[:index]
+        cut.accepted_inputs = {key: value for key, value in conversation.accepted_inputs.items() if key in kept_ids}
+        cut.current_run_id = cut.run_ids[-1] if cut.run_ids else None
+        return cut, request, fork_id, clear
 
     def enqueue(self, conversation_id: str, request: ChatStartRequest) -> ChatConversationView:
         task = request.task.strip()
@@ -1005,11 +1079,15 @@ class ChatService:
         request: ChatStartRequest,
         *,
         queue_item: ChatQueueItem | None = None,
+        fork_checkpoint_id: str | None = None,
+        rewind_clear_messages: bool = False,
     ) -> ChatConversation:
         self.harness.require_thread_effects_confirmed(conversation.thread_id)
         frozen = queue_item.execution_snapshot if queue_item is not None else self._admit_snapshot(conversation, request)
         with self.harness.project_admission(conversation.project_path):
-            return self._dispatch_request_admitted(conversation, request, queue_item=queue_item, admitted_snapshot=frozen)
+            return self._dispatch_request_admitted(
+                conversation, request, queue_item=queue_item, admitted_snapshot=frozen,
+                fork_checkpoint_id=fork_checkpoint_id, rewind_clear_messages=rewind_clear_messages)
 
     def _apply_dispatch_admission(
         self,
@@ -1109,6 +1187,8 @@ class ChatService:
         content_blocks: list[object],
         selected_document_ids: list[str],
         frozen: FrozenExecutionSelection | None,
+        fork_checkpoint_id: str | None = None,
+        rewind_clear_messages: bool = False,
     ) -> tuple[AgentStartRequest, dict[str, object]]:
         start_request = AgentStartRequest(
             deployment_id=next_conversation.deployment_id,
@@ -1142,6 +1222,8 @@ class ChatService:
             per_request_overrides=next_conversation.per_request_overrides,
             source_surface="chat",
             thread_id=next_conversation.thread_id,
+            fork_checkpoint_id=fork_checkpoint_id,
+            rewind_clear_messages=rewind_clear_messages,
             memory_version_refs=next_conversation.memory_version_refs,
             skill_version_refs=next_conversation.skill_version_refs,
             protected_instruction_version_refs=next_conversation.protected_instruction_version_refs,
@@ -1162,6 +1244,8 @@ class ChatService:
         *,
         queue_item: ChatQueueItem | None = None,
         admitted_snapshot: FrozenExecutionSelection | None = None,
+        fork_checkpoint_id: str | None = None,
+        rewind_clear_messages: bool = False,
     ) -> ChatConversation:
         next_conversation, frozen = self._apply_dispatch_admission(
             conversation,
@@ -1206,6 +1290,8 @@ class ChatService:
                     content_blocks=content_blocks,
                     selected_document_ids=selected_document_ids,
                     frozen=frozen,
+                    fork_checkpoint_id=fork_checkpoint_id,
+                    rewind_clear_messages=rewind_clear_messages,
                 )
                 accepted = self.harness.start(start_request, **snapshot_kwargs)
             except (HarnessError, ManagerError) as exc:

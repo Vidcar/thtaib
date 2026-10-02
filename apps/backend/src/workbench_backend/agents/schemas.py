@@ -262,6 +262,8 @@ class AgentStartRequest(BaseModel):
     source_surface: SourceSurface = "agent-run"
     thread_id: str | None = None
     resume_checkpoint_id: str | None = Field(default=None, min_length=1, max_length=200)
+    fork_checkpoint_id: str | None = Field(default=None, min_length=1, max_length=200)
+    rewind_clear_messages: bool = False
 
 
 class GenerationObservation(BaseModel):
@@ -388,6 +390,8 @@ class AgentRun(BaseModel):
     pre_run_checkpoint_id: str | None = None
     checkpoint_ids: list[str] = Field(default_factory=list)
     resume_checkpoint_id: str | None = None
+    fork_checkpoint_id: str | None = None
+    rewind_clear_messages: bool = False
     related_files: list[RelatedFile] = Field(default_factory=list)
     effective_setup: EffectiveSetup | None = None
     starting_snapshot_id: str | None = None

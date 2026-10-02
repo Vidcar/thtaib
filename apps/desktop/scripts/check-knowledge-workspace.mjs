@@ -405,11 +405,8 @@ async function checkKnowledgeOwnershipAndReview(Component) {
     assert.equal(field(renderer, "When to use (optional)", "textarea").props.value, "Use this when preparing a project comparison.", "discard restores the saved short description");
     await act(async () => { button(renderer, "Accept").props.onClick(); await tick(); });
     assert.deepEqual(calls.find(call => call.path.endsWith("/review")).body, { decision: "accept" });
-    await act(async () => field(renderer, "Destination", "select").props.onChange({ target: { value: "project:project_real" } }));
-    const automatic = renderer.root.findByProps({ role: "switch", "aria-label": "Save automatically" });
-    assert.equal(automatic.props["aria-checked"], false);
-    await act(async () => { automatic.props.onClick(); await tick(); });
-    assert.deepEqual(calls.find(call => call.path.endsWith("automatic-save-policy")).body, { scope: "project", scope_id: "project_real", automatic_agent_writes: true });
+    assert.equal(text(renderer.root).includes("saved automatically"), false);
+    assert.equal(renderer.root.findAll(node => node.type === "details" && text(node).includes("Suggested memories"))[0].props.open, true, "accepting a suggestion leaves the list open");
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
 

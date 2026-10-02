@@ -1640,17 +1640,16 @@ class ChatHarnessTests(unittest.TestCase):
             json={"source_run_id": finished["current_run_id"], "mode": "continue"},
         )
 
-        self.assertEqual(branch.status_code, 200, branch.text)
-        body = branch.json()
-        self.assertEqual(body["source_conversation_id"], conversation["id"])
-        self.assertEqual(body["area_project_path"], original_path)
-        self.assertEqual(body["area_id"], conversation["area_id"])
-        self.assertEqual(body["area_label"], self.project.name)
-        self.assertEqual(body["project_path"], original_path)
-        self.assertFalse(Path(body["project_path"]).exists())
-        workspaces = self.app.state.manager.paths.workspaces
-        self.assertFalse(workspaces.exists() and any(workspaces.iterdir()))
-        self.assertEqual(body["branch_head_checkpoint_id"], body["source_checkpoint_id"])
+        self.assertEqual(branch.status_code, 409, branch.text)
+        self.assertEqual(branch.json()["code"], "branch_unavailable")
+        same = self.client.get(f"/v1/chat/conversations/{conversation['id']}").json()
+        self.assertEqual(same["area_project_path"], original_path)
+        self.assertEqual(same["area_id"], conversation["area_id"])
+        self.assertEqual(same["area_label"], self.project.name)
+        self.assertEqual(same["project_path"], original_path)
+        self.assertFalse(Path(same["project_path"]).exists())
+        listed = self.client.get("/v1/chat/conversations").json()
+        self.assertEqual([item["id"] for item in listed], [conversation["id"]])
 
     def test_terminal_reconciliation_updates_branch_head_checkpoint(self) -> None:
         conversation = self._create()

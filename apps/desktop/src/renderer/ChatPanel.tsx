@@ -98,6 +98,15 @@ interface PendingChatSubmit {
   work_mode?: "work" | "plan";
   helper_agent_ids?: string[];
   review?: { enabled: boolean; criteria: string; max_revisions: 2 };
+  rewind_source_run_id?: string;
+  rewind_mode?: "retry" | "edit";
+}
+
+function rewindFailureNotice(pending: PendingChatSubmit, accepted: boolean, fallback: string): string {
+  if (accepted || !pending.rewind_mode) return fallback;
+  return pending.rewind_mode === "edit"
+    ? "This edit did not start. The chat was left as it is."
+    : "This retry did not start. The chat was left as it is.";
 }
 
 const nonBlockingReadinessIssues = new Set(["chat_turn_active", "model_load_required", "readiness_unavailable"]);
@@ -128,6 +137,7 @@ function ChatInteractionStream(props: {
   historicalRuns: AgentRun[];
   onRecoverRun?: (run: AgentRun) => void;
   onConfigureSetup?: (setup: CapabilitySetupRequest) => void;
+  noteRewindResult: (pending: PendingChatSubmit, accepted: boolean) => void;
 }) {
   const {
     threadId,
@@ -142,6 +152,7 @@ function ChatInteractionStream(props: {
     refreshDeployments,
     setMessage,
     isCurrentOwner,
+    noteRewindResult,
   } = props;
   const owner = { conversationId: conversation.id, threadId, generation: selectionGeneration };
   const reconciledSubmissionErrors = useRef(new Set<string>());
@@ -201,12 +212,14 @@ function ChatInteractionStream(props: {
                 clearPendingSubmit(pendingSubmit);
                 if (chatHasAcceptedInputMessage(next, pendingSubmit.id)) {
                   submissionFailure.current = { inputId: pendingSubmit.id, message: errorText, accepted: true };
+                  noteRewindResult(pendingSubmit, true);
                   clearSubmittedDraft(pendingSubmit);
                   refreshDeployments();
                   setMessage("");
                   return;
                 }
-                setMessage(errorMessage(error));
+                noteRewindResult(pendingSubmit, false);
+                setMessage(rewindFailureNotice(pendingSubmit, false, errorMessage(error)));
               })
               .catch(() => {
                 if (isCurrentOwner(owner)) {
@@ -247,7 +260,9 @@ function ChatInteractionStream(props: {
               void api.chatConversation(submitted.conversation_id).then(next => {
                 if (!stillOwned()) return;
                 const failed = next.current_run?.input_message_id === submitted.id && next.current_run.status === "failed";
-                setMessage(failed || !chatHasAcceptedInputMessage(next, submitted.id) ? errorText : "");
+                const accepted = chatHasAcceptedInputMessage(next, submitted.id);
+                noteRewindResult(submitted, accepted);
+                setMessage(failed || !accepted ? rewindFailureNotice(submitted, accepted, errorText) : "");
               }).catch(() => { if (stillOwned()) setMessage(errorText); });
               return;
             }
@@ -267,6 +282,7 @@ function ChatInteractionStream(props: {
           onHelperActivity={props.onHelperActivity}
           historicalRuns={props.historicalRuns}
           onRecoverRun={props.onRecoverRun}
+          noteRewindResult={noteRewindResult}
           onConfigureSetup={props.onConfigureSetup}
         />
       )}
@@ -303,6 +319,7 @@ function ChatInteractionStreamContent(props: {
   historicalRuns: AgentRun[];
   onRecoverRun?: (run: AgentRun) => void;
   onConfigureSetup?: (setup: CapabilitySetupRequest) => void;
+  noteRewindResult: (pending: PendingChatSubmit, accepted: boolean) => void;
 }) {
   const {
     stream,
@@ -318,6 +335,7 @@ function ChatInteractionStreamContent(props: {
     refreshDeployments,
     setMessage,
     isCurrentOwner,
+    noteRewindResult,
   } = props;
   const projection = useWorkbenchProjection(stream);
   const run = projection.run;
@@ -512,11 +530,13 @@ function ChatInteractionStreamContent(props: {
             clearPendingSubmit(pendingSubmit);
             if (chatHasAcceptedInputMessage(next, pendingSubmit.id)) {
               submissionFailure.current = { inputId: pendingSubmit.id, message: errorMessage(error), accepted: true };
+              noteRewindResult(pendingSubmit, true);
               clearSubmittedDraft(pendingSubmit);
               setMessage("");
               return;
             }
-            setMessage(errorMessage(error));
+            noteRewindResult(pendingSubmit, false);
+            setMessage(rewindFailureNotice(pendingSubmit, false, errorMessage(error)));
           })
           .catch(() => {
             if (isCurrentOwner(owner)) {
@@ -782,6 +802,8 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const chatLaunchClaim = useRef<string | null>(null);
   const historyNoticeClaim = useRef<string | null>(null);
   const [task, setTask] = useState("");
+  const [editing, setEditing] = useState<{ runId: string } | null>(null);
+  const [editToken, setEditToken] = useState(0);
   const [recoveryRun, setRecoveryRun] = useState<AgentRun | null>(null);
   const [recoveringEffects, setRecoveringEffects] = useState(false);
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
@@ -927,6 +949,35 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const selectionRequest = useRef(0);
   const modelBusyChanged = useCallback((busy: boolean) => setModelChoiceGeneration(busy ? selectionRequest.current : null), []);
   const draftRevision = useRef(0);
+  const preEditDraft = useRef<{ task: string; attachmentIds: string[] } | null>(null);
+  const acceptedEditRun = useRef<string | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const noteRewindResult = useCallback((pending: PendingChatSubmit, accepted: boolean) => {
+    if (pending.rewind_mode === "edit" && !accepted && acceptedEditRun.current === pending.rewind_source_run_id) acceptedEditRun.current = null;
+  }, []);
+  useLayoutEffect(() => {
+    if (!editing) return;
+    const box = composerRef.current;
+    if (!box) return;
+    box.focus();
+    const end = box.value.length;
+    box.setSelectionRange(end, end);
+  }, [editToken, editing]);
+  useEffect(() => {
+    if (!editing || !conversation) return;
+    const present = conversation.transcript.some(item => item.role === "user" && item.run_id === editing.runId);
+    if (present) return;
+    const accepted = acceptedEditRun.current === editing.runId;
+    const draft = preEditDraft.current;
+    preEditDraft.current = null;
+    if (accepted) acceptedEditRun.current = null;
+    setEditing(null);
+    if (!accepted && draft) {
+      draftRevision.current += 1;
+      setTask(draft.task);
+      setAttachmentIds(draft.attachmentIds);
+    }
+  }, [conversation, editing]);
   const serverDraftRevision = useRef(0);
   const draftSaveRequest = useRef(0);
   const draftWriter = useRef(new ChatDraftWriter());
@@ -1315,6 +1366,9 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     setPendingSubmit(null);
     setPendingStop(null);
     setSending(false);
+    setEditing(null);
+    preEditDraft.current = null;
+    acceptedEditRun.current = null;
     serverDraftRevision.current = 0;
     updateTask("");
     setAttachmentIds([]);
@@ -1335,6 +1389,11 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const currentRunLive = Boolean(conversation?.current_run && isAgentRunLive(conversation.current_run.status));
   const awaitingRunAdmission = Boolean(pendingSubmit && !currentRunLive);
   const runBusy = currentRunLive || Boolean(pendingSubmit) || hasPendingCancelInput || Boolean(conversation?.current_run?.finalization_phase);
+  const rewindHold = currentRunLive || Boolean(conversation?.current_run?.finalization_phase) || hasPendingCancelInput
+    ? "Wait until this turn finishes"
+    : selectionBusy || sending || awaitingRunAdmission
+      ? "Wait until this chat is ready"
+      : null;
   const pendingSubmissionActive = Boolean(
     pendingSubmit &&
     conversation?.id === pendingSubmit.conversation_id &&
@@ -1505,6 +1564,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
 
   async function sendTurn(): Promise<void> {
     const text = task.trim();
+    if (editing && (runBusy || queueIntent || selectionBusy || sending || awaitingRunAdmission || readinessBlocked || !hasModelChoice || (!text && !attachmentIds.length))) return;
     if ((!text && !attachmentIds.length) || !hasModelChoice || selectionBusy || sending || awaitingRunAdmission || (runBusy && !conversation) || (pendingSubmit && draftRevision.current === pendingSubmit.draft_revision)) {
       return;
     }
@@ -1541,8 +1601,9 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         draft_revision: savedDraft?.draft?.revision ?? conversation?.draft?.revision ?? null,
         attachment_ids: attachmentIds,
         document_asset_ids: selectedDocumentIds,
+        ...(editing ? { rewind_source_run_id: editing.runId, rewind_mode: "edit" as const } : {}),
       };
-      if (queueIntent && conversation) {
+      if (queueIntent && conversation && !editing) {
         const queued = await api.enqueueChatTurn(conversation.id, {
           ...payload, ...(queueAfterRunId ? { queue_after_run_id: queueAfterRunId } : {}),
         });
@@ -1591,6 +1652,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       setSelectionLoading(null);
       setConversation(created);
       const { draft_revision: submittedDraftRevision, ...submissionPayload } = payload;
+      if (editing) acceptedEditRun.current = editing.runId;
       setPendingSubmit({
         id: crypto.randomUUID(),
         conversation_id: created.id,
@@ -1609,6 +1671,50 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         setSending(false);
       }
     }
+  }
+
+  function beginEdit(runId: string) {
+    if (rewindHold || !conversation) return;
+    const message = conversation.transcript.find(item => item.role === "user" && item.run_id === runId);
+    if (!message) return;
+    if (!preEditDraft.current) preEditDraft.current = { task, attachmentIds: [...attachmentIds] };
+    setEditing({ runId });
+    setEditToken(token => token + 1);
+    updateTask(message.content);
+    setAttachmentIds([...(message.attachment_ids ?? [])]);
+  }
+
+  function cancelEdit() {
+    const runId = editing?.runId;
+    const draft = preEditDraft.current;
+    preEditDraft.current = null;
+    acceptedEditRun.current = null;
+    setEditing(null);
+    if (draft) {
+      updateTask(draft.task);
+      setAttachmentIds(draft.attachmentIds);
+    }
+    if (runId) queueMicrotask(() => document.querySelector<HTMLButtonElement>(`[data-edit-run="${CSS.escape(runId)}"]`)?.focus());
+  }
+
+  function retryTurn(runId: string) {
+    if (rewindHold || !conversation || !interactionThreadId) return;
+    const message = conversation.transcript.find(item => item.role === "user" && item.run_id === runId);
+    if (!message) return;
+    setPendingSubmit({
+      id: crypto.randomUUID(),
+      conversation_id: conversation.id,
+      thread_id: interactionThreadId,
+      selection_generation: boundGeneration,
+      draft_revision: -1,
+      submitted_draft_revision: null,
+      ...chatExecutionConfiguration(),
+      task: message.content,
+      attachment_ids: message.attachment_ids ?? [],
+      document_asset_ids: message.attachment_ids ?? [],
+      rewind_source_run_id: runId,
+      rewind_mode: "retry",
+    });
   }
 
   function createDraftConversation(): Promise<ChatConversation> {
@@ -1950,7 +2056,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             {conversation?.project_path ? <p className="eyebrow">{currentArea}</p> : null}
             <h2>{conversation ? conversationTitle(conversation) : selectionLoading ? conversationTitle(selectionLoading) : props.restoringSelection ? "Opening conversation…" : "New conversation"}</h2>
           </div>
-          <div className="chat-header-actions">{conversation ? <MenuPopover label="Chat actions" align="end" placement="below" trigger={<Icon name="more" size={16} />} panelClassName="chat-actions-menu"><ChatHistoryActions exportsOnly conversation={conversation} disabled={runBusy || selectionBusy || sending} onConversationCreated={next => { cacheConversation(next); chooseConversation(next); }} onDeleted={removeConversation} onError={setMessage} /></MenuPopover> : null}<MenuPopover label="Conversation view" align="end" placement="below" trigger={<Icon name="tune" size={16} />}><CompactSwitch label="Reasoning and tools" checked={presentation.detailed_streams} description="Show returned reasoning and tool details." onChange={checked => { void api.updatePresentationSettings({ detailed_streams: checked }).then(saved => props.onPresentationChange?.(saved)).catch(fail); }} /></MenuPopover>
+          <div className="chat-header-actions">{conversation ? <MenuPopover label="Chat actions" align="end" placement="below" trigger={<Icon name="more" size={16} />} panelClassName="chat-actions-menu"><ChatHistoryActions conversation={conversation} onDeleted={removeConversation} onError={setMessage} /></MenuPopover> : null}<MenuPopover label="Conversation view" align="end" placement="below" trigger={<Icon name="tune" size={16} />}><CompactSwitch label="Reasoning and tools" checked={presentation.detailed_streams} description="Show returned reasoning and tool details." onChange={checked => { void api.updatePresentationSettings({ detailed_streams: checked }).then(saved => props.onPresentationChange?.(saved)).catch(fail); }} /></MenuPopover>
           <button type="button" className={`icon-button chat-rail-toggle${dockVisible ? " is-on" : ""}`} aria-pressed={dockVisible} aria-label={dockVisible ? "Close conversation rail" : "Open conversation rail"} title={!dockGeometry.canOpen ? "Widen window to open Files, Browser or Helpers" : helperActivity.conversationId === conversation?.id && helperActivity.active ? `${helperActivity.active} active helpers` : browserActive ? "Browser active" : dockVisible ? "Close dock" : "Files, Browser, Helpers"} onClick={() => {
             if (!dockGeometry.canOpen) { setMessage("Widen this window to open Files, Browser or Helpers beside the conversation."); return; }
             updateDockView({ open: !dockView.open });
@@ -1980,13 +2086,13 @@ export function ChatPanel(props: ChatPanelProps = {}) {
               renderAnswerActions={(nativeMessage, incomplete, answerText) => {
                 const saved = savedAnswer(conversation, nativeMessage.id, incomplete, answerText);
                 if (!saved) return null;
-                return <AnswerActions conversation={conversation} runId={saved.runId} answerText={saved.text} disabled={selectionBusy || sending} onError={setMessage} onConversationCreated={next => { cacheConversation(next); chooseConversation(next); }} />;
+                return <AnswerActions answerText={saved.text} />;
               }}
               renderMessageFooter={(nativeMessage) => {
                 const item = conversation.transcript.find(entry => entry.id === nativeMessage.id);
                 if (!item) return null;
                 const records = retainedAssets.records.filter(asset => item.role === "assistant" ? asset.source_run_id === item.run_id : item.attachment_ids?.includes(asset.id));
-                return <>{item.role === "user" && item.run_id ? <MessageTaskActions conversation={conversation} runId={item.run_id} task={item.content} disabled={runBusy || selectionBusy || sending} onCreated={next => { cacheConversation(next); chooseConversation(next); }} onError={setMessage} /> : null}{records.length ? <ChatRetainedFiles compact records={records} conversationId={conversation.id} currentRunId={item.run_id} currentRunStatus={conversation.current_run?.status} onReuse={ids => {
+                return <>{item.role === "user" && item.run_id ? <MessageTaskActions runId={item.run_id} held={rewindHold} onRetry={() => retryTurn(item.run_id!)} onEdit={() => beginEdit(item.run_id!)} /> : null}{records.length ? <ChatRetainedFiles compact records={records} conversationId={conversation.id} currentRunId={item.run_id} currentRunStatus={conversation.current_run?.status} onReuse={ids => {
                   draftRevision.current += 1;
                   setAttachmentIds(current => [...new Set([...current, ...ids])]);
                 }} /> : null}</>;
@@ -2009,18 +2115,20 @@ export function ChatPanel(props: ChatPanelProps = {}) {
               historicalRuns={historicalRuns}
               onRecoverRun={recoverRun}
               onConfigureSetup={configureCapability}
+              noteRewindResult={noteRewindResult}
             />
           ) : (
             transcript.map((item, index) => (
-              <article key={`${item.at}-${item.role}-${index}`} className={`bubble bubble-${item.role}`}>
+              <article key={`${item.at}-${item.role}-${index}`} className={`bubble bubble-${item.role}${item.role === "user" ? " bubble-user" : item.role === "assistant" ? " bubble-assistant" : ""}`} data-markdown-source={item.role === "assistant" ? item.content : undefined}>
                 <header>
                   <strong>{messageRoleLabel(item.role)}</strong>
                   <time>{formatWhen(item.at)}</time>
                 </header>
-                <p>{transcriptMessageContent(item)}</p>
+                {item.role === "user" ? <p className="user-message-text">{transcriptMessageContent(item)}</p> : <p>{transcriptMessageContent(item)}</p>}
+                {conversation && item.role === "user" && item.run_id ? <MessageTaskActions runId={item.run_id} held={rewindHold} onRetry={() => retryTurn(item.run_id!)} onEdit={() => beginEdit(item.run_id!)} /> : null}
                 {conversation && item.role === "assistant" ? (() => {
                   const saved = savedAnswer(conversation, item.id ?? undefined, false, item.content);
-                  return saved ? <AnswerActions conversation={conversation} runId={saved.runId} answerText={saved.text} disabled={selectionBusy || sending} onError={setMessage} onConversationCreated={next => { cacheConversation(next); chooseConversation(next); }} /> : null;
+                  return saved ? <AnswerActions answerText={saved.text} /> : null;
                 })() : null}
               </article>
             ))
@@ -2108,6 +2216,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             void sendTurn();
           }}
         >
+          {editing ? <div className="composer-queue-pause" role="status"><p>Editing an earlier message</p><button type="button" className="composer-edit-cancel" onClick={cancelEdit}>Cancel</button></div> : null}
           {conversation ? <ChatQueuePanel
             key={conversation.id}
             conversation={conversation}
@@ -2146,6 +2255,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
           <label>
             <span className="sr-only">Message</span>
             <textarea
+              ref={composerRef}
               value={task}
               onChange={(event) => updateComposer(event.target.value, event.target.selectionStart ?? event.target.value.length)}
               onKeyDown={(event) => {
@@ -2154,6 +2264,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
                   if (event.key === "Escape") { event.preventDefault(); closePicker(); return; }
                   if (event.key === "Enter" && pickerChoices[picker.highlighted]) { event.preventDefault(); selectComposerChoice(pickerChoices[picker.highlighted]); return; }
                 }
+                if (event.key === "Escape" && editing) { event.preventDefault(); cancelEdit(); return; }
                 if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                   event.preventDefault();
                   event.currentTarget.form?.requestSubmit();

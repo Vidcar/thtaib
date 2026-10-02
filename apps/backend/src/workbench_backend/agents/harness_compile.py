@@ -446,7 +446,8 @@ def graph_checkpoint_snapshot(agent: Any, thread_id: str | None, checkpoint_id: 
             code="checkpoint_resume_invalid",
             status_code=409,
         ) from exc
-    if snapshot is None:
+    if snapshot is None or snapshot.metadata is None or snapshot.created_at is None:
+        # get_state returns an empty snapshot instead of raising when the id is absent.
         raise HarnessError(
             "The requested checkpoint is unavailable.",
             code="checkpoint_resume_missing",

@@ -203,6 +203,7 @@ class HarnessService:
         self._model_clients: dict[str, httpx.Client] = {}
         self._adapter_models: dict[str, Any] = {}
         self._start_cancel_guards: dict[tuple[str | None, str | None], threading.Event] = {}
+        self._rewind_kept_messages: dict[str, list] = {}
         self._lock = threading.RLock()
         self._updates = threading.Condition(self._lock)
         self._startup_reconciled = False
@@ -739,7 +740,10 @@ class HarnessService:
                 input_message_id = getattr(run, "input_message_id", None)
                 if input_message_id:
                     user_message["id"] = input_message_id
-                payload = {"messages": [user_message],
+                messages: list[Any] = [user_message]
+                if run.rewind_clear_messages:
+                    messages = [RemoveMessage(id=REMOVE_ALL_MESSAGES), user_message]
+                payload = {"messages": messages,
                     "skills_metadata": None,
                     "rubric": (run.review.criteria.strip() or run.task) if run.review.enabled else "",
                     **({"structured_response": None} if run.output_schema is not None else {})}
@@ -2150,8 +2154,9 @@ def _invoke_config(run: AgentRun) -> dict[str, Any]:
     """Thread id is required so LangGraph can write checkpoints.sqlite."""
 
     config: dict[str, Any] = {"configurable": {"thread_id": run.thread_id or run.id}}
-    if run.resume_checkpoint_id:
-        config["configurable"]["checkpoint_id"] = run.resume_checkpoint_id
+    checkpoint_id = run.resume_checkpoint_id or run.fork_checkpoint_id
+    if checkpoint_id:
+        config["configurable"]["checkpoint_id"] = checkpoint_id
     if run.budgets is not None and run.budgets.max_steps is not None:
         config["recursion_limit"] = run.budgets.max_steps
     return config

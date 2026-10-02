@@ -1,324 +1,45 @@
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 
 import "./ChatHistoryActions.css";
-import {
-  chatHistoryActionsApi,
-  type ChatBranchMode,
-  type ChatReplyActions,
-  type ConversationDeletePreview,
-  type ConversationExportPayload,
-} from "./chatHistoryActionsApi";
+import { DeleteChatDialog } from "./DeleteChatDialog";
 import { conversationTitle, formatWhen } from "./display";
 import { errorMessage } from "./errors";
-import { Icon, type IconName } from "./Icon";
+import { Icon } from "./Icon";
 import type { ChatConversation } from "./types";
 
 export interface ChatHistoryActionsProps {
   conversation: ChatConversation;
-  onConversationCreated: (next: ChatConversation) => void;
   onDeleted: (id: string) => void;
   onError: (message: string) => void;
-  disabled?: boolean;
-  exportsOnly?: boolean;
 }
 
-type BusyAction = "branch" | "retry" | "regenerate" | "export" | "preview-delete" | "delete" | null;
+const TRANSCRIPT_NOTE = "This file is a transcript. It is not a restore.";
+const DOWNLOAD_LABEL = "Download a Markdown transcript. It is not a restore.";
+const DELETE_LABEL = "Delete this chat. Project files and model files stay.";
 
-interface ActionOption {
-  runId: string;
-  label: string;
-  detail: string;
-  task: string;
-}
-
-export function ChatHistoryActions({
-  conversation,
-  onConversationCreated,
-  onDeleted,
-  onError,
-  disabled = false,
-  exportsOnly = false,
-}: ChatHistoryActionsProps) {
-  const options = useMemo(() => actionOptions(conversation), [conversation]);
-  const [selectedRunId, setSelectedRunId] = useState<string>(() => options.at(-1)?.runId ?? "");
-  const [actions, setActions] = useState<ChatReplyActions | null>(null);
-  const [actionsError, setActionsError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<BusyAction>(null);
-  const [deletePreview, setDeletePreview] = useState<ConversationDeletePreview | null>(null);
-  const [editedTask, setEditedTask] = useState("");
-
-  useEffect(() => {
-    const fallback = options.at(-1)?.runId ?? "";
-    if (!selectedRunId || !options.some((item) => item.runId === selectedRunId)) {
-      setSelectedRunId(fallback);
-    }
-  }, [options, selectedRunId]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setDeletePreview(null);
-    if (!selectedRunId) {
-      setActions(null);
-      setActionsError(null);
-      return;
-    }
-    setActions(null);
-    setActionsError(null);
-    chatHistoryActionsApi.replyActions(conversation.id, selectedRunId)
-      .then((next) => {
-        if (!cancelled) {
-          setActions(next);
-        }
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) {
-          setActionsError(errorMessage(error));
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [conversation.id, conversation.current_run_id, conversation.current_run?.status, selectedRunId]);
-
-  const selectedOption = options.find((item) => item.runId === selectedRunId) ?? null;
-  const blocked = disabled || busy !== null;
-
-  async function runAction(mode: ChatBranchMode): Promise<void> {
-    if (!selectedRunId) {
-      return;
-    }
-    if (mode === "retry") {
-      const accepted = window.confirm(
-        "Retry task may repeat file changes, shell commands or other external effects from this point. Continue only if repeating those effects is acceptable.",
-      );
-      if (!accepted) {
-        return;
-      }
-    }
-    const trimmedEdit = editedTask.trim();
-    if (mode === "edit" && !trimmedEdit) {
-      onError("Enter the edited task before creating an edit branch.");
-      return;
-    }
-    if (mode === "edit") {
-      const accepted = window.confirm("Create a retry branch with your edited task? This prepares the new attempt without changing the original conversation.");
-      if (!accepted) {
-        return;
-      }
-    }
-    const key = mode === "regenerate" ? "regenerate" : mode === "retry" ? "retry" : "branch";
-    setBusy(key);
+export function ChatHistoryActions({ conversation, onDeleted, onError }: ChatHistoryActionsProps) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  function download(): void {
     try {
-      const next = await chatHistoryActionsApi.createBranch(conversation.id, selectedRunId, mode, mode === "retry" || mode === "edit", mode === "edit" ? trimmedEdit : undefined);
-      onConversationCreated(next);
+      const root = document.querySelector(".transcript");
+      downloadText(transcriptMarkdown(conversation, root), `${safeFilename(conversationTitle(conversation))}.md`, "text/markdown");
     } catch (error) {
       onError(errorMessage(error));
-    } finally {
-      setBusy(null);
     }
   }
-
-  async function exportConversation(): Promise<void> {
-    setBusy("export");
-    try {
-      const payload = await chatHistoryActionsApi.exportConversation(conversation.id);
-      downloadText(readableMarkdownExport(payload), `${safeFilename(conversationTitle(conversation))}.md`, "text/markdown");
-    } catch (error) {
-      onError(errorMessage(error));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function previewDelete(): Promise<void> {
-    setBusy("preview-delete");
-    try {
-      setDeletePreview(await chatHistoryActionsApi.deletePreview(conversation.id));
-    } catch (error) {
-      onError(errorMessage(error));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function confirmDelete(): Promise<void> {
-    if (!deletePreview) {
-      return;
-    }
-    const confirmed = window.confirm(
-      `Delete ${conversationTitle(conversation)} from Local AI Workbench? Project files, model files and backups are retained.`,
-    );
-    if (!confirmed) {
-      return;
-    }
-    setBusy("delete");
-    try {
-      const result = await chatHistoryActionsApi.deleteConversation(conversation.id, true);
-      if (!result.can_delete && result.blockers.length) {
-        setDeletePreview(result);
-        onError("Conversation still has live work and cannot be deleted yet.");
-        return;
-      }
-      onDeleted(conversation.id);
-    } catch (error) {
-      onError(errorMessage(error));
-    } finally {
-      setBusy(null);
-    }
-  }
-
   return (
     <section className="chat-history-actions" aria-label="Conversation history actions">
-      {!exportsOnly ? <><div className="chat-history-actions-head">
-        <div>
-          <h3>Chat actions</h3>
-        </div>
-        <span className="chat-history-actions-badge">{options.length ? `${options.length} saved ${options.length === 1 ? "turn" : "turns"}` : "No saved turns"}</span>
-      </div>
-
-      <label className="chat-history-actions-field">
-        <span>Saved checkpoint</span>
-        <select value={selectedRunId} disabled={blocked || options.length === 0} onChange={(event) => setSelectedRunId(event.target.value)}>
-          {options.length === 0 ? <option value="">No saved turns yet</option> : null}
-          {options.map((reply) => (
-            <option key={reply.runId} value={reply.runId}>{reply.label}</option>
-          ))}
-        </select>
-      </label>
-      {selectedOption ? <p className="chat-history-actions-hint">{selectedOption.detail}</p> : <p className="chat-history-actions-hint">Actions become available after a saved turn has a backend action boundary.</p>}
-      {actionsError ? <p className="chat-history-actions-error">Could not load checkpoint actions: {actionsError}</p> : null}
-      <label className="chat-history-actions-field">
-        <span>Edit task and branch</span>
-        <textarea
-          value={editedTask}
-          disabled={blocked || !selectedRunId || !actions?.retry_available}
-          rows={3}
-          placeholder={selectedOption?.task || "Write the revised task for a retry branch."}
-          onChange={(event) => setEditedTask(event.target.value)}
-        />
-      </label>
-
-      </> : null}
-      <div className="chat-history-action-grid">
-        {!exportsOnly ? <>
-        <HistoryActionButton
-          icon="activity"
-          title="Retry task"
-          description="Repeat the task from the prior safe boundary after confirmation. Effects may repeat."
-          disabled={blocked || !selectedRunId || !actions?.retry_available}
-          unavailableReason={actions?.retry_reason ?? null}
-          busy={busy === "retry"}
-          onClick={() => void runAction("retry")}
-        />
-        <HistoryActionButton
-          icon="edit"
-          title="Edit task branch"
-          description="Prepare a branch with the revised task text. The original stays unchanged."
-          disabled={blocked || !selectedRunId || !actions?.retry_available || !editedTask.trim()}
-          unavailableReason={actions?.retry_reason ?? null}
-          busy={busy === "retry"}
-          onClick={() => void runAction("edit")}
-        />
-        </> : null}
-        <HistoryActionButton
-          icon="files"
-          title="Readable export"
-          description="Download a readable Markdown transcript. It is not a restore backup."
-          disabled={blocked}
-          unavailableReason={null}
-          busy={busy === "export"}
-          onClick={() => void exportConversation()}
-        />
-        <HistoryActionButton
-          icon="panel"
-          title="Advanced JSON export"
-          description="Download the structured export for troubleshooting or support."
-          disabled={blocked}
-          unavailableReason={null}
-          busy={busy === "export"}
-          onClick={() => void exportJsonConversation(conversation)}
-        />
-        <HistoryActionButton
-          icon="close"
-          title="Delete"
-          description="Review dependent runs, assets, checkpoints and blockers before deleting application-owned records."
-          disabled={blocked}
-          unavailableReason={null}
-          busy={busy === "preview-delete"}
-          onClick={() => void previewDelete()}
-        />
-      </div>
-
-      {deletePreview ? (
-        <div className={deletePreview.can_delete ? "chat-delete-preview" : "chat-delete-preview blocked"}>
-          <div>
-            <strong>{deletePreview.can_delete ? "Ready to delete" : "Delete blocked"}</strong>
-            <p>{deleteSummary(deletePreview)}</p>
-            <p className="chat-history-actions-hint">{deletePreview.note}</p>
-          </div>
-          {deletePreview.blockers.length ? (
-            <ul>
-              {deletePreview.blockers.map((blocker, index) => (
-                <li key={`${blocker.kind ?? "blocker"}-${blocker.id ?? index}`}>{blocker.kind ?? "blocker"} {blocker.id ?? "unknown"} is {blocker.status ?? "active"}</li>
-              ))}
-            </ul>
-          ) : null}
-          <button type="button" className="chat-history-danger" disabled={blocked || !deletePreview.can_delete} onClick={() => void confirmDelete()}>
-            {busy === "delete" ? "Deleting..." : "Delete conversation"}
-          </button>
-        </div>
-      ) : null}
+      <button type="button" className="menu-action" title={DOWNLOAD_LABEL} onClick={download}>
+        <Icon name="files" size={18} />
+        <span>Download transcript<span className="sr-only">{DOWNLOAD_LABEL}</span></span>
+      </button>
+      <button type="button" className="menu-action" title={DELETE_LABEL} onClick={() => setConfirmDelete(true)}>
+        <Icon name="close" size={18} />
+        <span>Delete<span className="sr-only">{DELETE_LABEL}</span></span>
+      </button>
+      {confirmDelete ? <DeleteChatDialog conversation={conversation} onClose={() => setConfirmDelete(false)} onDeleted={onDeleted} /> : null}
     </section>
   );
-}
-
-function HistoryActionButton(props: {
-  icon: IconName;
-  title: string;
-  description: string;
-  disabled: boolean;
-  unavailableReason: string | null;
-  busy: boolean;
-  onClick: () => void;
-}) {
-  const disabled = props.disabled || props.busy;
-  return (
-    <button type="button" className="chat-history-action" disabled={disabled} onClick={props.onClick} title={props.unavailableReason ?? props.description}>
-      <Icon name={props.icon} size={18} />
-      <span>
-        <strong>{props.busy ? "Working..." : props.title}</strong>
-        <span className="sr-only">{props.unavailableReason ?? props.description}</span>
-      </span>
-    </button>
-  );
-}
-
-async function exportJsonConversation(conversation: ChatConversation): Promise<void> {
-  const payload = await chatHistoryActionsApi.exportConversation(conversation.id);
-  downloadText(JSON.stringify(payload, null, 2), `${safeFilename(conversationTitle(conversation))}-structured.json`, "application/json");
-}
-
-function actionOptions(conversation: ChatConversation): ActionOption[] {
-  return conversation.run_ids.map((runId) => {
-    const user = conversation.transcript.find((message) => message.role === "user" && message.run_id === runId);
-    const assistant = conversation.transcript.find((message) => message.role === "assistant" && message.run_id === runId);
-    const when = assistant?.at ?? user?.at ?? conversation.updated_at;
-    const text = assistant?.content || user?.content || "Saved turn";
-    return {
-      runId,
-      label: `${formatWhen(when)} - ${firstLine(text)}`,
-      detail: `${assistant ? "Reply saved" : "No assistant reply saved"} - ${formatWhen(when)}`,
-      task: user?.content ?? "",
-    };
-  }).filter((item, index, all) => all.findIndex((candidate) => candidate.runId === item.runId) === index);
-}
-
-function firstLine(value: string): string {
-  const line = value.split(/\r?\n/).find((item) => item.trim());
-  if (!line) {
-    return "Saved assistant reply";
-  }
-  return line.length > 96 ? `${line.slice(0, 95)}...` : line;
 }
 
 function safeFilename(title: string): string {
@@ -338,52 +59,91 @@ function downloadText(text: string, filename: string, contentType: string): void
   URL.revokeObjectURL(url);
 }
 
-function readableMarkdownExport(payload: ConversationExportPayload): string {
-  const conversation = payload.conversation as {
-    title?: string | null;
-    transcript?: Array<{ role?: string; content?: string; at?: string; run_id?: string | null }>;
-    area_label?: string | null;
-    area_project_path?: string | null;
-  };
-  const title = conversation.title?.trim() || "Conversation export";
-  const lines = [
-    `# ${title}`,
-    "",
-    `Exported: ${formatWhen(payload.exported_at)}`,
-    conversation.area_label || conversation.area_project_path ? `Area: ${conversation.area_label || conversation.area_project_path}` : "",
-    "",
-    "> Readable export only. It is not a restore backup and does not include model files or project source files.",
-    "",
-  ].filter((line) => line !== "");
-  for (const message of conversation.transcript ?? []) {
-    const speaker = message.role === "assistant" ? "Assistant" : message.role === "user" ? "You" : "System";
-    lines.push(`## ${speaker}${message.at ? ` - ${formatWhen(message.at)}` : ""}`);
-    lines.push("");
-    lines.push(message.content?.trim() || "_No text content._");
+function transcriptMarkdown(conversation: ChatConversation, root: Element | null): string {
+  const lines = [`# ${conversationTitle(conversation)}`, "", `Exported: ${formatWhen(new Date().toISOString())}`];
+  const area = conversation.area_label || conversation.area_project_path;
+  if (area) lines.push(`Area: ${area}`);
+  lines.push("", TRANSCRIPT_NOTE, "");
+  const retained: string[] = [];
+  let sawMessage = false;
+  if (root) {
+    for (const child of Array.from(root.children)) sawMessage = walkTranscript(child, lines, retained) || sawMessage;
+  }
+  if (!sawMessage) lines.push("_No messages were saved in this conversation._", "");
+  if (retained.length) {
+    lines.push("", "## Retained files", "");
+    for (const filename of retained) lines.push(`- ${filename}`);
     lines.push("");
   }
-  if (!(conversation.transcript ?? []).length) {
-    lines.push("_No messages were saved in this conversation._");
-    lines.push("");
-  }
-  if (payload.retained_assets.length) {
-    lines.push("## Retained files");
-    lines.push("");
-    for (const asset of payload.retained_assets) {
-      const filename = typeof asset.filename === "string" ? asset.filename : "retained file";
-      lines.push(`- ${filename}`);
-    }
-    lines.push("");
-  }
-  return `${lines.join("\n").trim()}\n`;
+  return `${lines.join("\n").trimEnd()}\n`;
 }
 
-function deleteSummary(preview: ConversationDeletePreview): string {
-  const pieces = [
-    `${preview.affected_runs.length} run${preview.affected_runs.length === 1 ? "" : "s"}`,
-    `${preview.affected_assets.length} retained asset${preview.affected_assets.length === 1 ? "" : "s"}`,
-    `${preview.checkpoint_threads_deleted.length} checkpoint thread${preview.checkpoint_threads_deleted.length === 1 ? "" : "s"}`,
-  ];
-  const retained = preview.retained_runs.length + preview.retained_assets.length + preview.checkpoint_threads_retained.length;
-  return `${pieces.join(", ")} will be removed. ${retained} shared ${retained === 1 ? "dependency is" : "dependencies are"} retained. Project files and model files are retained.`;
+function walkTranscript(node: Element, lines: string[], retained: string[]): boolean {
+  if (skipped(node)) return false;
+  if (node.matches(".chat-retained-files")) {
+    collectRetained(node, retained);
+    return false;
+  }
+  if (node.matches(".helper-delegation")) {
+    lines.push(helperLine(node));
+    return false;
+  }
+  if (node.matches("ol") && node.getAttribute("aria-label") === "Todo list") {
+    for (const item of Array.from(node.querySelectorAll("li"))) lines.push(todoLine(item));
+    return false;
+  }
+  if (node.matches(".activity-line")) {
+    const text = node.textContent?.trim() ?? "";
+    if (text) lines.push(text);
+    return false;
+  }
+  if (node.matches("summary")) {
+    const line = node.querySelector(".activity-line");
+    const text = line?.textContent?.trim() ?? "";
+    if (text) lines.push(text);
+    return false;
+  }
+  if (node.matches("article") && node.classList.contains("bubble-user")) {
+    lines.push("## You", "", node.querySelector(".user-message-text")?.textContent ?? "", "");
+    let saw = true;
+    for (const child of Array.from(node.children)) saw = walkTranscript(child, lines, retained) || saw;
+    return saw;
+  }
+  if (node.matches("article") && node.classList.contains("bubble-assistant")) {
+    lines.push("## Assistant", "", node.getAttribute("data-markdown-source") ?? "", "");
+    let saw = true;
+    for (const child of Array.from(node.children)) saw = walkTranscript(child, lines, retained) || saw;
+    return saw;
+  }
+  let saw = false;
+  for (const child of Array.from(node.children)) saw = walkTranscript(child, lines, retained) || saw;
+  return saw;
+}
+
+function skipped(node: Element): boolean {
+  return node.matches(".message-reasoning, .tool-call-details, .tool-raw-arguments, .tool-call-error, .todo-arguments, .tool-call-permission, .message-attachments, .answer-actions, .message-task-actions, .activity-toggle, .tool-call-progress");
+}
+
+function helperLine(node: Element): string {
+  const name = node.querySelector(".helper-delegation-head strong")?.textContent?.trim() ?? "";
+  const status = node.querySelector(".helper-delegation-head span")?.textContent?.trim() ?? "";
+  const request = node.querySelector(".helper-delegation-request")?.textContent?.trim() ?? "";
+  return [name, status, request].filter(Boolean).join(" ");
+}
+
+function todoLine(item: Element): string {
+  const mark = item.querySelector(".todo-status")?.textContent?.trim() ?? "";
+  const rest: string[] = [];
+  for (const child of Array.from(item.childNodes)) {
+    if (child.nodeType === 1 && (child as Element).matches(".todo-status")) continue;
+    rest.push(child.textContent ?? "");
+  }
+  return `${mark} ${rest.join("").trim()}`.trim();
+}
+
+function collectRetained(node: Element, retained: string[]): void {
+  for (const name of Array.from(node.querySelectorAll(".retained-file-name span"))) {
+    const filename = name.textContent?.trim() ?? "";
+    if (filename && !retained.includes(filename)) retained.push(filename);
+  }
 }

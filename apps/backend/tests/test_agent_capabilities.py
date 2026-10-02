@@ -476,6 +476,41 @@ class AgentCapabilitiesTests(unittest.TestCase):
             self.assertEqual(proposal.status, 'pending')
             self.assertIsNone(proposal.committed_version_id)
 
+    def test_approval_does_not_write_memory_and_accept_loads_official_memory(self):
+        from workbench_backend.agents.harness_compile import create_deep_agent
+        enabled = self.client.put('/v1/knowledge/automatic-save-policy', json={'scope': 'user', 'automatic_agent_writes': True})
+        self.assertEqual(enabled.status_code, 200, enabled.text)
+        project = self.project()
+        model = ScriptedChatModel([
+            call('propose_memory', {'content': 'A proposed preference', 'scope': 'user'}, 'memory'),
+            call('write_file', {'file_path': 'note.txt', 'content': 'ok'}, 'write'),
+            AIMessage(content='Done'),
+        ])
+        self.harness(lambda *_: model)
+        run = self.start(project_id=project['id'], presented_tools=['propose_memory', 'write_file'], approval_mode='ask')
+        paused = approval_fixtures.wait_for_interrupt(self.client, run['id'])
+        self.post(f"/v1/agent-runs/{run['id']}/interrupt-decision", approval_fixtures.run_direct_interrupt_decision(paused, 'approve'))
+        finished = wait_for_run(self.client, run['id'])
+        self.assertEqual(finished['status'], 'completed', finished.get('error'))
+        proposal, = self.app.state.knowledge.list_proposals(run_id=run['id'])
+        self.assertEqual(proposal.status, 'pending')
+        self.assertEqual(self.app.state.knowledge.list_entries(), [])
+        accepted = self.post(f'/v1/knowledge/proposals/{proposal.id}/review', {'decision': 'accept'})
+        version_id = accepted['committed_version_id']
+        entry_id = accepted['entry_id']
+        seen: dict = {}
+        def spy(*args, **kwargs):
+            if kwargs.get('memory'):
+                seen['memory'] = list(kwargs['memory'])
+            return create_deep_agent(*args, **kwargs)
+        chat = self.post('/v1/chat/conversations', {'deployment_id': self.deployment.id, 'memory_version_refs': [version_id]})
+        self.harness(lambda *_: ScriptedChatModel([AIMessage(content='Loaded')]))
+        with patch('workbench_backend.agents.harness_compile.create_deep_agent', spy):
+            started = self.post(f"/v1/chat/conversations/{chat['id']}/start", {'task': 'Use the accepted memory', 'presented_tools': [], 'memory_version_refs': [version_id], 'input_policy': {'version': 1, 'reference_loading': {entry_id: 'always'}}})
+            loaded = wait_for_run(self.client, started['current_run_id'])
+        self.assertEqual(loaded['status'], 'completed', loaded.get('error'))
+        self.assertTrue(seen.get('memory'), seen)
+
     def test_cancel_child_approval_never_writes_and_settles_child(self):
         project = self.project()
         helper = self.setup(presented_tools=["write_file"])

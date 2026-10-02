@@ -39,7 +39,7 @@ def list_agent_runs(
 
 @router.post("/agent-runs")
 def start_agent_run(request: Request, body: AgentStartRequest) -> object:
-    if body.resume_checkpoint_id:
+    if body.resume_checkpoint_id or body.fork_checkpoint_id or body.rewind_clear_messages:
         raise HTTPException(status_code=400, detail="Checkpoint resume is an internal branch operation.")
     return get_harness(request).start(body)
 

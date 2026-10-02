@@ -102,6 +102,9 @@
 .composer-picker-list > button.is-highlighted, .composer-picker-list > button:hover {background: var(--hover); border-radius: var(--radius-control);}
 .message-task-actions {display: flex; justify-content: flex-end; gap: var(--space-tight); margin-top: var(--space-tight);}
 .message-task-actions .icon-button, .message-task-actions .menu-popover-trigger {padding: var(--pad-tight); width: var(--control-height); height: var(--control-height); border: 0; background: transparent; color: var(--muted);}
+.message-task-actions .icon-button[aria-disabled="true"] {opacity: var(--fade-disabled); cursor: not-allowed;}
+.rewind-tooltip {position: fixed; z-index: 80; max-width: 240px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-raised); color: var(--text); font-size: 11px; pointer-events: none;}
+.composer-edit-cancel {margin-left: auto; min-height: 30px;}
 .bubble-user {width: fit-content; max-width: min(var(--layout-message, 46rem), 80%); padding: var(--pad-compact) var(--pad-card); border-radius: var(--radius-card); background: var(--bg-panel);}
 .bubble-assistant {max-width: var(--layout-reading, 46rem); width: 100%; padding-inline: 0; border: 0; background: transparent;}
 .combined-action:hover:not(:disabled), .combined-action:focus-visible {background: var(--accent); color: var(--bg);}

@@ -282,11 +282,13 @@ class ChatDocumentPersistenceTests(unittest.TestCase):
         previous = self.app.state.harness.get_run(read["current_run"]["id"])
         self.assertEqual(previous.retained_asset_ids, [asset.id])
         branched = self.client.post(f'/v1/chat/conversations/{chat["id"]}/branches', json={"source_run_id": previous.id, "mode": "continue"})
-        self.assertEqual(branched.status_code, 200, branched.text)
-        branch = branched.json()
-        self.assertEqual(branch["document_asset_ids"], [asset.id])
-        inherited, _ = service._load_content(asset.id, session_id=branch["id"], project_path=branch["project_path"])
+        self.assertEqual(branched.status_code, 409, branched.text)
+        self.assertEqual(branched.json()["code"], "branch_unavailable")
+        same = self.client.get(f'/v1/chat/conversations/{chat["id"]}').json()
+        self.assertEqual(same["id"], chat["id"])
+        inherited, _ = service._load_content(asset.id, session_id=chat["id"], project_path=same["project_path"])
         self.assertEqual(inherited.sha256, asset.sha256)
+        self.assertEqual(len(self.client.get("/v1/chat/conversations").json()), 1)
 
     def test_queued_documents_and_memory_keep_submitted_selection(self):
         memory = self.client.post('/v1/knowledge/entries', json={"scope": "user", "kind": "memory", "content": "Version one"}).json()

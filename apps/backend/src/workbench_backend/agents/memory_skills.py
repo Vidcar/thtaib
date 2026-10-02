@@ -60,7 +60,6 @@ Only tools listed in this request are available. When tools are off, answer from
 the supplied information and do not emit tool-call markup.
 Durable memory belongs to Workbench Knowledge. If propose_memory is available,
 use it to suggest a change for human review; a pending proposal is not saved.
-Automatic saving requires the backend's explicit policy for that exact scope.
 Editing files under /memories changes derived scratch only and never saves or
 updates a durable Knowledge version. Never save credentials in memory.
 """
