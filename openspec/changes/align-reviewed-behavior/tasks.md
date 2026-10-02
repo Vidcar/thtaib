@@ -19,12 +19,12 @@
 
 ## 3. Permissions, windows, and file order
 
-- [ ] 3.1 Show one card the first time This computer is used in a chat, including Full access, store the resolved starting folder, and verify an Ask test pauses later commands unless the exact command and folder match, that another chat's Always allow does not skip that first card, and that Reject does not confirm This computer.
-- [ ] 3.2 Keep the standing project-edit grant until revoked, always excluding `.git`, starting with secret files excluded, and excluding delete, and verify an excluded-file card can allow that one edit without growing the grant, and that Approve once, Allow for this session, and Always allow each allow only that edit so a later identical edit pauses again.
-- [ ] 3.3 Let Delete, when switched on, remove `.git` or a secret file with no card in Full access, still refusing the project root, an escaping link, and a tree too large to inspect, and verify that test.
-- [ ] 3.4 Replace the project-wide file lock with per-file order, and verify two writes to different files proceed while a second write to the same file waits, and the waiter does not block the writer.
-- [ ] 3.5 Hide and refuse the app's own windows and elevated windows for One window, and verify a message still sends before a window is picked.
-- [ ] 3.6 Keep helpers to the shared ticks, the parent's window, and the same starting folder, and verify a test that a helper cannot turn on a tool the parent does not have.
+- [x] 3.1 Show one card the first time This computer is used in a chat, including Full access, store the resolved starting folder, and verify an Ask test pauses later commands unless the exact command and folder match, that another chat's Always allow does not skip that first card, and that Reject does not confirm This computer.
+- [x] 3.2 Keep the standing project-edit grant until revoked, always excluding `.git`, starting with secret files excluded, and excluding delete, and verify an excluded-file card can allow that one edit without growing the grant, and that Approve once, Allow for this session, and Always allow each allow only that edit so a later identical edit pauses again.
+- [x] 3.3 Let Delete, when switched on, remove `.git` or a secret file with no card in Full access, still refusing the project root, an escaping link, and a tree too large to inspect, and verify that test.
+- [x] 3.4 Replace the project-wide file lock with per-file order, and verify two writes to different files proceed while a second write to the same file waits, and the waiter does not block the writer.
+- [x] 3.5 Hide and refuse the app's own windows and elevated windows for One window, and verify a message still sends before a window is picked.
+- [x] 3.6 Keep helpers to the shared ticks, the parent's window, and the same starting folder, and verify a test that a helper cannot turn on a tool the parent does not have.
 
 ## 4. Rewind, transcript, and memory
 
