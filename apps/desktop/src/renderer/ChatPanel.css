@@ -109,7 +109,7 @@
 .bubble-assistant {max-width: var(--layout-reading, 46rem); width: 100%; padding-inline: 0; border: 0; background: transparent;}
 .combined-action:hover:not(:disabled), .combined-action:focus-visible {background: var(--accent); color: var(--bg);}
 .chat-actions-menu {width: min(360px, calc(100vw - 24px));}
-.chat-actions-menu .chat-history-actions {position: static; padding: 0; border: 0; background: transparent; box-shadow: none;}
+.chat-actions-menu .chat-history-actions {position: static; padding: 0; border: 0; background: transparent; box-shadow: none; gap: var(--space-tight);}
 @container chat-workspace (max-width: 650px) { .compose .chat-agent-label {max-width: 7rem;} .compose .chat-model-controls-model {max-width: 8rem;} .compose > .actions {gap: var(--space-tight);} }
 @container chat-workspace (max-width: 500px) { .compose > .actions {flex-wrap: wrap;} .compose .composer-spacer {min-width: 8px;} }
 .chat-header .icon-button {border: none; background: transparent; border-radius: var(--radius-control);}
@@ -217,7 +217,7 @@
 .chat-files-panel > header {display: flex; align-items: center; gap: var(--space-tight); margin-bottom: var(--space-compact);}
 .chat-files-panel > header h3 {flex: 1; margin: 0;}
 .chat-files-panel .packet03-panel {padding: 0;}
-.chat-history-actions {padding: 0; border: 0; background: transparent; gap: var(--space-compact);}
+.chat-history-actions {padding: 0; border: 0; background: transparent; gap: var(--space-tight);}
 .chat-main .chat-run-details {border: 0; border-radius: var(--radius-control); padding: var(--pad-tight) var(--pad-compact); margin: 0 var(--space-section) var(--space-tight); background: transparent; font-size: var(--text-small);}
 .chat-main .chat-run-details > summary {font-size: var(--text-small); padding: var(--pad-tight) 0;}
 .message-reasoning, .message-tools {border: 0; background: transparent; margin: var(--space-tight) 0 var(--space-compact); padding: 0; color: var(--muted); font-size: var(--text-body);}
@@ -399,3 +399,12 @@
 .run-configuration-controls {display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-compact); grid-column: 1 / -1;}
 .run-failure { padding: var(--pad-compact); border-left: var(--line-strong) solid var(--danger); background: color-mix(in srgb, var(--danger) var(--tint-quiet), transparent); border-radius: var(--radius-control); }
 .run-failure p { white-space: pre-wrap; overflow-wrap: anywhere; }
+@container chat-workspace (max-width: 860px) {
+  .chat-header h2 {max-width: 48vw;}
+}
+@container chat-workspace (max-width: 760px) {
+  .chat-header {padding: var(--pad-compact) var(--pad-card);}
+  .chat-main .transcript {padding: var(--pad-compact) var(--pad-card) var(--pad-section);}
+  .chat-header h2 {max-width: 44vw;}
+  .chat-workspace > .compose {width: calc(100% - 24px); margin-bottom: var(--space-compact);}
+}

@@ -24,7 +24,7 @@ import { ChatDockContext } from "./chatDockContext";
 import { packet03Api, packet03Request } from "./packet03Api";
 import { ChatModelControls } from "./ChatModelControls";
 import { HelperRail, helperEntries, helperIsActive } from "./HelperRail";
-import { ChatMeasurements, publishLiveMeasurement } from "./ChatMeasurements";
+import { ChatMeasurements, publishLiveMeasurement, readLiveMeasurement, useLiveMeasurement } from "./ChatMeasurements";
 import { AgentInputs } from "./AgentInputs";
 import { scopedSetupConfiguration } from "./SetupConfigurationEditor";
 import type { AgentInputPolicy, CapabilitySetupRequest } from "./agentInputPolicy";
@@ -966,6 +966,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const preEditDraft = useRef<{ task: string; attachmentIds: string[] } | null>(null);
   const acceptedEditRun = useRef<string | null>(null);
   const keptRetryEdit = useRef<{ sourceRunId: string; inputId: string } | null>(null);
+  const rewindGuard = useRef({ hold: null as string | null, ownerKey: "", runId: "" });
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const noteRewindResult = useCallback((pending: PendingChatSubmit, accepted: boolean) => {
     if (pending.rewind_mode === "edit" && !accepted && acceptedEditRun.current === pending.rewind_source_run_id) acceptedEditRun.current = null;
@@ -1415,12 +1416,18 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const hasPendingCancelInput = Boolean(conversation?.pending_cancel_input_ids?.length);
   const currentRunLive = Boolean(conversation?.current_run && isAgentRunLive(conversation.current_run.status));
   const awaitingRunAdmission = Boolean(pendingSubmit && !currentRunLive);
-  const runBusy = currentRunLive || Boolean(pendingSubmit) || hasPendingCancelInput || Boolean(conversation?.current_run?.finalization_phase);
-  const rewindHold = currentRunLive || Boolean(conversation?.current_run?.finalization_phase) || hasPendingCancelInput
+  const measurementOwnerKey = JSON.stringify([conversation?.id, interactionThreadId, boundGeneration]);
+  const publishedMeasurement = useLiveMeasurement();
+  const measuredRun = publishedMeasurement && conversation?.current_run && publishedMeasurement.ownerKey === measurementOwnerKey && publishedMeasurement.runId === conversation.current_run.id ? publishedMeasurement : null;
+  // The store can still say this run is generating after the conversation record has settled.
+  const measuredTurnLive = Boolean(measuredRun && isAgentRunLive(measuredRun.status));
+  const runBusy = currentRunLive || measuredTurnLive || Boolean(pendingSubmit) || hasPendingCancelInput || Boolean(conversation?.current_run?.finalization_phase);
+  const rewindHold = currentRunLive || measuredTurnLive || Boolean(conversation?.current_run?.finalization_phase) || hasPendingCancelInput
     ? "Wait until this turn finishes"
     : selectionBusy || sending || awaitingRunAdmission
       ? "Wait until this chat is ready"
       : null;
+  rewindGuard.current = { hold: rewindHold, ownerKey: measurementOwnerKey, runId: conversation?.current_run?.id ?? "" };
   const pendingSubmissionActive = Boolean(
     pendingSubmit &&
     conversation?.id === pendingSubmit.conversation_id &&
@@ -1700,8 +1707,15 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     }
   }
 
+  function rewindBlocked(): boolean {
+    if (rewindGuard.current.hold) return true;
+    const published = readLiveMeasurement();
+    const guard = rewindGuard.current;
+    return Boolean(published && published.ownerKey === guard.ownerKey && published.runId && published.runId === guard.runId && isAgentRunLive(published.status));
+  }
+
   function beginEdit(runId: string) {
-    if (rewindHold || !conversation) return;
+    if (rewindBlocked() || !conversation) return;
     const message = conversation.transcript.find(item => item.role === "user" && item.run_id === runId);
     if (!message) return;
     if (!preEditDraft.current) preEditDraft.current = { task, attachmentIds: [...attachmentIds] };
@@ -1726,7 +1740,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }
 
   function retryTurn(runId: string) {
-    if (rewindHold || !conversation || !interactionThreadId) return;
+    if (rewindBlocked() || !conversation || !interactionThreadId) return;
     const message = conversation.transcript.find(item => item.role === "user" && item.run_id === runId);
     if (!message) return;
     setPendingSubmit({

@@ -84,9 +84,9 @@ export function HoverHelp({ title = "About this setting", children, triggerConte
   return <span className="hover-help" onMouseEnter={() => { if (mode === "hover" && !suppressed) { hovered.current = true; show(); } }} onMouseLeave={() => { if (mode === "hover") { hovered.current = false; leave(); } }}>
     <button ref={trigger} type="button" className={triggerClassName ?? "help-icon"} aria-label={label ?? title} title={action ? held ?? label : undefined} aria-disabled={action && held ? true : undefined} data-edit-run={editRunId} aria-describedby={open && !interactive ? id : undefined}
       aria-haspopup={interactive ? "dialog" : undefined} aria-expanded={interactive ? open : undefined} aria-controls={open && interactive ? id : undefined}
-      onFocus={(event) => { focused.current = true; if (mode !== "hover" || suppressed) return; if (visibleFocusOnly && !event?.currentTarget?.matches?.(":focus-visible")) return; show(); }} onBlur={() => { focused.current = false; if (mode === "hover") leave(); }} onClick={() => { if (action) { if (!held) onActivate(); return; } if (mode === "click" && open) dismiss(); else show(); }}
+      onFocus={(event) => { focused.current = true; if (mode !== "hover" || suppressed) return; if (visibleFocusOnly && !event?.currentTarget?.matches?.(":focus-visible")) return; show(); }} onBlur={() => { focused.current = false; if (mode === "hover") leave(); }} onClick={(event) => { if (action) { if (!held && event?.currentTarget?.getAttribute?.("aria-disabled") !== "true") onActivate(); return; } if (mode === "click" && open) dismiss(); else show(); }}
       onKeyDown={(event) => {
-        if (action && held && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); event.stopPropagation(); return; }
+        if (action && (held || event.currentTarget?.getAttribute?.("aria-disabled") === "true") && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); event.stopPropagation(); return; }
         if (open && event.key === "Tab" && !event.shiftKey) {
           const control = bubble.current?.querySelector<HTMLElement>("button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex='0']");
           if (control) { event.preventDefault(); control.focus(); }

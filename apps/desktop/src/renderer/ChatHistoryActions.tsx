@@ -30,11 +30,11 @@ export function ChatHistoryActions({ conversation, onDeleted, onError }: ChatHis
   return (
     <section className="chat-history-actions" aria-label="Conversation history actions">
       <button type="button" className="menu-action" title={DOWNLOAD_LABEL} onClick={download}>
-        <Icon name="files" size={18} />
+        <Icon name="files" size={18} style={{ width: "18px", height: "18px" }} />
         <span>Download transcript<span className="sr-only">{DOWNLOAD_LABEL}</span></span>
       </button>
       <button type="button" className="menu-action" title={DELETE_LABEL} onClick={() => setConfirmDelete(true)}>
-        <Icon name="close" size={18} />
+        <Icon name="close" size={18} style={{ width: "18px", height: "18px" }} />
         <span>Delete<span className="sr-only">{DELETE_LABEL}</span></span>
       </button>
       {confirmDelete ? <DeleteChatDialog conversation={conversation} onClose={() => setConfirmDelete(false)} onDeleted={onDeleted} /> : null}

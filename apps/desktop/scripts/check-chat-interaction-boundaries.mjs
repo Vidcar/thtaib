@@ -3993,6 +3993,89 @@ function mountedConversations(renderer) {
     .filter(item => item?.id === "conv_a");
 }
 
+function pressRewind(node) {
+  let prevented = false;
+  const event = {
+    key: "Enter",
+    currentTarget: {
+      getAttribute: (name) => (name === "aria-disabled" && node.props["aria-disabled"] ? "true" : null),
+    },
+    preventDefault() { prevented = true; },
+    stopPropagation() {},
+  };
+  node.props.onClick(event);
+  node.props.onKeyDown(event);
+  return prevented;
+}
+
+async function testRunningOrGeneratingTurnIgnoresRetryAndEdit(vite) {
+  const transcript = [
+    { id: "u1", role: "user", content: "Reply yo only.", at: now(), run_id: "run_live", content_blocks: [] },
+    { id: "a1", role: "assistant", content: "counting", at: now(), run_id: "run_live", content_blocks: [] },
+  ];
+  const live = run("run_live", "running", "u1", "counting");
+  live.messages = [
+    { id: "u1", type: "human", content: "Reply yo only." },
+    { id: "a1", type: "ai", content: "counting" },
+  ];
+  live.generation_observation = { phase: "generating" };
+  const harness = makeHarness({ aRun: live, threadARun: live });
+  harness.state.conversations.conv_a = conversation("conv_a", "Conversation A", live, { transcript, run_ids: ["run_live"] });
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "history ready");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => {
+      assert.equal(composerStatus(renderer), "Generating");
+      assert.equal(rewindButton(renderer, "run_live", "Retry").props["aria-disabled"], true);
+      assert.equal(rewindButton(renderer, "run_live", "Retry").props.title, "Wait until this turn finishes");
+      assert.equal(buttonByAriaLabel(renderer, "Stop").props["aria-label"], "Stop");
+    }, "running turn holds rewind");
+    await act(async () => {
+      assert.equal(pressRewind(rewindButton(renderer, "run_live", "Retry")), true);
+      assert.equal(pressRewind(rewindButton(renderer, "run_live", "Edit")), true);
+    });
+    assert.equal(harness.state.requests.commands.length, 0, "click and Enter do not rewind a running turn");
+    assert.equal(editRowOpen(renderer), false, "Enter does not open Edit while Stop is showing");
+
+    await waitFor(() => assert.ok(harness.state.openStreams.has("thread_a")), "stream connected");
+    // A repeat frame stores the projection signature. Settling the record then leaves that run in place.
+    await act(async () => {
+      harness.state.openStreams.get("thread_a").write(`data: ${JSON.stringify(streamFrame(live))}\n\n`);
+      await Promise.resolve();
+    });
+    await flush();
+    const settled = {
+      ...harness.state.conversations.conv_a,
+      current_run: { ...live, status: "completed" },
+      current_run_id: live.id,
+    };
+    await act(async () => {
+      renderer.root.find(node => typeof node.type === "function" && node.type.name === "ChatQueuePanel").props.onUpdated(settled);
+    });
+    await flush();
+    await waitFor(() => {
+      const shown = mountedConversations(renderer);
+      assert.ok(shown.length > 0);
+      assert.equal(shown[0].current_run.status, "completed", "the conversation record has settled");
+      assert.equal(composerStatus(renderer), "Generating", "the screen still says Generating");
+      assert.equal(rewindButton(renderer, "run_live", "Retry").props["aria-disabled"], true);
+      assert.equal(rewindButton(renderer, "run_live", "Edit").props["aria-disabled"], true);
+      assert.equal(rewindButton(renderer, "run_live", "Retry").props.title, "Wait until this turn finishes");
+      assert.equal(buttonByAriaLabel(renderer, "Stop").props["aria-label"], "Stop");
+    }, "Generating stays held after the run record settles");
+    await act(async () => {
+      assert.equal(pressRewind(rewindButton(renderer, "run_live", "Retry")), true);
+      assert.equal(pressRewind(rewindButton(renderer, "run_live", "Edit")), true);
+    });
+    assert.equal(harness.state.requests.commands.length, 0, "click and Enter do not rewind while Generating is showing");
+    assert.equal(editRowOpen(renderer), false);
+    assert.equal(harness.state.conversations.conv_a.transcript.length, transcript.length);
+  } finally {
+    await closeHarness(renderer, harness);
+  }
+}
+
 async function testAcceptedRetryKeepsOrClosesTheOpenEdit(vite) {
   const cases = [
     { editRunId: "run_first", retryRunId: "run_first", unsent: "unsent edit of first", keepRow: true, composer: "unsent edit of first" },
@@ -4212,6 +4295,7 @@ try {
     ["delete while selection loads", testDeleteWhileSelectionLoadsCannotRestoreDeletedConversation],
     ["late draft save cannot restore deleted chat", testLateDraftSaveCannotRestoreDeletedChat],
     ["user bubbles show submitted content", testUserBubbleUsesSubmittedContent],
+    ["running or generating turn ignores retry and edit", testRunningOrGeneratingTurnIgnoresRetryAndEdit],
     ["accepted retry keeps or closes the open edit", testAcceptedRetryKeepsOrClosesTheOpenEdit],
     ["late memory selection ownership", testLateMemorySelectionBelongsToConversation],
     ["selected file belongs to project", testSelectedFileBelongsToProject],

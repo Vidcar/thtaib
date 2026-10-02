@@ -1,6 +1,6 @@
 .chat-history-actions {
   display: grid;
-  gap: var(--space-stack);
+  gap: var(--space-tight);
   padding: var(--pad-card);
   border: var(--line-hairline) solid var(--border, rgba(148, 163, 184, 0.28));
   border-radius: var(--radius-composer);
