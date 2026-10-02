@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS attention_receipts (
     identity TEXT PRIMARY KEY, notified_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS attention_dismissals (
     key TEXT PRIMARY KEY, dismissed_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS host_shell_confirmations (
+    thread_id TEXT PRIMARY KEY, confirmed_at TEXT NOT NULL);
 """
 
 ASSET_SCHEMA = """

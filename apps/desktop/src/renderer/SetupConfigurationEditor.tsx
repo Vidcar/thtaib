@@ -114,7 +114,7 @@ export function SetupConfigurationEditor({ value, onChange, catalogue, disabled 
   const catalogueBlocked = catalogue.toolCatalogueStatus === "loading" || catalogue.toolCatalogueStatus === "error";
   const standardTools = catalogueBlocked ? null : standardToolSelection(catalogue, projectBound, false, false);
   const selectedTools = filtered.presented_tools ?? standardTools ?? [];
-  const groupLabels: Record<string, string> = { project: "Project files", shell: "Host shell", browser: "Browser", windows: "Windows control", preview: "Preview", diagnostics: "Diagnostics", planning: "Planning", input: "Questions", knowledge: "Knowledge", connections: "Connections" };
+  const groupLabels: Record<string, string> = { project: "Project files", shell: "This computer", browser: "Browser", windows: "One window", preview: "Preview", diagnostics: "Diagnostics", planning: "Planning", input: "Questions", knowledge: "Knowledge", connections: "Connections" };
   const groupOrder = [...(catalogue.groups ?? []).map(group => group.id)];
   for (const tool of catalogue.tools) if (tool.group && !groupOrder.includes(tool.group)) groupOrder.push(tool.group);
   const labelFor = (id: string) => catalogue.groups?.find(group => group.id === id)?.label ?? groupLabels[id] ?? id;

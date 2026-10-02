@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from contextlib import asynccontextmanager, contextmanager
 import contextvars
 import hashlib
 import json
@@ -30,68 +31,58 @@ ADMITTED_PROJECT_MUTATION: contextvars.ContextVar = contextvars.ContextVar("admi
 
 
 class _MutationWaiter:
-    __slots__ = ("kind", "signal", "admitted")
+    __slots__ = ("signal", "exclusive", "admitted")
 
-    def __init__(self, kind: str, signal) -> None:
-        self.kind = kind
+    def __init__(self, signal, exclusive: bool) -> None:
         self.signal = signal
+        self.exclusive = exclusive
         self.admitted = False
 
 
 class ProjectMutationLease:
-    """Per-project gate whose asynchronous waiters do not occupy worker threads.
+    """Per-path gate. Async waiters park on a Future and do not occupy a worker.
 
-    The mutex covers only the queue. An async waiter parks on a Future and a
-    synchronous caller parks on an Event. Release transfers ownership in FIFO
-    order and leaves the gate held, so cancelling one waiter cannot admit two.
+    Shared holders, used for ancestor directories, do not block each other.
+    An exclusive holder blocks both. A synchronous caller takes the lease or
+    fails. It does not block a pool thread. Release admits the next future
+    and leaves the gate held, so cancelling one waiter cannot admit two.
     """
 
     def __init__(self) -> None:
         self._mutex = threading.Lock()
-        self._held = False
+        self._exclusive = False
+        self._shared = 0
         self._waiters: deque[_MutationWaiter] = deque()
 
     def waiting(self) -> int:
         with self._mutex:
             return len(self._waiters)
 
-    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
-        if not blocking:
-            with self._mutex:
-                if self._held or self._waiters:
-                    return False
-                self._held = True
-                return True
-        waiter = None
-        with self._mutex:
-            if not self._held:
-                self._held = True
-                return True
-            event = threading.Event()
-            waiter = _MutationWaiter("sync", event)
-            self._waiters.append(waiter)
-        if timeout is None or timeout < 0:
-            event.wait()
+    def _busy_for(self, exclusive: bool) -> bool:
+        if self._exclusive:
             return True
-        if event.wait(timeout):
-            return True
-        with self._mutex:
-            if not waiter.admitted:
-                try:
-                    self._waiters.remove(waiter)
-                except ValueError:
-                    pass
-                return False
-        self.release()
-        return False
+        return exclusive and self._shared > 0
 
-    async def acquire_async(self) -> None:
+    def acquire(self, *, exclusive: bool = True) -> bool:
+        with self._mutex:
+            if self._waiters or self._busy_for(exclusive):
+                return False
+            if exclusive:
+                self._exclusive = True
+            else:
+                self._shared += 1
+            return True
+
+    async def acquire_async(self, *, exclusive: bool = True) -> None:
         loop = asyncio.get_running_loop()
         future = loop.create_future()
-        waiter = _MutationWaiter("async", future)
+        waiter = _MutationWaiter(future, exclusive)
         with self._mutex:
-            if not self._held:
-                self._held = True
+            if not self._waiters and not self._busy_for(exclusive):
+                if exclusive:
+                    self._exclusive = True
+                else:
+                    self._shared += 1
                 return
             self._waiters.append(waiter)
         try:
@@ -107,46 +98,46 @@ class ProjectMutationLease:
                     except ValueError:
                         release = waiter.admitted
             if release:
-                self.release()
+                self.release(exclusive=waiter.exclusive)
             raise
 
-    def release(self) -> None:
+    def release(self, *, exclusive: bool = True) -> None:
         with self._mutex:
-            if not self._held:
-                raise RuntimeError("project mutation lease released while free")
+            if exclusive:
+                if not self._exclusive:
+                    raise RuntimeError("project mutation lease released while free")
+                self._exclusive = False
+            else:
+                if self._shared <= 0:
+                    raise RuntimeError("project mutation lease released while free")
+                self._shared -= 1
+                if self._shared:
+                    return
             self._handoff_locked()
 
     def _handoff_locked(self) -> None:
         while self._waiters:
-            waiter = self._waiters.popleft()
-            if waiter.kind == "async":
-                future = waiter.signal
-                if future.cancelled() or future.done():
-                    continue
-                waiter.admitted = True
-                future.get_loop().call_soon_threadsafe(self._resolve_future, future)
+            waiter = self._waiters[0]
+            future = waiter.signal
+            if future.cancelled() or future.done():
+                self._waiters.popleft()
+                continue
+            if self._busy_for(waiter.exclusive):
                 return
+            self._waiters.popleft()
             waiter.admitted = True
-            waiter.signal.set()
-            return
-        self._held = False
+            if waiter.exclusive:
+                self._exclusive = True
+            else:
+                self._shared += 1
+            future.get_loop().call_soon_threadsafe(self._resolve_future, future)
+            if waiter.exclusive:
+                return
 
     @staticmethod
     def _resolve_future(future) -> None:
         if not future.done():
             future.set_result(True)
-
-    def __enter__(self):
-        if ADMITTED_PROJECT_MUTATION.get() is self:
-            return self
-        self.acquire()
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        if ADMITTED_PROJECT_MUTATION.get() is self:
-            return False
-        self.release()
-        return False
 
 
 class ExactEdit(BaseModel):
@@ -161,15 +152,95 @@ class ApplyEditsInput(BaseModel):
     base_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$", description="Omit for a read-only preview and original hash. Supply that unchanged original-byte hash to apply atomically.")
 
 
-def project_mutation_lock(project: Path) -> ProjectMutationLease:
-    """Serialize custom and native project mutations across graphs/helpers."""
-    key = str(canonical_root(project))
+def file_order_path(project: Path, file_path: str):
+    """Canonical key for one project-relative file. `.` collapses; `..` is refused."""
+    normalized = str(file_path).replace("\\", "/").strip()
+    if not normalized or normalized.startswith("//"):
+        raise ValueError("File order needs one project-relative path.")
+    parts = []
+    for part in PurePosixPath(normalized).parts:
+        if part in {"/", "."}:
+            continue
+        if part == ".." or ":" in part or part != part.strip():
+            raise ValueError("File order needs one project-relative path.")
+        parts.append(part)
+    root = Path(project).resolve()
+    # `/` and a collapsed `.` are the project root. Deletion still refuses it.
+    if not parts:
+        return canonical_root(root)
+    return canonical_root(root.joinpath(*parts))
+
+
+def file_order_lock(path: Path) -> ProjectMutationLease:
+    """Serialize readers and writers of one file. A different file does not wait."""
+    key = str(canonical_root(path))
     with _lock_guard:
         current = _locks.get(key)
         if current is None:
             current = ProjectMutationLease()
             _locks[key] = current
         return current
+
+
+_BUSY = "This file is already being changed. Retry after that change finishes."
+
+
+def _order_chain(path: Path) -> list[tuple[ProjectMutationLease, bool]]:
+    """Shared ancestor locks, then an exclusive leaf. High to low avoids deadlock."""
+    canonical = canonical_root(path)
+    chain = [(file_order_lock(parent), False) for parent in reversed(canonical.parents)]
+    chain.append((file_order_lock(canonical), True))
+    return chain
+
+
+def paths_overlap(left: Path, right: Path) -> bool:
+    first, second = canonical_root(left), canonical_root(right)
+    return first == second or first.is_relative_to(second) or second.is_relative_to(first)
+
+
+@contextmanager
+def hold_file_order(path: Path):
+    """Hold the ancestor chain. A nested call on the same leaf borrows it."""
+    leaf = file_order_lock(path)
+    if ADMITTED_PROJECT_MUTATION.get() is leaf:
+        yield leaf
+        return
+    held: list[tuple[ProjectMutationLease, bool]] = []
+    try:
+        for lease, exclusive in _order_chain(path):
+            if not lease.acquire(exclusive=exclusive):
+                raise ToolException(_BUSY)
+            held.append((lease, exclusive))
+        token = ADMITTED_PROJECT_MUTATION.set(leaf)
+        try:
+            yield leaf
+        finally:
+            ADMITTED_PROJECT_MUTATION.reset(token)
+    finally:
+        for lease, exclusive in reversed(held):
+            lease.release(exclusive=exclusive)
+
+
+@asynccontextmanager
+async def ahold_file_order(path: Path):
+    """Async chain. Waiters park on a future and do not occupy a worker."""
+    leaf = file_order_lock(path)
+    if ADMITTED_PROJECT_MUTATION.get() is leaf:
+        yield leaf
+        return
+    held: list[tuple[ProjectMutationLease, bool]] = []
+    try:
+        for lease, exclusive in _order_chain(path):
+            await lease.acquire_async(exclusive=exclusive)
+            held.append((lease, exclusive))
+        token = ADMITTED_PROJECT_MUTATION.set(leaf)
+        try:
+            yield leaf
+        finally:
+            ADMITTED_PROJECT_MUTATION.reset(token)
+    finally:
+        for lease, exclusive in reversed(held):
+            lease.release(exclusive=exclusive)
 
 
 def edited_original(text: str, edits: list[ExactEdit]) -> tuple[str, int]:
@@ -200,7 +271,7 @@ def apply_edits_tool(run, *, cancel_requested=None):
                 or "apply_edits" not in run.enabled_tools or run.work_mode == "plan"):
             raise HarnessError("Structured edits require selected Work-mode project access.", code="tool_not_selected", status_code=403)
         target = project_file(Path(run.project_path), file_path)
-        with project_mutation_lock(Path(run.project_path)):
+        with hold_file_order(file_order_path(Path(run.project_path), file_path)):
             if not target.is_file() or target.stat().st_size > MAX_EDIT_BYTES:
                 raise HarnessError(f"Choose an existing UTF-8 text file of at most {MAX_EDIT_BYTES} bytes.", code="edit_file_size", status_code=400)
             original = target.read_bytes()
@@ -253,7 +324,7 @@ def apply_edits_tool(run, *, cancel_requested=None):
                 raise ToolException(str(error)) from error
             raise
     return StructuredTool.from_function(name="apply_edits", func=validated_apply, args_schema=ApplyEditsInput, handle_tool_error=True,
-        description="Preview or apply a group of exact edits against one original UTF-8 project file. Omit base_sha256 to preview; supply the returned hash to atomically apply. Overlapping, unmatched or stale edits change no bytes. Never combine with another mutation of that file in one tool-call batch.")
+        description="Preview or apply a group of exact edits against one original UTF-8 project file. Omit base_sha256 to preview; supply the returned hash to atomically apply. Overlapping, unmatched or stale edits change no bytes.")
 
 
 def validate_delete_target(run, args: dict) -> dict:
@@ -293,25 +364,3 @@ def validate_delete_target(run, args: dict) -> dict:
             raise HarnessError("The deletion subtree contains an unsupported file kind.", code="delete_kind", status_code=403)
     return {"path": normalized, "before_exists": target.exists(), "before_entries": found if target.exists() else 0,
         "before_files": files, "before_bytes": total_bytes, "expected_absent": True}
-
-
-def validate_mutation_batch(run, request) -> None:
-    """Include structured edits and delete ancestors in the native batch boundary."""
-    messages = getattr(getattr(request, "runtime", None), "state", {}).get("messages", [])
-    calls = next((getattr(message, "tool_calls", []) for message in reversed(messages)
-        if getattr(message, "type", None) == "ai"), [])
-    paths = []
-    for call in calls:
-        name, args = call.get("name"), call.get("args", {})
-        if name not in {"write_file", "edit_file", "delete", "apply_edits"} or name == "apply_edits" and args.get("base_sha256") is None:
-            continue
-        value = args.get("file_path")
-        if isinstance(value, str):
-            normalized = value.replace("\\", "/").lstrip("/")
-            path = canonical_root(Path(run.project_path) / normalized) if run.project_path else None
-            if path is not None:
-                paths.append((name, path))
-    for index, (name, path) in enumerate(paths):
-        for other_name, other_path in paths[index + 1:]:
-            if path == other_path or name == "delete" and other_path.is_relative_to(path) or other_name == "delete" and path.is_relative_to(other_path):
-                raise HarnessError("Competing mutations of the same file or deletion subtree cannot share one tool-call batch. Run dependent changes in later batches.", code="file_mutation_conflict", status_code=400)

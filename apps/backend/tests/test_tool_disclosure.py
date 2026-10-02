@@ -578,36 +578,55 @@ class DeferredWindowsTests(unittest.IsolatedAsyncioTestCase):
                 raise WinAppRuntimeError("The optional WinApp CLI worker is not installed.")
 
         original_runtime = self.service.runtime
-        for scope in ("selected", "all"):
-            with self.subTest(scope=scope):
-                thread_id = "runtime-missing-" + scope
-                self.service.runtime = original_runtime
-                self.service.set_scope(thread_id, scope, hwnd=101 if scope == "selected" else None)
-                self.commands.clear()
-                self.service.runtime = MissingRuntime()
-                run = run_for(["find_tools", "desktop_inspect"])
-                run.thread_id, run.source_surface, run.desktop_access = thread_id, "chat", scope
-                async with AsyncExitStack() as stack:
-                    loader = DeferredToolCollection(run, stack, connections=None, desktop=self.service)
-                    disclosure = ToolDisclosureMiddleware(run, loader=loader,
-                        on_setup=CapabilitySetupBoundary(run, lambda: None))
-                    graph = create_agent(SchemaRecordingModel([call("desktop_inspect", {"hwnd": 101}), AIMessage(content="done")]),
-                        middleware=[disclosure], checkpointer=InMemorySaver())
-                    config = {"configurable": {"thread_id": thread_id}}
-                    paused = await graph.ainvoke({"messages": [{"role": "user", "content": "inspect authorized target"}]}, config)
-                    pending = pending_interrupt_from_raw(paused["__interrupt__"][0])
-                    self.assertEqual(pending.kind, "capability_setup")
-                    self.assertEqual(pending.action_requests[0].setup.capability, "windows")
-                    self.assertEqual(pending.action_requests[0].setup.code, "desktop_runtime_unavailable")
-                    self.assertFalse(pending.action_requests[0].setup.requires_new_input)
-                    self.assertEqual(self.commands, [], "Missing worker must pause before inspecting or controlling a window")
-                    self.service.runtime = original_runtime
-                    result = await graph.ainvoke(Command(resume={"decisions": [{"type": "respond", "message": "continue"}]}), config)
-                    self.assertEqual(result["messages"][-1].content, "done")
-                    actions = [args for args, _ in self.commands if args[1] == "inspect"]
-                    self.assertEqual(len(actions), 1)
-                    self.assertEqual(actions[0][actions[0].index("-w") + 1], "101")
-                    self.assertEqual(len([event for event in run.events if event.kind == "capability_setup_requested"]), 1)
+        identity = {"hwnd": 101, "process_id": 10, "process_created_at": 1000.0}
+        self.service.runtime = original_runtime
+        self.service.set_scope("runtime-missing-selected", "selected", hwnd=101)
+        self.commands.clear()
+        self.service.runtime = MissingRuntime()
+        run = run_for(["find_tools", "desktop_inspect"])
+        run.thread_id, run.source_surface, run.desktop_access = "runtime-missing-selected", "chat", "selected"
+        run.desktop_window = dict(identity)
+        async with AsyncExitStack() as stack:
+            loader = DeferredToolCollection(run, stack, connections=None, desktop=self.service)
+            disclosure = ToolDisclosureMiddleware(run, loader=loader,
+                on_setup=CapabilitySetupBoundary(run, lambda: None))
+            graph = create_agent(SchemaRecordingModel([call("desktop_inspect", {"hwnd": 101}), AIMessage(content="done")]),
+                middleware=[disclosure], checkpointer=InMemorySaver())
+            config = {"configurable": {"thread_id": "runtime-missing-selected"}}
+            paused = await graph.ainvoke({"messages": [{"role": "user", "content": "inspect authorized target"}]}, config)
+            pending = pending_interrupt_from_raw(paused["__interrupt__"][0])
+            self.assertEqual(pending.action_requests[0].setup.code, "desktop_runtime_unavailable")
+            self.assertFalse(pending.action_requests[0].setup.requires_new_input)
+            self.assertEqual(self.commands, [])
+            self.service.runtime = original_runtime
+            result = await graph.ainvoke(Command(resume={"decisions": [{"type": "respond", "message": "continue"}]}), config)
+            self.assertEqual(result["messages"][-1].content, "done")
+            actions = [args for args, _ in self.commands if args[1] == "inspect"]
+            self.assertEqual(len(actions), 1)
+            self.assertEqual(actions[0][actions[0].index("-w") + 1], "101")
+
+        self.commands.clear()
+        self.service.runtime = MissingRuntime()
+        broad = run_for(["find_tools", "desktop_inspect"])
+        broad.thread_id, broad.source_surface, broad.desktop_access = "runtime-missing-all", "chat", "all"
+        async with AsyncExitStack() as stack:
+            loader = DeferredToolCollection(broad, stack, connections=None, desktop=self.service)
+            disclosure = ToolDisclosureMiddleware(broad, loader=loader,
+                on_setup=CapabilitySetupBoundary(broad, lambda: None))
+            graph = create_agent(SchemaRecordingModel([call("desktop_inspect", {"hwnd": 101}), AIMessage(content="done")]),
+                middleware=[disclosure], checkpointer=InMemorySaver())
+            config = {"configurable": {"thread_id": "runtime-missing-all"}}
+            paused = await graph.ainvoke({"messages": [{"role": "user", "content": "inspect every window"}]}, config)
+            pending = pending_interrupt_from_raw(paused["__interrupt__"][0])
+            self.assertEqual(pending.action_requests[0].setup.code, "desktop_invalid_arguments")
+            self.assertTrue(pending.action_requests[0].setup.requires_new_input)
+            self.assertEqual(self.commands, [])
+            self.service.runtime = original_runtime
+            with self.assertRaises(HarnessError) as repaired:
+                await graph.ainvoke(Command(resume={"decisions": [{"type": "respond", "message": "continue"}]}), config)
+            self.assertEqual(repaired.exception.code, "setup_new_input_required")
+            self.assertIsNone(broad.desktop_window)
+            self.assertFalse(any(args[1] == "inspect" or args[1] == "list-windows" for args, _ in self.commands))
 
     async def test_selected_scope_repairs_once_and_binds_exact_target(self):
         from workbench_backend.desktop_automation.service import DESKTOP_TOOL_NAMES
@@ -619,8 +638,14 @@ class DeferredWindowsTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("desktop_inspect", loader.definitions)
             with self.assertRaises(HarnessError) as missing:
                 await loader.load("desktop_inspect")
-            self.assertEqual(missing.exception.code, "desktop_grant_required")
+            self.assertEqual(missing.exception.code, "desktop_window_required")
+            self.assertIsNone(run.desktop_window)
             self.service.set_scope("thread-one", "selected", hwnd=101)
+            with self.assertRaises(HarnessError) as still_missing:
+                await loader.load("desktop_inspect")
+            self.assertEqual(still_missing.exception.code, "desktop_window_required")
+            self.assertIsNone(run.desktop_window)
+            run.desktop_window = {"hwnd": 101, "process_id": 10, "process_created_at": 1000.0}
             tool = await loader.load("desktop_inspect")
             self.assertEqual(run.desktop_window["hwnd"], 101)
             result = await tool.ainvoke({"name": tool.name, "args": {}, "id": "inspect-selected", "type": "tool_call"})
@@ -630,7 +655,7 @@ class DeferredWindowsTests(unittest.IsolatedAsyncioTestCase):
             self.service.set_scope("thread-one", "selected", hwnd=202)
             with self.assertRaises(HarnessError) as changed:
                 await loader.load("desktop_inspect")
-            self.assertEqual(changed.exception.code, "desktop_window_changed")
+            self.assertEqual(changed.exception.code, "desktop_scope_denied")
             self.assertEqual(len([args for args, _ in self.commands if args[1] != "list-windows"]), before_actions)
 
     async def test_off_scope_cannot_borrow_later_live_grant(self):

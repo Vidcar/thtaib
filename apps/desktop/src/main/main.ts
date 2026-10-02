@@ -6,6 +6,7 @@ import { app, BrowserWindow, dialog } from "electron";
 import { installAppearancePreview } from "./appearancePreviewWindow";
 import { probeBackendCompatibility } from "./backendCompatibility";
 import { installBackground, retainWindowInBackground } from "./background";
+import { clearDesktopProcess, publishDesktopProcess } from "./desktopProcess";
 import { configureWindowsNotificationIdentity, ensureWindowsNotificationShortcut, WINDOWS_LAUNCH_BACKEND_ARG } from "./windowsNotificationIdentity";
 
 import {
@@ -188,6 +189,7 @@ if (ownsSingleInstance) {
   });
 
   app.whenReady().then(async () => {
+    publishDesktopProcess(resolveProductDataRoot());
     installApplicationTrust();
     await ensureWindowsNotificationShortcut().catch((error: unknown) => {
       console.warn("Windows notification shortcut setup failed", error);
@@ -223,6 +225,10 @@ if (ownsSingleInstance) {
     });
   });
 }
+
+app.on("will-quit", () => {
+  clearDesktopProcess(resolveProductDataRoot());
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {

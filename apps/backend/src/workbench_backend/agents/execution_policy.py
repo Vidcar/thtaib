@@ -10,6 +10,10 @@ from typing import Any
 from workbench_backend.errors import HarnessError
 
 
+class ToolReservationReleased(Exception):
+    """A superseded file call is leaving the shared dispatch id for its owner."""
+
+
 PLAN_TOOLS = frozenset({"ls", "read_file", "glob", "grep", "read_attachment", "read_reference", "read_tool_result", "find_tools", "search_knowledge", "write_todos", "ask_user", "echo", "time_now", "task"})
 PLAN_INSTRUCTIONS = "Plan mode: investigate and produce a plan. Read-only tools, questions and the checklist are available. Do not modify files, run shell commands, save memory or perform external actions. Switching Access does not permit implementation in Plan mode."
 CURRENT_TOOL_CALL: ContextVar[str] = ContextVar("workbench_current_tool_call", default="")
@@ -177,12 +181,19 @@ class ExecutionControl:
                 raise HarnessError("An action has unconfirmed effects. Inspect and acknowledge it before continuing; it will not be repeated automatically.",
                     code="effects_unconfirmed", status_code=409)
 
+    def tool_call_inflight(self, run: Any, call_id: str) -> bool:
+        with self._lock:
+            return f"{run.id}:{call_id}" in self._inflight
+
     def reserve_tool(self, run: Any, call_id: str, name: str = "") -> None:
         with self._lock:
             self.require_dispatch(run)
             identity = f"{run.id}:{call_id}"
             self._pause_dispatch(run, identity)
-            if identity in self._completed or identity in self._inflight:
+            if identity in self._inflight:
+                raise HarnessError("A repeated tool-call identity was not executed again.",
+                    code="duplicate_tool_call", status_code=409, details={"inflight": True})
+            if identity in self._completed:
                 raise HarnessError("A repeated tool-call identity was not executed again.", code="duplicate_tool_call", status_code=409)
             if identity in self._calls:
                 self._inflight.add(identity)
@@ -203,6 +214,13 @@ class ExecutionControl:
                 run.dispatched_tool_calls += 1
             self.publish()
 
+    def reopen_completed_tool(self, run: Any, call_id: str) -> None:
+        """A later file attempt is a new dispatch, so the tool budget applies again."""
+        with self._lock:
+            identity = f"{run.id}:{call_id}"
+            self._completed.discard(identity)
+            self._calls.discard(identity)
+
     @contextmanager
     def tool_dispatch(self, run, call_id, name=""):
         from langgraph.errors import GraphInterrupt
@@ -211,8 +229,8 @@ class ExecutionControl:
         completed = True
         try:
             yield not self.stale_browser_action(run, call_id, name)
-        except GraphInterrupt:
-            # Native approval resumes the same action identity and reservation.
+        except (GraphInterrupt, ToolReservationReleased):
+            # Approval resumes this id. A superseded file call leaves it for the owner.
             completed = False
             raise
         finally:

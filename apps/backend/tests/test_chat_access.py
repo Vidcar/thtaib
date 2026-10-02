@@ -13,7 +13,7 @@ from workbench_backend.app import create_app
 from workbench_backend.inference.schemas import ConnectedDeploymentRequest
 from tests.scripted_model import RECEIVED_PROMPTS, ScriptedChatModel, reset_received_prompts
 from tests.support import close_workbench_sqlite, offline_workbench_client
-from tests.test_chat import host_shell_marker_command, wait_for_chat
+from tests.test_chat import chat_interrupt_decision, host_shell_marker_command, wait_for_chat
 
 
 class ChatAccessTests(unittest.TestCase):
@@ -177,13 +177,19 @@ class ChatAccessTests(unittest.TestCase):
                 self.post(f"/v1/chat/conversations/{chat['id']}/start", {"task": "Create the marker."})
                 settled = self.settled(chat["id"])
                 run = settled["current_run"]
+                self.assertIsNotNone(run["pending_interrupt"])
+                self.assertIn(str(self.project.resolve()), run["pending_interrupt"]["action_requests"][0]["args"]["starting_folder"])
+                self.assertFalse((self.project / filename).exists())
                 if mode == "full_access":
-                    self.assertEqual(run["status"], "completed", run.get("error"))
+                    approved = self.client.post(
+                        f"/v1/chat/conversations/{chat['id']}/interrupt-decision",
+                        json=chat_interrupt_decision(settled, "approve"),
+                    )
+                    self.assertEqual(approved.status_code, 200, approved.text)
+                    completed = wait_for_chat(self.client, chat["id"])
+                    self.assertEqual(completed["current_run"]["status"], "completed", completed["current_run"].get("error"))
                     self.assertTrue((self.project / filename).exists())
-                    self.assertIsNone(run["pending_interrupt"])
                 else:
-                    self.assertIsNotNone(run["pending_interrupt"])
-                    self.assertFalse((self.project / filename).exists())
                     self.post(f"/v1/chat/conversations/{chat['id']}/cancel", {})
                     wait_for_chat(self.client, chat["id"])
                 prompt = run["effective_setup"]["system_prompt"]
@@ -208,6 +214,14 @@ class ChatAccessTests(unittest.TestCase):
         changed = self.client.patch(f"/v1/projects/{project['id']}", json={"defaults": {"approval_mode": "ask"}})
         self.assertEqual(changed.status_code, 400, changed.text)
         self.post(f"/v1/chat/conversations/{chat['id']}/queue/resume", {})
+        paused = self.settled(chat["id"])
+        self.assertEqual(paused["current_run"]["approval_mode"], "full_access")
+        self.assertIsNotNone(paused["current_run"]["pending_interrupt"])
+        approved = self.client.post(
+            f"/v1/chat/conversations/{chat['id']}/interrupt-decision",
+            json=chat_interrupt_decision(paused, "approve"),
+        )
+        self.assertEqual(approved.status_code, 200, approved.text)
         completed = wait_for_chat(self.client, chat["id"])
         self.assertEqual(completed["current_run"]["status"], "completed", completed["current_run"].get("error"))
         self.assertEqual(completed["current_run"]["approval_mode"], "full_access")

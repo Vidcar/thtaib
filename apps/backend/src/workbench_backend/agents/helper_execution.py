@@ -52,8 +52,12 @@ def _narrow_presented_tools(parent, config, input_policy):
 def _narrow_child_access(parent, config):
     rank = {"ask": 0, "full_access": 1}
     approval = min((parent.approval_mode, config.approval_mode or parent.approval_mode), key=rank.__getitem__)
-    desktop_rank = {"off": 0, "selected": 1, "all": 2}
-    desktop_access = min((parent.desktop_access, config.desktop_access or parent.desktop_access), key=desktop_rank.__getitem__)
+    parent_window = "selected" if parent.desktop_access == "selected" else "off"
+    requested = config.desktop_access or parent_window
+    # A stored every-window helper keeps the parent's one window, or off when the parent has none.
+    if requested == "all":
+        requested = parent_window
+    desktop_access = "selected" if parent_window == "selected" and requested == "selected" else "off"
     return approval, desktop_access
 
 
@@ -137,7 +141,7 @@ def _child_run_record(parent, snapshot, config, payload, child_id, deployment, i
         deployment_id=deployment.id, task=task, input_message_id=None, content_blocks=None,
         input_policy=input_policy, input_sources=setup.input_sources,
         agent_setup_id=snapshot.agent_id, agent_setup_version_id=snapshot.version_id,
-        presented_tools=presented, enabled_tools=[name for name in parent.enabled_tools if name != "task"],
+        presented_tools=presented, enabled_tools=list(presented),
         denied_tools=[name for name in selected_tools if name not in presented], approval_mode=approval,
         work_mode=work_mode, helper_agent_ids=[], helper_snapshots=[], child_runs=[],
         desktop_access=desktop_access,

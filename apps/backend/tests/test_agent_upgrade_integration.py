@@ -36,10 +36,12 @@ class AgentUpgradeIntegrationTests(unittest.TestCase):
         policy = {"tool_loading": "when_needed", "pinned_tools": ["desktop_inspect"]}
         request = {"deployment_id": self.deployment_id, "task": "Inspect the selected window", "source_surface": "chat",
             "thread_id": "thread-one", "presented_tools": ["desktop_inspect"], "desktop_access": "selected", "input_policy": policy}
-        refused = self.client.post("/v1/agent-runs", json=request)
-        self.assertEqual(refused.status_code, 409, refused.text)
-        self.assertEqual(refused.json()["code"], "desktop_grant_required")
+        started_without_window = self.client.post("/v1/agent-runs", json=request)
+        self.assertEqual(started_without_window.status_code, 200, started_without_window.text)
+        unfinished = test_harness.wait_for_run(self.client, started_without_window.json()["id"])
+        self.assertEqual(unfinished["status"], "completed", unfinished.get("error"))
         self.assertEqual(fixture.commands, [])
+        self.assertIsNone(unfinished["desktop_window"])
         fixture.service.set_scope("thread-one", "selected", hwnd=101)
         started = self.client.post("/v1/agent-runs", json=request)
         self.assertEqual(started.status_code, 200, started.text)
@@ -176,12 +178,13 @@ class AgentUpgradeIntegrationTests(unittest.TestCase):
                 other = run.model_copy(update={"id": "structured-owner"})
                 atomic = pool.submit(apply_edits_tool(other).invoke, {"file_path": "/file.txt",
                     "edits": [{"old_string": "original", "new_string": "structured"}], "base_sha256": hashlib.sha256(b"original").hexdigest()})
-                with self.assertRaises(TimeoutError):
-                    atomic.result(timeout=0.1)
+                # The sync tool fails at once. It does not park a pool thread behind the write.
+                refused = atomic.result(timeout=2)
+                self.assertIn("already being changed", refused.lower())
+                self.assertEqual(target.read_text(encoding="utf-8"), "original")
             finally:
                 release.set()
             self.assertEqual(native.result(timeout=5).status, "success")
-            self.assertIn("changed", atomic.result(timeout=5).lower())
         self.assertEqual(target.read_text(encoding="utf-8"), "native")
 
     def test_partial_native_delete_records_remaining_effects_before_retry(self):
@@ -228,9 +231,9 @@ class MutationCancellationTests(unittest.IsolatedAsyncioTestCase):
             runtime=SimpleNamespace(state={"messages": []}))
 
     async def test_queued_cancellation_does_not_steal_or_strand_the_lease(self):
-        from workbench_backend.agents.file_operations import project_mutation_lock
-        lock = project_mutation_lock(self.project)
-        self.assertTrue(lock.acquire(blocking=False))
+        from workbench_backend.agents.file_operations import file_order_lock, file_order_path
+        lock = file_order_lock(file_order_path(self.project, "file.txt"))
+        self.assertTrue(lock.acquire())
         called = []
         async def handler(request):
             called.append(True)
@@ -248,15 +251,15 @@ class MutationCancellationTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await asyncio.wait_for(task, timeout=2)
             self.assertEqual(called, [])
-            self.assertFalse(lock.acquire(blocking=False), "queued cancellation must leave the holder admitted")
+            self.assertFalse(lock.acquire(), "queued cancellation must leave the holder admitted")
         finally:
             lock.release()
-        self.assertTrue(lock.acquire(blocking=False))
+        self.assertTrue(lock.acquire())
         lock.release()
 
     async def test_repeated_cancellation_keeps_lease_until_native_worker_settles(self):
-        from workbench_backend.agents.file_operations import project_mutation_lock
-        lock = project_mutation_lock(self.project)
+        from workbench_backend.agents.file_operations import file_order_lock, file_order_path
+        lock = file_order_lock(file_order_path(self.project, "file.txt"))
         entered, release = threading.Event(), threading.Event()
         def native_work():
             entered.set()
@@ -274,14 +277,14 @@ class MutationCancellationTests(unittest.IsolatedAsyncioTestCase):
             task.cancel()
             await asyncio.sleep(0)
             self.assertFalse(task.done())
-            self.assertFalse(lock.acquire(blocking=False), "native worker still owns mutation lease")
+            self.assertFalse(lock.acquire(), "native worker still owns mutation lease")
         finally:
             release.set()
         with self.assertRaises(asyncio.CancelledError):
             await asyncio.wait_for(task, timeout=5)
         self.assertEqual((self.project / "file.txt").read_text(encoding="utf-8"), "written")
         self.assertEqual(self.run.tool_outcomes["native-async"].outcome, "succeeded")
-        self.assertTrue(lock.acquire(blocking=False))
+        self.assertTrue(lock.acquire())
         lock.release()
 
 

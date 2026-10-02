@@ -302,13 +302,15 @@ def desktop_scope_snapshot(
 
     if not set(presented).intersection(DESKTOP_TOOL_NAMES):
         return "off", None
+    if str(request.desktop_access) == "all":
+        raise HarnessError("One window does not grant every window.", code="desktop_invalid_arguments", status_code=409)
     essential = set(essential_tools) | (set(request.input_policy.pinned_tools) if request.input_policy is not None else set())
     desktop_essential = bool(essential.intersection(DESKTOP_TOOL_NAMES))
     if (desktop_automation is None or request.source_surface != "chat"
         or not request.thread_id or request.work_mode != "work"
         or request.tool_mode is not ToolMode.live_tool):
         if deferred_tools(request) and not desktop_essential and request.source_surface == "chat" and request.thread_id:
-            return request.desktop_access, None
+            return _deferred_window_access(request), None
         raise HarnessError("Window tools need a live Work-mode Chat conversation.",
             code="desktop_grant_required", status_code=409)
     try:
@@ -317,7 +319,7 @@ def desktop_scope_snapshot(
         _current, identity = desktop_automation.snapshot_grant(request.thread_id, request.desktop_access)
     except (DesktopAutomationError, WinAppRuntimeError) as exc:
         if deferred_tools(request) and not desktop_essential:
-            return str(request.desktop_access), None
+            return _deferred_window_access(request), None
         raise HarnessError(str(exc), code=exc.code if isinstance(exc, DesktopAutomationError) else "desktop_runtime_unavailable", status_code=409) from exc
     if identity is not None:
         return "selected", {
@@ -325,7 +327,14 @@ def desktop_scope_snapshot(
             "process_id": identity.process_id,
             "process_created_at": identity.process_created_at,
         }
-    return "all", None
+    if str(request.desktop_access) == "selected":
+        return "selected", None
+    return "off", None
+
+
+def _deferred_window_access(request: AgentStartRequest) -> str:
+    access = str(request.desktop_access)
+    return "off" if access == "all" else access
 
 
 def validate_content_capabilities(deployment, request: AgentStartRequest, per_request) -> None:

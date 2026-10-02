@@ -15,7 +15,7 @@ import re
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
 
-from deepagents.middleware.filesystem import FilesystemMiddleware
+from deepagents.middleware.filesystem import TOOLS_EXCLUDED_FROM_EVICTION, FilesystemMiddleware
 from langchain.agents.middleware import AgentMiddleware, AgentState, ModelRequest, TodoListMiddleware
 from langchain.agents.middleware.types import PrivateStateAttr
 from langchain.tools import ToolRuntime
@@ -551,6 +551,19 @@ class LeanFilesystemMiddleware(FilesystemMiddleware):
         prepared = await asyncio.to_thread(self.prepare_request, request)
         return await super().awrap_model_call(prepared, handler)
 
+    def wrap_tool_call(self, request, handler):
+        # Same-path calls in one message run in call order. They are not rejected.
+        tool_result = handler(request)
+        if self._tool_token_limit_before_evict is None or request.tool_call["name"] in TOOLS_EXCLUDED_FROM_EVICTION:
+            return tool_result
+        return self._intercept_large_tool_result(tool_result)
+
+    async def awrap_tool_call(self, request, handler):
+        tool_result = await handler(request)
+        if self._tool_token_limit_before_evict is None or request.tool_call["name"] in TOOLS_EXCLUDED_FROM_EVICTION:
+            return tool_result
+        return await self._aintercept_large_tool_result(tool_result)
+
 
 class LeanTodoListMiddleware(TodoListMiddleware):
     def __init__(self):
@@ -650,37 +663,45 @@ class DeferredToolCollection(list):
             await asyncio.to_thread(self.connections.validate_snapshot, snapshot)
 
     async def _ready_windows(self) -> None:
-        from workbench_backend.desktop_automation.service import DesktopAutomationError
+        from workbench_backend.desktop_automation.service import DesktopAutomationError, DesktopAccessScope, WindowIdentity, _ScopeState
         from workbench_backend.desktop_automation.runtime import WinAppRuntimeError
-        if self.run.desktop_access == "off":
-            raise HarnessError("Select Windows access, then start a new message to accept that scope.",
+        access = self.run.desktop_access
+        if access == "all":
+            raise HarnessError("One window does not grant every window.",
+                code="desktop_invalid_arguments", status_code=409)
+        if access == "off":
+            raise HarnessError("Choose one window. Local AI Workbench will not take a window over.",
                 code="desktop_selection_required", status_code=409)
         if self.desktop is None:
             raise HarnessError("Configure the optional Windows worker in Settings.", code="desktop_unavailable", status_code=409)
         try:
             await asyncio.to_thread(self.desktop.runtime.command_path)
-            scope, identity = await asyncio.to_thread(self.desktop.snapshot_grant, self.run.thread_id, self.run.desktop_access)
-        except DesktopAutomationError as exc:
-            raise HarnessError(str(exc), code=exc.code, status_code=409) from exc
         except WinAppRuntimeError as exc:
             raise HarnessError(str(exc), code="desktop_runtime_unavailable", status_code=409) from exc
-        actual = ({"hwnd": identity.hwnd, "process_id": identity.process_id,
-            "process_created_at": identity.process_created_at} if identity is not None else None)
         frozen = self.run.desktop_window
-        if frozen is not None and actual != frozen:
+        if not isinstance(frozen, dict):
+            raise HarnessError("Choose one window. Local AI Workbench will not take a window over.",
+                code="desktop_window_required", status_code=409)
+        try:
+            identity = WindowIdentity(
+                hwnd=int(frozen["hwnd"]), process_id=int(frozen["process_id"]),
+                process_created_at=float(frozen["process_created_at"]),
+            )
+            scope, selected = await asyncio.to_thread(
+                self.desktop._effective_scope, self.run.thread_id, _ScopeState(DesktopAccessScope.selected, identity),
+            )
+            if scope is not DesktopAccessScope.selected or selected is None:
+                raise DesktopAutomationError(
+                    "Choose one window. Local AI Workbench will not take a window over.",
+                    code="desktop_window_required",
+                )
+            window = await asyncio.to_thread(self.desktop._find_window, selected.hwnd)
+        except DesktopAutomationError as exc:
+            raise HarnessError(str(exc), code=exc.code, status_code=409) from exc
+        actual = {"hwnd": window.hwnd, "process_id": window.process_id, "process_created_at": window.process_created_at}
+        if actual != frozen:
             raise HarnessError("The selected target changed. Start a new message with the updated Windows target.",
                 code="desktop_window_changed", status_code=409)
-        if self.run.desktop_access == "selected" and actual is None:
-            raise HarnessError("Choose a specific window for this selected scope.", code="desktop_window_required", status_code=409)
-        if frozen is None and actual is not None:
-            # A missing target within an already-selected scope can be repaired
-            # once. All subsequent calls retain this exact process identity.
-            from workbench_backend.agents.schemas import AgentEvent
-            from workbench_backend.inference.ids import utc_now
-            self.run.desktop_window = actual
-            self.run.desktop_access = scope.value if hasattr(scope, "value") else scope
-            self.run.events.append(AgentEvent(at=utc_now(), kind="desktop_target_bound", detail={"window": actual}))
-            self.publish()
 
 
 class CapabilitySetupBoundary:
@@ -736,7 +757,7 @@ def _setup_request(run: Any, name: str, error: HarnessError):
     capability = "skill" if skill_id else "connection" if connection else "browser" if name in BROWSER_TOOL_NAMES else "windows" if name in DESKTOP_TOOL_NAMES else "tool"
     project_required = error.code in {"filesystem_requires_project", "shell_requires_project"}
     target = "project" if project_required else "knowledge" if skill_id else "settings" if connection else "windows" if capability == "windows" else "browser" if capability == "browser" else "agent"
-    requires_new_input = project_required or error.code in {"connection_changed", "connection_schema_changed", "connection_manifest_required", "connection_disabled", "credential_missing", "skill_selection_required", "desktop_selection_required", "desktop_window_changed", "browser_thread_required"}
+    requires_new_input = project_required or error.code in {"connection_changed", "connection_schema_changed", "connection_manifest_required", "connection_disabled", "credential_missing", "skill_selection_required", "desktop_selection_required", "desktop_invalid_arguments", "desktop_window_changed", "desktop_window_required", "desktop_window_refused", "browser_thread_required"}
     return CapabilitySetupRequest(capability=capability, id=skill_id or (connection.id if connection else name),
         tool_names=[name], code=error.code, message=str(error),
         action="Update the selection, then start a new message." if requires_new_input else "Repair the selected feature, then continue.",

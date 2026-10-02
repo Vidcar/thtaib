@@ -90,9 +90,9 @@ def enabled_catalogue() -> list[str]:
 
 _GROUP_LABELS = {
     "project": "Project files",
-    "shell": "Host shell",
+    "shell": "This computer",
     "browser": "Browser",
-    "windows": "Windows control",
+    "windows": "One window",
     "preview": "Preview",
     "diagnostics": "Diagnostics",
     "planning": "Planning",

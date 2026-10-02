@@ -655,7 +655,7 @@ class HarnessApiTests(unittest.TestCase):
         self.assertFalse(set(effectful).intersection(set().union(*_RecordingModel.offered)))
         self.assertEqual(plan["tool_invocations"], [])
 
-    def test_compiled_native_and_structured_edits_cannot_compete_in_one_batch(self) -> None:
+    def test_compiled_native_and_structured_edits_run_in_call_order(self) -> None:
         project = self.root / "competing-edits"
         project.mkdir()
         target = project / "note.txt"
@@ -668,17 +668,21 @@ class HarnessApiTests(unittest.TestCase):
                 {"name": "write_file", "args": {"file_path": "/note.txt", "content": "native"}, "id": "native-conflict"},
                 {"name": "apply_edits", "args": {"file_path": "/note.txt", "edits": edits, "base_sha256": digest}, "id": "structured-conflict"},
             ]),
-            AIMessage(content="Competing changes were rejected."),
+            AIMessage(content="The write finished before the stale edit."),
         ])
         started = self._start(task="Check the shared mutation boundary.", project_path=str(project),
             presented_tools=["write_file", "apply_edits"], approval_mode="full_access", input_policy={"tool_loading": "always"})
         body = wait_for_run(self.client, started["id"])
         self.assertEqual(body["status"], "completed", body.get("error"))
-        self.assertEqual(target.read_bytes(), original)
-        for call_id in ("native-conflict", "structured-conflict"):
-            self.assertEqual(body["tool_outcomes"][call_id]["outcome"], "failed")
-            self.assertIn("one tool-call batch", body["tool_outcomes"][call_id]["detail"])
+        self.assertEqual(target.read_bytes(), b"native")
+        self.assertEqual(body["tool_outcomes"]["native-conflict"]["outcome"], "succeeded")
+        structured = body["tool_outcomes"]["structured-conflict"]
+        self.assertEqual(structured["outcome"], "failed")
+        self.assertIn("original file changed", structured["detail"].lower())
 
+        written = target.read_bytes()
+        digest = hashlib.sha256(written).hexdigest()
+        edits = [{"old_string": "native", "new_string": "structured", "replace_all": False}]
         self.scripted = ScriptedChatModel([
             AIMessage(content="", tool_calls=[{"name": "apply_edits", "args": {"file_path": "/note.txt", "edits": edits, "base_sha256": digest}, "id": "structured-sequential"}]),
             AIMessage(content="The independent edit was applied."),
@@ -688,7 +692,7 @@ class HarnessApiTests(unittest.TestCase):
         completed = wait_for_run(self.client, repaired["id"])
         self.assertEqual(completed["status"], "completed", completed.get("error"))
         self.assertEqual(completed["tool_outcomes"]["structured-sequential"]["outcome"], "succeeded")
-        self.assertEqual(target.read_text(encoding="utf-8"), "structured\n")
+        self.assertEqual(target.read_text(encoding="utf-8"), "structured")
 
     def test_completion_evidence_is_not_judgement(self) -> None:
         started = self._start(
@@ -729,21 +733,18 @@ class HarnessApiTests(unittest.TestCase):
         )
         first = self._start(project_path=str(project), presented_tools=["echo"])
         wait_for_status(self.client, first["id"], "running")
-        with patch.object(self.manager, "ensure_deployment_ready", wraps=self.manager.ensure_deployment_ready) as loaded:
-            second = self.client.post("/v1/agent-runs", json={"deployment_id": self.deployment_id,
-                "project_path": str(project), "presented_tools": ["echo"], "task": "A conflicting task"})
-            self.assertEqual(second.status_code, 409, second.text)
-            self.assertEqual(second.json()["code"], "project_busy")
-            self.assertEqual(second.json()["run_id"], first["id"])
-            loaded.assert_not_called()
+        second = self.client.post("/v1/agent-runs", json={"deployment_id": self.deployment_id,
+            "project_path": str(project), "presented_tools": ["echo"], "task": "A second task in this folder"})
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertNotEqual(second.json()["id"], first["id"])
         held_workspace = self._start(workspace_id=workspace.id, presented_tools=["echo"], task="Hold the workspace.")
         wait_for_status(self.client, held_workspace["id"], "running")
         another_workspace = self.client.post("/v1/agent-runs", json={"deployment_id": self.deployment_id,
             "workspace_id": workspace.id, "presented_tools": ["echo"], "task": "Another task in this workspace"})
-        self.assertEqual(another_workspace.status_code, 409, another_workspace.text)
-        self.assertEqual(another_workspace.json()["code"], "project_busy")
+        self.assertEqual(another_workspace.status_code, 200, another_workspace.text)
+        self.assertNotEqual(another_workspace.json()["id"], held_workspace["id"])
         hold.set()
-        for run_id in (first["id"], held_workspace["id"]):
+        for run_id in (first["id"], second.json()["id"], held_workspace["id"], another_workspace.json()["id"]):
             self.assertEqual(wait_for_run(self.client, run_id)["status"], "completed")
 
     def test_cancel_stops_a_running_task(self) -> None:

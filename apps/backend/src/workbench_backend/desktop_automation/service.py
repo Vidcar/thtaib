@@ -39,7 +39,7 @@ DESKTOP_TOOL_NAMES = (
     "desktop_list_windows", "desktop_inspect", "desktop_search", "desktop_wait",
     "desktop_invoke", "desktop_set_value", "desktop_send_keys", "desktop_screenshot",
 )
-WindowArgument = Annotated[int | None, Field(default=None, gt=0, description="Current HWND from desktop_list_windows. Required in All mode; Selected mode uses its granted identity.")]
+WindowArgument = Annotated[int | None, Field(default=None, gt=0, description="Current HWND from desktop_list_windows. One window uses its granted identity.")]
 SelectorArgument = Annotated[str, Field(min_length=1, max_length=160, pattern=r"^[^\x00]+$", description="WinApp semantic slug, for example btn-minimize-d1a0, or observed name/automationId text. This is not CSS.")]
 OptionalSelectorArgument = Annotated[str | None, Field(default=None, min_length=1, max_length=160, pattern=r"^[^\x00]+$", description="Observed WinApp semantic slug or name/automationId text; omit for the granted window.")]
 PropertyName = Literal["Name", "AutomationId", "ControlType", "ClassName", "IsEnabled", "IsOffscreen", "BoundingRectangle", "Value", "HasKeyboardFocus", "IsKeyboardFocusable", "AcceleratorKey", "AccessKey", "HelpText", "IsPassword", "ToggleState", "IsReadOnly", "IsSelected", "ExpandCollapseState", "ScrollHorizontalPercent", "ScrollVerticalPercent", "HorizontallyScrollable", "VerticallyScrollable", "FontWeight", "FontName", "FontSize", "ForegroundColor", "IsItalic", "StrikethroughStyle"]
@@ -124,6 +124,80 @@ def _windows_identity(hwnd: int) -> WindowIdentity:
     return WindowIdentity(hwnd=hwnd, process_id=pid.value, process_created_at=created_at)
 
 
+def _process_is_elevated(pid: int) -> bool:
+    """True only for an elevated token. A missing or fake pid is not elevated."""
+    if os.name != "nt" or not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    # OpenProcess can report access denied for a pid that does not exist.
+    try:
+        if not psutil.pid_exists(pid):
+            return False
+    except (psutil.Error, OSError):
+        return False
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    advapi32.OpenProcessToken.restype = wintypes.BOOL
+    advapi32.GetTokenInformation.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi32.GetTokenInformation.restype = wintypes.BOOL
+    process = kernel32.OpenProcess(0x1000, False, pid)
+    if not process:
+        return ctypes.get_last_error() == 5
+    try:
+        token = wintypes.HANDLE()
+        if not advapi32.OpenProcessToken(process, 8, ctypes.byref(token)):
+            return ctypes.get_last_error() == 5
+        try:
+            class TOKEN_ELEVATION(ctypes.Structure):
+                _fields_ = [("TokenIsElevated", wintypes.DWORD)]
+
+            elevation = TOKEN_ELEVATION()
+            returned = wintypes.DWORD()
+            if not advapi32.GetTokenInformation(
+                token, 20, ctypes.byref(elevation), ctypes.sizeof(elevation), ctypes.byref(returned),
+            ):
+                return ctypes.get_last_error() == 5
+            return bool(elevation.TokenIsElevated)
+        finally:
+            kernel32.CloseHandle(token)
+    finally:
+        kernel32.CloseHandle(process)
+
+
+def _default_own_process_ids(paths: WorkbenchPaths | None = None) -> set[int]:
+    """This process tree plus the recorded desktop process. Names are not a match.
+
+    A lookup failure propagates. Callers refuse the window list instead of
+    hiding only this backend process.
+    """
+    found: set[int] = set()
+    current = psutil.Process()
+    found.add(current.pid)
+    parent = current.parent()
+    if parent is not None:
+        found.add(parent.pid)
+        found.update(child.pid for child in parent.children(recursive=True))
+    if paths is not None:
+        record = paths.state / "desktop-process.json"
+        if record.is_file():
+            payload = json.loads(record.read_text(encoding="utf-8"))
+            pid = payload.get("pid") if isinstance(payload, dict) else None
+            if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+                raise ValueError("The desktop process record is not a process id.")
+            desktop = psutil.Process(pid)
+            found.add(desktop.pid)
+            found.update(child.pid for child in desktop.children(recursive=True))
+    return found
+
+
 def _bounded_string(value: str, *, limit: int, label: str) -> str:
     if not value or len(value) > limit or "\x00" in value:
         raise DesktopAutomationError(f"{label} must contain 1 to {limit} characters.", code="desktop_invalid_arguments")
@@ -146,12 +220,16 @@ class DesktopAutomationService:
         capture_sink: Callable[..., tuple[Any, str]] | None = None,
         identity_lookup: Callable[[int], WindowIdentity] | None = None,
         command_runner: Callable[[list[str], int], Any] | None = None,
+        own_process_ids: Callable[[], set[int]] | None = None,
+        elevated_check: Callable[[int], bool] | None = None,
     ) -> None:
         self.paths = paths
         self.runtime = runtime or WinAppCliRuntime(paths)
         self.capture_sink = capture_sink
         self._identity_lookup = identity_lookup or _windows_identity
         self._command_runner = command_runner
+        self._own_process_ids = own_process_ids or (lambda: _default_own_process_ids(self.paths))
+        self._elevated_check = elevated_check or _process_is_elevated
         self._scopes: dict[str, _ScopeState] = {}
         self._lock = threading.RLock()
 
@@ -179,12 +257,7 @@ class DesktopAutomationService:
             self.clear_scope(thread_id)
             return
         if chosen is DesktopAccessScope.all:
-            if hwnd is not None:
-                raise DesktopAutomationError("All windows does not select a window.", code="desktop_invalid_arguments")
-            self.runtime.command_path()
-            with self._lock:
-                self._scopes[thread_id] = _ScopeState(scope=chosen)
-            return
+            raise DesktopAutomationError("One window does not grant every window.", code="desktop_invalid_arguments")
         if not isinstance(hwnd, int) or isinstance(hwnd, bool) or hwnd <= 0:
             raise DesktopAutomationError("Choose an open window first.", code="desktop_invalid_arguments")
         window = self._find_window(hwnd)
@@ -211,22 +284,21 @@ class DesktopAutomationService:
             requested = DesktopAccessScope(desired)
         except ValueError as exc:
             raise DesktopAutomationError("Unknown desktop access scope.", code="desktop_invalid_arguments") from exc
-        current, identity = self.scope_for_thread(thread_id)
-        if requested is DesktopAccessScope.off or current is DesktopAccessScope.off:
-            raise DesktopAutomationError("Choose a window or explicitly grant All windows for this conversation.",
-                code="desktop_grant_required")
-        if current is DesktopAccessScope.selected:
-            if identity is None:
-                raise DesktopAutomationError("Choose a window again.", code="desktop_window_required")
+        if requested is DesktopAccessScope.all:
+            raise DesktopAutomationError("One window does not grant every window.", code="desktop_invalid_arguments")
+        # A missing or refused window must not block sending. The tool asks later.
+        if requested is DesktopAccessScope.off:
+            return DesktopAccessScope.off, None
+        _current, identity = self.scope_for_thread(thread_id)
+        if identity is None:
+            return DesktopAccessScope.off, None
+        try:
             window = self._find_window(identity.hwnd)
-            if window.identity != identity:
-                raise DesktopAutomationError("The selected window changed; choose it again.",
-                    code="desktop_window_changed")
-            return DesktopAccessScope.selected, identity
-        if requested is DesktopAccessScope.selected:
-            raise DesktopAutomationError("Choose a specific window for Selected window access.",
-                code="desktop_window_required")
-        return DesktopAccessScope.all, None
+        except DesktopAutomationError:
+            return DesktopAccessScope.off, None
+        if window.identity != identity:
+            return DesktopAccessScope.off, None
+        return DesktopAccessScope.selected, identity
 
     def list_windows(self, thread_id: str, *, _bound: _ScopeState | None = None) -> list[DesktopWindow]:
         scope, selected = self._effective_scope(thread_id, _bound)
@@ -239,7 +311,10 @@ class DesktopAutomationService:
             if window.identity != selected:
                 raise DesktopAutomationError("The selected window changed; choose it again.", code="desktop_window_changed")
             return [window]
-        return self._windows()
+        raise DesktopAutomationError(
+            "Choose one window. Local AI Workbench will not take a window over.",
+            code="desktop_window_required",
+        )
 
     def inspect(self, thread_id: str, *, hwnd: int | None = None, depth: int = 3,
                 interactive: bool = False, selector: str | None = None,
@@ -407,7 +482,7 @@ class DesktopAutomationService:
         @tool("desktop_inspect")
         def desktop_inspect(hwnd: WindowArgument = None, depth: Annotated[int, Field(ge=1, le=6)] = 3,
                             interactive: bool = False, selector: OptionalSelectorArgument = None) -> str:
-            """Read the target window's accessibility tree. In All windows mode, supply an HWND."""
+            """Read the one granted window's accessibility tree."""
             return result_of(lambda: service.inspect(thread_id, hwnd=hwnd, depth=depth,
                 interactive=interactive, selector=selector, _bound=bound))
 
@@ -501,15 +576,14 @@ class DesktopAutomationService:
         scope, selected = self._effective_scope(thread_id, bound)
         if scope is DesktopAccessScope.off:
             raise DesktopAutomationError("Windows access is off for this conversation.", code="desktop_access_off")
-        if scope is DesktopAccessScope.selected:
-            if selected is None:
-                raise DesktopAutomationError("Choose a window first.", code="desktop_window_required")
-            if hwnd is not None and hwnd != selected.hwnd:
-                raise DesktopAutomationError("That window is outside the selected-window grant.", code="desktop_scope_denied")
-            hwnd = selected.hwnd
-        elif not isinstance(hwnd, int) or isinstance(hwnd, bool) or hwnd <= 0:
-            raise DesktopAutomationError("All windows mode requires an HWND from the current window list.",
-                code="desktop_window_required")
+        if scope is not DesktopAccessScope.selected or selected is None:
+            raise DesktopAutomationError(
+                "Choose one window. Local AI Workbench will not take a window over.",
+                code="desktop_window_required",
+            )
+        if hwnd is not None and hwnd != selected.hwnd:
+            raise DesktopAutomationError("That window is outside the selected-window grant.", code="desktop_scope_denied")
+        hwnd = selected.hwnd
         window = self._find_window(hwnd)
         if scope is DesktopAccessScope.selected and window.identity != selected:
             raise DesktopAutomationError("The selected window changed; choose it again.", code="desktop_window_changed")
@@ -518,6 +592,8 @@ class DesktopAutomationService:
     def _effective_scope(self, thread_id: str,
                          bound: _ScopeState | None = None) -> tuple[DesktopAccessScope, WindowIdentity | None]:
         thread_scope, thread_selected = self.scope_for_thread(thread_id)
+        if thread_scope is DesktopAccessScope.all or (bound is not None and bound.scope is DesktopAccessScope.all):
+            raise DesktopAutomationError("One window does not grant every window.", code="desktop_invalid_arguments")
         if bound is None:
             return thread_scope, thread_selected
         if thread_scope is DesktopAccessScope.off or bound.scope is DesktopAccessScope.off:
@@ -534,15 +610,43 @@ class DesktopAutomationService:
                 raise DesktopAutomationError("This run has no selected window identity.",
                     code="desktop_scope_denied")
             return DesktopAccessScope.selected, bound.selected
-        return DesktopAccessScope.all, None
+        return DesktopAccessScope.off, None
+
+    def _refusal_reason(self, window: DesktopWindow) -> str | None:
+        if window.process_id in self._own_process_ids():
+            return "Local AI Workbench does not use its own windows."
+        try:
+            elevated = bool(self._elevated_check(window.process_id))
+        except OSError:
+            elevated = False
+        if elevated:
+            return "Local AI Workbench does not use administrator windows."
+        return None
+
+    def _refuse_unlisted_own_processes(self) -> None:
+        try:
+            self._own_process_ids()
+        except (psutil.Error, OSError, ValueError) as exc:
+            raise DesktopAutomationError(
+                "Local AI Workbench could not check its own windows.",
+                code="desktop_window_refused",
+            ) from exc
 
     def _find_window(self, hwnd: int) -> DesktopWindow:
-        window = next((candidate for candidate in self._windows() if candidate.hwnd == hwnd), None)
+        self._refuse_unlisted_own_processes()
+        window = next((candidate for candidate in self._collect_windows() if candidate.hwnd == hwnd), None)
         if window is None:
             raise DesktopAutomationError("The window is not in the current visible window list.", code="desktop_window_changed")
+        reason = self._refusal_reason(window)
+        if reason:
+            raise DesktopAutomationError(reason, code="desktop_window_refused")
         return window
 
     def _windows(self) -> list[DesktopWindow]:
+        self._refuse_unlisted_own_processes()
+        return [window for window in self._collect_windows() if self._refusal_reason(window) is None]
+
+    def _collect_windows(self) -> list[DesktopWindow]:
         raw = self._run_cli(["list-windows"], timeout=20)
         if not isinstance(raw, list) or len(raw) > _MAX_WINDOWS:
             raise DesktopAutomationError("The window list is unavailable or too large.", code="desktop_worker_error")

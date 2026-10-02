@@ -8,9 +8,8 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 
-from langchain_core.messages import AIMessage
 from workbench_backend.agents.file_operations import (
-    ExactEdit, apply_edits_tool, edited_original, validate_delete_target, validate_mutation_batch,
+    ExactEdit, apply_edits_tool, edited_original, file_order_lock, file_order_path, validate_delete_target,
 )
 from workbench_backend.errors import HarnessError
 
@@ -84,16 +83,21 @@ class ProjectOperationUpgradeTests(unittest.TestCase):
                 validate_delete_target(self.run, {"file_path": "/dir"})
             link.rmdir() if link.is_junction() else link.unlink()
 
-    def test_native_and_structured_mutations_share_batch_guard(self):
-        def request(calls):
-            message = AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": str(index)} for index, (name, args) in enumerate(calls)])
-            return SimpleNamespace(runtime=SimpleNamespace(state={"messages": [message]}))
-        with self.assertRaises(HarnessError):
-            validate_mutation_batch(self.run, request([("edit_file", {"file_path": "/file.txt"}), ("apply_edits", {"file_path": "file.txt", "base_sha256": "0" * 64})]))
-        with self.assertRaises(HarnessError):
-            validate_mutation_batch(self.run, request([("delete", {"file_path": "dir"}), ("write_file", {"file_path": "dir/child.txt"})]))
-        validate_mutation_batch(self.run, request([("write_file", {"file_path": "one.txt"}), ("write_file", {"file_path": "two.txt"})]))
-        validate_mutation_batch(self.run, request([("edit_file", {"file_path": "file.txt"})]))
+    def test_same_path_edits_share_one_lease(self):
+        same = file_order_path(self.root, "/file.txt")
+        self.assertEqual(same, file_order_path(self.root, "file.txt"))
+        self.assertEqual(same, file_order_path(self.root, "./file.txt"))
+        self.assertIs(file_order_lock(same), file_order_lock(file_order_path(self.root, "./file.txt")))
+        self.assertNotEqual(same, file_order_path(self.root, "other.txt"))
+        from langchain_core.tools import ToolException
+        from workbench_backend.agents.file_operations import hold_file_order
+        with hold_file_order(file_order_path(self.root, "left.txt")):
+            with hold_file_order(file_order_path(self.root, "right.txt")):
+                pass
+        with hold_file_order(file_order_path(self.root, "dir")):
+            with self.assertRaises(ToolException):
+                with hold_file_order(file_order_path(self.root, "dir/child.txt")):
+                    pass
 
 
 if __name__ == "__main__":

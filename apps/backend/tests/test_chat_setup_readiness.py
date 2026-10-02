@@ -15,7 +15,6 @@ from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.setup_service import SetupService
 from workbench_backend.assets.schemas import RetainedUploadRequest
 from workbench_backend.agents.tools import resolve_presented_tools
-from workbench_backend.desktop_automation.service import DesktopAccessScope
 from workbench_backend.errors import ManagerError
 from workbench_backend.inference.schemas import ConnectedDeploymentRequest, ProfileWriteRequest, ServerProperties
 from tests.scripted_model import ScriptedChatModel
@@ -194,20 +193,22 @@ class ChatSetupReadinessTests(unittest.TestCase):
             "input_policy": {"pinned_tools": ["desktop_list_windows"]},
             "presented_tools": ["desktop_list_windows"]}).json()
         url = f"/v1/chat/conversations/{chat['id']}/readiness"
-        missing = self.client.post(url, json={})
-        self.assertEqual(missing.status_code, 200, missing.text)
-        self.assertEqual(missing.json()["status"], "needs_action")
-        self.assertEqual(missing.json()["issues"][0]["code"], "desktop_grant_required")
-        self.assertFalse(missing.json()["can_send"])
-        denied = self.client.post(f"/v1/chat/conversations/{chat['id']}/start", json={"task": "Inspect the window"})
-        self.assertEqual(denied.status_code, 409, denied.text)
-        self.assertEqual(denied.json()["code"], "desktop_grant_required")
+        calls = []
+
+        def command_path():
+            calls.append("command")
+            return self.root / "winapp.exe"
+
+        with patch.object(self.app.state.harness.desktop_automation.runtime, "command_path", side_effect=command_path):
+            missing = self.client.post(url, json={})
+            self.assertEqual(missing.status_code, 200, missing.text)
+            self.assertFalse(missing.json()["can_send"], missing.text)
+            self.assertIn("desktop_invalid_arguments", [issue["code"] for issue in missing.json()["issues"]])
+            started = self.client.post(f"/v1/chat/conversations/{chat['id']}/start", json={"task": "Inspect the window"})
+            self.assertEqual(started.status_code, 409, started.text)
+            self.assertEqual(started.json()["code"], "desktop_invalid_arguments")
+        self.assertEqual(calls, [])
         self.assertEqual(self.client.get(f"/v1/chat/conversations/{chat['id']}").json()["transcript"], [])
-        with patch.object(self.app.state.harness.desktop_automation, "scope_for_thread",
-            return_value=(DesktopAccessScope.all, None)):
-            granted = self.client.post(url, json={})
-        self.assertEqual(granted.status_code, 200, granted.text)
-        self.assertTrue(granted.json()["can_send"])
 
     def test_browser_worker_and_lost_session_block_readiness_and_send_before_saving_message(self):
         chat = self.client.post("/v1/chat/conversations", json={
