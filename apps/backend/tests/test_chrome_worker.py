@@ -18,6 +18,7 @@ from unittest.mock import patch
 import psutil
 from fastmcp import Client
 from langchain.mcp import MCPAdapter
+from langchain_core.tools import ToolException
 from PIL import Image
 
 from workbench_backend.browser.runtime import BrowserRuntime, PACKAGE_MANIFEST
@@ -98,7 +99,10 @@ class ChromeIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         product = Path(os.environ.get("LOCALAPPDATA", "")) / "LocalAIWorkbench"
         self.runtime = BrowserRuntime(WorkbenchPaths(product))
-        if not self.runtime.node.is_file() or self.runtime.chrome is None or not (PACKAGE_MANIFEST / "node_modules/@playwright/mcp").is_dir():
+        self.modules = PACKAGE_MANIFEST / "node_modules"
+        if not (self.modules / "@playwright/mcp").is_dir():
+            self.modules = self.runtime.package_root / "node_modules"
+        if not self.runtime.node.is_file() or self.runtime.chrome is None or not (self.modules / "@playwright/mcp").is_dir():
             self.skipTest("Actual Chrome and the explicitly installed pinned development worker are required.")
         scratch = Path(__file__).resolve().parents[3] / ".scratch"
         self.temp = tempfile.TemporaryDirectory(prefix="chrome-worker-", dir=scratch)
@@ -109,6 +113,16 @@ class ChromeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.url = f"http://127.0.0.1:{self.server.server_port}"
         self.stack = AsyncExitStack()
         self.workers = []
+        modules = self.modules
+
+        class SourceWorkerClient(BrowserWorkerClient):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.transport.env["NODE_PATH"] = str(modules)
+
+        self.worker_client = SourceWorkerClient
+        self.worker_client_patch = patch("workbench_backend.browser.worker_client.BrowserWorkerClient", SourceWorkerClient)
+        self.worker_client_patch.start()
 
     async def asyncTearDown(self):
         if not hasattr(self, "stack"):
@@ -120,9 +134,10 @@ class ChromeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.server.server_close()
         self.server_thread.join(timeout=3)
         self.temp.cleanup()
+        self.worker_client_patch.stop()
 
-    async def worker(self, profile="chat-a"):
-        worker = BrowserWorkerClient(self.runtime.node, PACKAGE_MANIFEST / "worker.js", self.root / profile, self.root / f"output-{len(self.workers)}", chrome_path=self.runtime.chrome)
+    async def worker(self, profile="chat-a", *, script=None):
+        worker = self.worker_client(self.runtime.node, script or PACKAGE_MANIFEST / "worker.js", self.root / profile, self.root / f"output-{len(self.workers)}", chrome_path=self.runtime.chrome)
         self.workers.append(worker)
         await worker.transport.connect()
         await worker.connect()
@@ -147,6 +162,84 @@ class ChromeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         state = await worker.get_state()
         return await worker.action({"session_id": state["session_id"], "page_id": state["active_page_id"], "revision": state["revision"], "action": action})
 
+    async def test_first_navigation_observation_waits_for_complete_context_initialization(self):
+        source = (PACKAGE_MANIFEST / "worker.js").read_text(encoding="utf8")
+        boundary = "    context = launched;"
+        self.assertEqual(source.count(boundary), 1)
+        # Stretch only the actual launch boundary. Chrome, the private state
+        # handler and the official MCP adapter keep their production behavior.
+        source = source.replace(boundary, boundary + """
+    await fs.writeFile(path.join(outputDir, '.startup-boundary'), 'ready');
+    while (!closing && !(await fs.stat(path.join(outputDir, '.startup-release')).catch(() => null)))
+      await new Promise(resolve => setTimeout(resolve, 5));""", 1)
+        source = source.replace("async function state() {", """async function state() {
+  if (context && !(await fs.stat(path.join(outputDir, '.startup-release')).catch(() => null)))
+    await fs.writeFile(path.join(outputDir, '.observation-boundary'), 'ready');""", 1)
+        script = self.root / "worker-startup-fixture.js"
+        script.write_text(source, encoding="utf8")
+        worker, tools = await self.worker("startup-chat", script=script)
+        navigation = asyncio.create_task(tools["browser_navigate"].coroutine(url=self.url + "/page"))
+        state_task = None
+        release = worker.output_dir / ".startup-release"
+
+        async def exists(name):
+            return await asyncio.to_thread((worker.output_dir / name).exists)
+
+        try:
+            await self.until(lambda: exists(".startup-boundary"), bool)
+            state_task = asyncio.create_task(worker.get_state())
+            await self.until(lambda: exists(".observation-boundary"), bool)
+            await asyncio.to_thread(release.write_text, "continue", encoding="utf8")
+            state = await asyncio.wait_for(state_task, 5)
+            self.assertFalse(state["lost"])
+            self.assertIsNotNone(state["session_id"])
+            self.assertTrue(state["tabs"])
+            self.assertIn(state["active_page_id"], {tab["page_id"] for tab in state["tabs"]})
+            await asyncio.wait_for(navigation, 8)
+            self.assertEqual((await worker.get_state())["tabs"][0]["url"], self.url + "/page")
+        finally:
+            await asyncio.to_thread(release.write_text, "continue", encoding="utf8")
+            await asyncio.gather(navigation, *([state_task] if state_task else []), return_exceptions=True)
+
+    async def test_background_frame_failure_reports_view_error_preserves_foreground_results_and_recovers(self):
+        source = (PACKAGE_MANIFEST / "worker.js").read_text(encoding="utf8")
+        boundary = "    await nextPage.screencast.start({"
+        self.assertEqual(source.count(boundary), 1)
+        source = source.replace(boundary, """    if (await fs.stat(path.join(outputDir, '.fail-frame')).catch(() => null))
+      throw new Error('Fixture background frame unavailable');
+""" + boundary, 1)
+        script = self.root / "worker-frame-fixture.js"
+        script.write_text(source, encoding="utf8")
+        worker, tools = await self.worker("frame-chat", script=script)
+        await tools["browser_navigate"].coroutine(url=self.url + "/page")
+        await worker.set_streaming(True)
+        await self.until(lambda: worker.poll(), lambda value: bool(value.get("frame")))
+        trigger = worker.output_dir / ".fail-frame"
+        await asyncio.to_thread(trigger.write_text, "fail once", encoding="utf8")
+        await tools["browser_navigate"].coroutine(url=self.url + "/set-cookie")
+        state = await worker.get_state()
+        self.assertFalse(state["lost"])
+        self.assertIn("live Browser view is unavailable", state["error"])
+        self.assertIn(self.url + "/set-cookie", str(await tools["browser_snapshot"].coroutine()))
+        # A real foreground action failure still reaches the model.
+        with self.assertRaises(ToolException):
+            await tools["browser_click"].coroutine(element="missing fixture button", ref="missing")
+        await worker.set_streaming(False)
+        # Direct requests still receive frame setup failures; only unsolicited
+        # background errors are kept out of unrelated MCP action results.
+        with self.assertRaises(HarnessError) as frame_failure:
+            await worker.set_streaming(True)
+        self.assertEqual(frame_failure.exception.code, "browser_worker_failed")
+        self.assertFalse((await worker.get_state())["lost"])
+        await asyncio.to_thread(trigger.unlink)
+        await worker.set_streaming(True)
+        await tools["browser_navigate"].coroutine(url=self.url + "/page")
+        recovered = await self.until(lambda: worker.poll(), lambda value: bool(value.get("frame")))
+        self.assertEqual(recovered["state"]["tabs"][0]["url"], self.url + "/page")
+        self.assertIsNone(recovered["state"]["error"])
+        self.assertIn("chat_signin=retained", str(await tools["browser_snapshot"].coroutine()))
+        await worker.set_streaming(False)
+
     async def test_actual_context_frames_manual_input_tabs_files_and_cleanup(self):
         worker, tools = await self.worker()
         await tools["browser_navigate"].coroutine(url=self.url + "/page")
@@ -164,8 +257,7 @@ class ChromeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("same Chrome page", snapshot)
         stale = await worker.get_state()
         await self.act(worker, {"type": "resize", "width": 390, "height": 844})
-        snapshot = str(await tools["browser_snapshot"].coroutine())
-        self.assertIn("Viewport: 390 x 844", snapshot)
+        await self.until(lambda: tools["browser_snapshot"].coroutine(), lambda value: "Viewport: 390 x 844" in str(value))
         with self.assertRaises(HarnessError) as refused:
             await worker.action({"session_id": stale["session_id"], "page_id": stale["active_page_id"], "revision": stale["revision"], "action": {"type": "text", "text": "obsolete"}})
         self.assertEqual(refused.exception.code, "browser_stale_action")
@@ -253,7 +345,11 @@ class ChromeIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 tools = {item.name: item for item in available}
                 self.assertEqual(service.status(run.thread_id)["state"], "closed")
                 self.assertFalse((paths.state / "browser-profiles" / run.thread_id).exists())
-                await tools["browser_navigate"].coroutine(url=self.url + "/page")
+                navigation = await tools["browser_navigate"].ainvoke({"type": "tool_call", "id": "native-content", "name": "browser_navigate", "args": {"url": self.url + "/page"}})
+                self.assertEqual(navigation.status, "success")
+                self.assertIsNone(navigation.artifact)
+                self.assertIn("Owned browser fixture", navigation.content)
+                self.assertNotIn("\nNone", navigation.content)
                 state = service.status(run.thread_id)
                 self.assertEqual(state["tabs"][0]["url"], self.url + "/page")
                 await tools["browser_resize"].coroutine(width=768, height=1024)

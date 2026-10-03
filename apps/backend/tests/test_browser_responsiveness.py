@@ -328,6 +328,17 @@ class BrowserLargeHistoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.browser._marker(key).exists())
         self.assertEqual((await asyncio.to_thread(self.browser.status, key))["state"], "closed")
 
+    async def test_live_view_error_is_visible_without_losing_session_and_clears_on_recovery(self):
+        self.session.worker.state["error"] = "The live Browser view is unavailable."
+        result = await self.on_owner(self.browser.poll_view(self.run.thread_id))
+        self.assertEqual(result["state"]["error"], "The live Browser view is unavailable.")
+        self.assertEqual(result["state"]["state"], "active")
+        self.assertIs(self.browser._sessions[self.run.thread_id], self.session)
+        self.session.worker.state["error"] = None
+        recovered = await self.on_owner(self.browser.poll_view(self.run.thread_id))
+        self.assertIsNone(recovered["state"]["error"])
+        self.assertEqual(recovered["state"]["state"], "active")
+
     async def test_actual_event_route_reads_one_owner_per_iteration_without_diagnostics_on_either_loop(self):
         reads = []
         original = self.store.get_run_browser

@@ -665,6 +665,9 @@ function chatDeployHealthNotice(conversation: ChatConversation | null, selectedD
     return null;
   }
   const selectedIsBound = selectedDeployment?.id === conversation.deployment_id && health.deployment_id === conversation.deployment_id;
+  if (selectedIsBound && health.code === "deploy_unhealthy" && selectedDeployment?.status === "running" && selectedDeployment.health?.healthy === true) {
+    return null;
+  }
   if (selectedIsBound && selectedDeployment?.scope === "managed" && (selectedDeployment.status === "stopped" || selectedDeployment.status === "starting")) {
     return null;
   }

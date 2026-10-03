@@ -18,7 +18,7 @@ if (!token || !profileDir || !outputDir || !manifestPath)
 
 const sessionId = crypto.randomUUID();
 let context, starting, closing = false, lost = false, revision = 0, frameSeq = 0;
-let activePage, latestFrame, streaming = false, recordingPage;
+let activePage, latestFrame, streaming = false, recordingPage, streamError = null;
 let streamUpdate = Promise.resolve(), mutation = Promise.resolve();
 let inputReset = Promise.resolve();
 let viewport = { width: 1440, height: 900 };
@@ -69,6 +69,7 @@ function updateStream() {
     if (recordingPage) await recordingPage.screencast.stop().catch(() => {});
     recordingPage = undefined;
     latestFrame = undefined;
+    if (!streaming) streamError = null;
     if (!nextPage || closing || nextPage.isClosed()) return;
     await record(nextPage).viewportReady;
     const recordedRevision = revision;
@@ -87,7 +88,15 @@ function updateStream() {
       },
     });
     recordingPage = nextPage;
+    streamError = null;
+  }).catch(error => {
+    streamError = 'The live Browser view is unavailable. Reopen the Browser view to retry; page actions remain available.';
+    throw error;
   });
+  // Page events start background frame work without awaiting it. Mark this
+  // promise handled so upstream cannot report its rejection as an unrelated
+  // MCP action error. Direct management callers still receive the rejection.
+  streamUpdate.catch(() => {});
   return streamUpdate;
 }
 function restartStream() {
@@ -193,6 +202,10 @@ async function ensureContext() {
   return starting;
 }
 async function state() {
+  // The persistent context initially includes profile pages that have not yet
+  // been observed or replaced. Concurrent rail/monitor reads must share the
+  // launch barrier rather than expose that unfinished page set as live state.
+  if (starting) await starting;
   const current = active();
   const openPages = pages();
   await Promise.all(openPages.map(page => record(page).viewportReady));
@@ -213,6 +226,7 @@ async function state() {
     tabs: openPages.map(page => ({ page_id: record(page).page_id, title: record(page).title, url: page.url() })),
     dialog: selected?.dialog ? { type: selected.dialog.type(), message: selected.dialog.message(), default_value: selected.dialog.defaultValue() } : null,
     file_chooser: selected?.chooser ? { multiple: selected.chooser.isMultiple() } : null,
+    error: streamError,
     observed_at: new Date().toISOString(),
   };
 }

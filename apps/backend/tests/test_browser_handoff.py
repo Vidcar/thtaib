@@ -10,8 +10,12 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain.agents import create_agent
+from langchain.agents.middleware import ExtendedModelResponse, ModelRequest, ModelResponse
+from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
 from langchain_core.tools import StructuredTool
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.errors import GraphInterrupt
 
 from tests import test_harness as harness_fixture
 from tests import test_agent_capabilities as helper_fixture
@@ -22,6 +26,7 @@ from workbench_backend.agents.execution_policy import ExecutionControl
 from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
 from workbench_backend.agents.schemas import AgentRun, InterruptDecisionRequest
 from workbench_backend.inference.ids import utc_now
+from workbench_backend.inference.request_projection import TOOL_CONTEXT_MARKER, project_context_payload
 from workbench_backend.state.checkpointer import submit_checkpoint_task
 
 
@@ -98,6 +103,188 @@ class BrowserDrainTests(unittest.TestCase):
         with self.assertRaises(Exception) as caught:
             invoke("after")
         self.assertEqual(caught.exception.code, "duplicate_tool_call")
+
+
+class BrowserObservationTests(unittest.TestCase):
+    def request(self, messages, state=None):
+        return ModelRequest(model=ScriptedChatModel([]), tools=[], messages=messages,
+            state=state if state is not None else {"messages": messages}, runtime=None)
+
+    def test_failed_cancelled_or_interrupted_dispatch_does_not_consume_marked_observation(self):
+        root = fixture_run(browser_observation="HANDOFF-A", browser_revision=1)
+        workbench = WorkbenchHarnessMiddleware(root)
+        messages = [HumanMessage(content="Accepted task", id="task"),
+            AIMessage(content="", additional_kwargs={"reasoning_content": "CURRENT-CYCLE"},
+                tool_calls=[{"name": "echo", "args": {"text": "ok"}, "id": "echo"}]),
+            ToolMessage(content="ok", name="echo", tool_call_id="echo")]
+        request = self.request(messages)
+        sent = []
+        for error in (RuntimeError("failed"), asyncio.CancelledError(), GraphInterrupt(())):
+            def fail(filtered):
+                sent.append(filtered)
+                raise error
+            with self.assertRaises(type(error)):
+                workbench.wrap_model_call(request, fail)
+        self.assertEqual(len(messages), 3)
+        self.assertEqual(root.browser_observation, "HANDOFF-A")
+        response = workbench.wrap_model_call(request,
+            lambda filtered: sent.append(filtered) or ModelResponse(result=[AIMessage(content="Done")]))
+        self.assertIsInstance(response, ExtendedModelResponse)
+        observation = response.model_response.result[0]
+        self.assertTrue(observation.additional_kwargs[TOOL_CONTEXT_MARKER])
+        self.assertTrue(observation.content.startswith("<tool_response>\n"))
+        self.assertTrue(all(item.messages[-1].model_dump() == observation.model_dump() for item in sent))
+        projected = project_context_payload(sent[-1].messages, reasoning_scope="current_turn")
+        self.assertEqual(projected["messages"][1]["reasoning_content"], "CURRENT-CYCLE")
+        self.assertEqual(workbench.browser_messages_for_count(messages)[-1].model_dump(), observation.model_dump())
+        state = {"messages": [*messages, *response.model_response.result], **response.command.update}
+        reconstructed = WorkbenchHarnessMiddleware(root)
+        again = reconstructed.wrap_model_call(self.request(state["messages"], state),
+            lambda filtered: sent.append(filtered) or ModelResponse(result=[AIMessage(content="Continued")]))
+        self.assertIsInstance(again, ModelResponse)
+        self.assertEqual(sum(bool(item.additional_kwargs.get("workbench_browser_observation"))
+            for item in sent[-1].messages), 1)
+
+    def test_async_cancellation_keeps_the_same_pending_observation(self):
+        async def exercise():
+            root = fixture_run(browser_observation="ASYNC-A", browser_revision=2)
+            workbench = WorkbenchHarnessMiddleware(root)
+            request = self.request([HumanMessage(content="Task", id="task")])
+            sent = []
+            async def fail(filtered):
+                sent.append(filtered.messages[-1])
+                raise asyncio.CancelledError()
+            with self.assertRaises(asyncio.CancelledError):
+                await workbench.awrap_model_call(request, fail)
+            async def succeed(filtered):
+                sent.append(filtered.messages[-1])
+                return ModelResponse(result=[AIMessage(content="Done")])
+            response = await workbench.awrap_model_call(request, succeed)
+            self.assertIsInstance(response, ExtendedModelResponse)
+            self.assertEqual(sent[0].model_dump(), sent[1].model_dump())
+            self.assertEqual(root.browser_observation, "ASYNC-A")
+        asyncio.run(exercise())
+
+    def test_pending_handoff_is_historical_when_resumed_browser_result_is_newer(self):
+        root = fixture_run(browser_observation="PAGE-A", browser_revision=1)
+        root.enabled_tools = root.presented_tools = ["browser_snapshot"]
+        workbench = WorkbenchHarnessMiddleware(root)
+        tool_request = SimpleNamespace(tool_call={"id": "newer-read", "name": "browser_snapshot", "args": {}})
+        result = workbench.wrap_tool_call(tool_request,
+            lambda _: ToolMessage(content="PAGE-B", name="browser_snapshot", tool_call_id="newer-read"))
+        messages = [HumanMessage(content="Task"),
+            AIMessage(content="", tool_calls=[tool_request.tool_call]), result]
+        request = self.request(messages)
+        workbench.prepare_context_request(request)
+        counted = workbench.browser_messages_for_count(messages)
+        sent = workbench._with_browser_observation(request).messages
+        self.assertEqual(counted[-1].model_dump(), sent[-1].model_dump())
+        self.assertIn("historical snapshot", sent[-1].content)
+        self.assertIn("newer-read", sent[-1].content)
+        self.assertIn("they supersede this snapshot", sent[-1].content)
+        self.assertNotIn("Current browser state was refreshed", sent[-1].content)
+        # Genuine later lifecycle changes must survive older browser evidence.
+        workbench.execution_control.invalidate_browser_state("PAGE-A")
+        fresh = workbench._with_browser_observation(request).messages[-1]
+        self.assertNotEqual(fresh.id, sent[-1].id)
+        self.assertNotIn("historical snapshot", fresh.content)
+        self.assertNotIn("newer-read", fresh.content)
+
+    def test_failed_browser_result_and_helper_evidence_do_not_supersede_handoff(self):
+        root = fixture_run(browser_observation="PAGE-A", browser_revision=1)
+        root.enabled_tools = root.presented_tools = ["browser_snapshot"]
+        workbench = WorkbenchHarnessMiddleware(root)
+        failed = workbench.wrap_tool_call(SimpleNamespace(tool_call={
+            "id": "failed-read", "name": "browser_snapshot", "args": {}}),
+            lambda _: ToolMessage(content="No live page", name="browser_snapshot",
+                tool_call_id="failed-read", status="error"))
+        child = root.model_copy(deep=True, update={"id": "helper", "tool_outcomes": {}})
+        helper = WorkbenchHarnessMiddleware(child, execution_control=workbench.execution_control)
+        child_result = helper.wrap_tool_call(SimpleNamespace(tool_call={
+            "id": "child-read", "name": "browser_snapshot", "args": {}}),
+            lambda _: ToolMessage(content="Helper page", name="browser_snapshot", tool_call_id="child-read"))
+        messages = [HumanMessage(content="Task"), failed, child_result]
+        sent = workbench._with_browser_observation(self.request(messages)).messages[-1]
+        self.assertNotIn("historical snapshot", sent.content)
+        self.assertNotIn("failed-read", sent.content)
+        self.assertNotIn("child-read", sent.content)
+
+    def test_new_lifecycle_change_during_generation_is_not_acknowledged_with_older_snapshot(self):
+        root = fixture_run(browser_observation="PAGE-A", browser_revision=1)
+        workbench = WorkbenchHarnessMiddleware(root)
+        request = self.request([HumanMessage(content="Task", id="task")])
+        sent = []
+        def answer(filtered):
+            sent.append(filtered.messages[-1])
+            workbench.execution_control.invalidate_browser_state("PAGE-C")
+            return ModelResponse(result=[helper_fixture.call("browser_snapshot", {}, "proposed-read")])
+        response = workbench.wrap_model_call(request, answer)
+        receipt = response.command.update["_browser_observation_seen"]
+        self.assertEqual(receipt, sent[0].additional_kwargs["workbench_browser_observation"])
+        self.assertEqual(root.browser_tool_proposals["root:proposed-read"], 1)
+        state = {"messages": [*request.messages, *response.model_response.result], **response.command.update}
+        next_request = self.request(state["messages"], state)
+        next_observation = workbench._with_browser_observation(next_request).messages[-1]
+        self.assertIn("PAGE-C", next_observation.content)
+        self.assertNotIn("PAGE-A", next_observation.content)
+        self.assertNotEqual(next_observation.additional_kwargs["workbench_browser_observation"], receipt)
+
+    def test_native_checkpoint_survives_reconstruction_compaction_and_identical_handoffs(self):
+        root = fixture_run()
+        root.enabled_tools = root.presented_tools = ["browser_snapshot", "echo"]
+        control = ExecutionControl(root)
+        received = []
+        class HandoffModel(ScriptedChatModel):
+            def _generate(self, messages, *args, **kwargs):
+                received.append(list(messages))
+                response = super()._generate(messages, *args, **kwargs)
+                if len(received) == 1:
+                    control.invalidate_browser_state("PAGE-A")
+                return response
+        value = HandoffModel([
+            helper_fixture.call("browser_snapshot", {}, "read-b"),
+            helper_fixture.call("echo", {"text": "ok"}, "echo"), AIMessage(content="Done")])
+        snapshot = StructuredTool.from_function(name="browser_snapshot", description="Read the live page",
+            func=lambda: "PAGE-B")
+        echo = StructuredTool.from_function(name="echo", description="Echo text", func=lambda text: text)
+        saver, config = InMemorySaver(), {"configurable": {"thread_id": "observation-checkpoint"}}
+        workbench = WorkbenchHarnessMiddleware(root, execution_control=control)
+        graph = create_agent(value, tools=[snapshot, echo], middleware=[workbench], checkpointer=saver)
+        graph.invoke({"messages": [HumanMessage(content="Accepted task", id="task")]}, config)
+        state = graph.get_state(config).values
+        observations = [item for item in state["messages"] if item.additional_kwargs.get("workbench_browser_observation")]
+        self.assertEqual(len(observations), 1)
+        first = observations[0]
+        self.assertEqual(state["_browser_observation_seen"], first.additional_kwargs["workbench_browser_observation"])
+        self.assertIn("historical snapshot", first.content)
+        self.assertIn("read-b", first.content)
+        self.assertEqual([sum(bool(item.additional_kwargs.get("workbench_browser_observation"))
+            for item in frame) for frame in received], [0, 1, 1])
+        self.assertEqual(received[1][-1].model_dump(), first.model_dump())
+        self.assertLess(state["messages"].index(first), next(index for index, item in enumerate(state["messages"])
+            if isinstance(item, AIMessage) and any(call["id"] == "echo" for call in item.tool_calls)))
+        # Native removal models a compacted historical message. The durable
+        # receipt, rather than an ephemeral middleware cache, prevents replay.
+        graph.update_state(config, {"messages": [RemoveMessage(id=first.id)]})
+        rebuilt = create_agent(ScriptedChatModel([AIMessage(content="Continued")]), tools=[snapshot, echo],
+            middleware=[WorkbenchHarnessMiddleware(root, execution_control=control)], checkpointer=saver)
+        rebuilt.invoke({"messages": [HumanMessage(content="Continue", id="continue")]}, config)
+        self.assertFalse(any(item.additional_kwargs.get("workbench_browser_observation")
+            for item in rebuilt.get_state(config).values["messages"]))
+        control.take_browser_control()
+        control.wait_for_browser_settle()
+        control.return_browser_control("PAGE-A")
+        rebuilt.invoke({"messages": [HumanMessage(content="Continue again", id="again")]}, config)
+        second = next(item for item in rebuilt.get_state(config).values["messages"]
+            if item.additional_kwargs.get("workbench_browser_observation"))
+        self.assertNotEqual(second.id, first.id)
+        # A fresh accepted run on the same native thread owns its own receipt.
+        fresh_root = root.model_copy(deep=True, update={"id": "fresh-run"})
+        fresh = create_agent(ScriptedChatModel([AIMessage(content="New run")]), tools=[snapshot, echo],
+            middleware=[WorkbenchHarnessMiddleware(fresh_root)], checkpointer=saver)
+        fresh.invoke({"messages": [HumanMessage(content="New task", id="new-task")]}, config)
+        self.assertEqual(sum(bool(item.additional_kwargs.get("workbench_browser_observation"))
+            for item in fresh.get_state(config).values["messages"]), 2)
 
 
 class BrowserNativeHandoffTests(unittest.TestCase):

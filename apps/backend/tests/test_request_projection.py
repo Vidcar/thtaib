@@ -32,7 +32,7 @@ from workbench_backend.agents.tool_schema import model_tool_schema
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.adapter import WorkbenchChatOpenAI, _raise_for_invalid_completed_tool_calls
 from workbench_backend.inference.configuration_options import bundle_configuration_options, validate_model_reasoning
-from workbench_backend.inference.request_projection import project_context_payload
+from workbench_backend.inference.request_projection import TOOL_CONTEXT_MARKER, project_context_payload
 from workbench_backend.inference.schemas import Deployment, GgufRuntimeMetadata, ServerProperties, SettingsBag
 from workbench_backend.inference.settings import resolve_bags
 from workbench_backend.inference.telemetry import LatestGenerationPublisher, RequestTelemetry, current_request_purpose, request_purpose
@@ -131,11 +131,15 @@ class RequestProjectionTests(unittest.TestCase):
                 self.assertEqual(counts[-1]["max_tokens"], -1)
                 self.assertEqual(user.model_dump(), before)
                 checkpoint = agent.get_state(config).values["messages"]
-                retained_users = [message for message in checkpoint if isinstance(message, HumanMessage)]
+                retained_users = [message for message in checkpoint if isinstance(message, HumanMessage)
+                    and not message.additional_kwargs.get(TOOL_CONTEXT_MARKER)]
                 self.assertEqual([message.id for message in retained_users],
                     [f"user-{number}" for number in range(1, index + 1)])
-                self.assertFalse(any("browser state was refreshed" in str(message.content)
-                    for message in checkpoint), "Ephemeral browser observations must never enter checkpoints")
+                observations = [message for message in checkpoint
+                    if message.additional_kwargs.get("workbench_browser_observation")]
+                self.assertEqual(len(observations), index)
+                self.assertEqual(observations[-1].content, generations[-1]["messages"][-1]["content"])
+                self.assertTrue(all(message.additional_kwargs.get(TOOL_CONTEXT_MARKER) for message in observations))
             if provider:
                 self.assertTrue(counts[-1]["tools"][0]["function"]["strict"])
                 self.assertIs(counts[-1]["tools"][0]["function"]["parameters"]["additionalProperties"], False)

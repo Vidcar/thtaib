@@ -93,7 +93,7 @@ def model_description_overrides() -> dict[str, str]:
 
 # Optional tool presentation shares this overlay; worker schemas remain native.
 TOOL_PRESENTATIONS.update({
-    'browser_navigate': ToolPresentation('Open page', 'Open a page and return its address, title, headings and links.', 'browser', prerequisites=('browser',), effect='browser_action'),
+    'browser_navigate': ToolPresentation('Open page', 'Open a page and return its address, title, headings and links.', 'browser', ('url', 'address', 'open url'), prerequisites=('browser',), effect='browser_action'),
     'browser_navigate_back': ToolPresentation('Go back', 'Go back in the isolated test browser.', 'browser', prerequisites=('browser',), effect='browser_action'),
     'browser_tabs': ToolPresentation('Browser tabs', 'List, create, close, or select test browser tabs.', 'browser', prerequisites=('browser',), effect='browser_action'),
     'browser_snapshot': ToolPresentation('Page structure', 'Read the page text to cite: headings, links and visible lines.', 'browser', prerequisites=('browser',), effect='read'),
@@ -117,7 +117,7 @@ TOOL_PRESENTATIONS.update({
     'browser_mouse_drag_xy': ToolPresentation('Drag coordinates', 'Drag within the viewport; requires screenshot reading.', 'browser', prerequisites=('browser',), effect='browser_action'),
     'browser_mouse_down': ToolPresentation('Hold browser button', 'Hold a mouse button in the browser; requires screenshot reading.', 'browser', prerequisites=('browser',), effect='browser_action'),
     'browser_mouse_up': ToolPresentation('Release browser button', 'Release a mouse button in the browser; requires screenshot reading.', 'browser', prerequisites=('browser',), effect='browser_action'),
-    'browser_mouse_wheel': ToolPresentation('Scroll browser', 'Scroll the current page.', 'browser', prerequisites=('browser',), effect='browser_action'),
+    'browser_mouse_wheel': ToolPresentation('Scroll browser', 'Scroll the current page.', 'browser', ('scroll', 'browser_scroll', 'mouse wheel'), prerequisites=('browser',), effect='browser_action'),
     'start_preview': ToolPresentation('Start project preview', 'Start an owned local server for the bound project.', 'preview', prerequisites=('project',), effect='host_process'),
     'stop_preview': ToolPresentation('Stop project preview', 'Stop the owned local project server.', 'preview', prerequisites=('project',), effect='host_process'),
     'preview_status': ToolPresentation('Project preview status', 'Read the preview state, localhost health and recent bounded server log.', 'preview', prerequisites=('project',), effect='read'),

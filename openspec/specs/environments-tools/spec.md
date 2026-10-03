@@ -324,6 +324,21 @@ Selected Browser access SHALL run actual Chrome without a visible operating-syst
 - **WHEN** the worker fails during an action
 - **THEN** its live session is reported lost, the action outcome is preserved without replay, and retained sign-ins are distinct from the lost pages.
 
+#### Scenario: First navigation with concurrent viewing
+- **WHEN** the first authorized browser action launches Chrome while the live view or status monitor observes its startup
+- **THEN** observation waits for coherent initialized page state and the action continues in the same owned context
+- **AND** partially initialized state MUST NOT establish browser loss or cause a healthy browser to be terminated.
+
+#### Scenario: Recover a lost browser without clearing sign-ins
+- **WHEN** a lost session is closed and a fresh session is started
+- **THEN** the existing Close/start path retains the conversation profile and recovery guidance identifies it distinctly from Reset
+- **AND** neither recovery path automatically repeats completed or uncertain actions.
+
+#### Scenario: Background live-view failure
+- **WHEN** background frame capture fails while a foreground browser action succeeds
+- **THEN** the live-view error remains observable without changing that action's successful result
+- **AND** actual foreground action failures, directly requested frame failures and genuine worker loss retain their existing error and recovery boundaries.
+
 ### Requirement: Browser observation retains scoped ownership without blocking execution
 Browser viewing and action attribution SHALL use current operational ownership and permissions without inspecting diagnostics. Ownership recovery SHALL support agent and user control, invalidate cached ownership on run handoff, and preserve takeover/return rules. Each polling iteration SHALL resolve ownership once; blocking database/file work SHALL stay off HTTP and execution event loops.
 
