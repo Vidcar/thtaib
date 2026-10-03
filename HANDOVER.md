@@ -8,6 +8,6 @@ Implemented: Playwright 1.62.1, authenticated test-only native backend, rendered
 
 Existing CPU llama.cpp build 11045 and Qwen2.5 0.5B Q4 assets passed four isolated real-model smoke cases (6.6s). This proves bounded backend/model plumbing, not model quality or desktop delivery. No downloads/upgrades or product data changes. Runtime identity is in `.scratch/executable-baseline/native-baseline.json`.
 
-Prior cleanup is complete: [#264](https://github.com/Vidcar/thtaib/issues/264), [PR265](https://github.com/Vidcar/thtaib/pull/265), [PR266](https://github.com/Vidcar/thtaib/pull/266). Main contains handover commit `b9a47b0`; no Task 02 implementation commit/PR yet.
+Prior cleanup is complete: [#264](https://github.com/Vidcar/thtaib/issues/264), [PR265](https://github.com/Vidcar/thtaib/pull/265), [PR266](https://github.com/Vidcar/thtaib/pull/266). Task 02 implementation is committed at `a721b6c` on `codex/executable-baseline`; no PR yet.
 
-Independent cross-review corrected canonical storage/temporary guards and failure-path cleanup; current follow-ups strengthen Node pre-write validation, teardown error reporting and actual reload process replacement. Agents own separate files. Next: close review findings, run final delivery gates on stable inputs, record evidence, then commit/PR/merge Task 02. Preserve native owners/SDK patch/product data; keep remote CI disabled.
+Independent source cross-review is complete; all supported findings are resolved, including pre-write canonical guards, error-reporting cleanup, live observer shutdown and actual reload process replacement. Writers are stopped. Next: run final delivery gates on stable inputs, record evidence, then PR/merge Task 02. Preserve native owners/SDK patch/product data; keep remote CI disabled.
