@@ -22,5 +22,5 @@
 - [x] 3.1 Run natural game and interactive website requests through available Qwen with browser and helper capabilities; independently validate actual artifacts and report missed expectations truthfully.
 - [x] 3.2 Run sourced online research and independent helper verification through Qwen; verify output and cited evidence, separating model choices from application defects.
 - [x] 3.3 Resolve additional confirmed application issues from these journeys and add proportionate regressions before completion.
-- [ ] 3.4 Complete fresh independent review and affected backend, desktop, shared, spec and docs acceptance; preserve report fingerprints and rerun checks after relevant edits.
-- [ ] 3.5 Deliver via reviewed Git workflow, rebuild/restart the established local application, verify loaded revision/bundle and launcher compatibility, and refresh HANDOVER.md with actual outcomes and limits.
+- [x] 3.4 Complete fresh independent review and affected backend, desktop, shared, spec and docs acceptance; preserve report fingerprints and rerun checks after relevant edits.
+- [x] 3.5 Deliver via reviewed Git workflow, rebuild/restart the established local application, verify loaded revision/bundle and launcher compatibility, and refresh HANDOVER.md with actual outcomes and limits.
