@@ -1,6 +1,6 @@
 # Browser repair and supplied prompt verification
 
-Updated 2026-10-03. Browser/model-input repairs and six actual Qwen trials are verified. Git delivery remains. Dave's latest priority is correct information and timing, not generated quality. No completed run is treated as output-quality certification.
+Updated 2026-10-03. Browser/model-input repairs and six actual Qwen trials are verified and delivered in [PR240](https://github.com/Vidcar/thtaib/pull/240), main `f302098`. Dave's latest priority is correct information and timing, not generated quality. No completed run is treated as output-quality certification.
 
 ## Confirmed application faults
 
@@ -60,9 +60,11 @@ Skateboard original `agent_33e0ad2375da` wrote C++ five times, then independentl
 
 ## Delivery state
 
-Branch `codex/fix-browser-prompt-journeys`; reviewed Git delivery remains. Local refresh is complete: normal backend listener10868 and Electron16756 launched at15:00UTC after the final desktop build; installed worker hash matches reviewed source. Authenticated readiness confirms60 enabled tools and the unchanged healthy Qwen profile. Real final reply `agent_6db9ed215fb6` completed READY at15:10UTC. The recording hook is absent; the latest prior capture precedes final launch. Native recovery in the same completed chat returns to Ready without the obsolete diagnosis, while the real earlier command failure stays visible. Evidence: `final-plain-readiness.json`, `final-plain-processes.json`.
+Reviewed repair merged through [PR240](https://github.com/Vidcar/thtaib/pull/240) at15:20:52UTC, main `f302098`. Local refresh is complete: normal backend listener10868 and Electron16756 launched at15:00UTC after the final desktop build; installed worker hash matches reviewed source. Authenticated readiness confirms60 enabled tools and the unchanged healthy Qwen profile. Real final reply `agent_6db9ed215fb6` completed READY at15:10UTC. The recording hook is absent; the latest prior capture precedes final launch. Native recovery in the same completed chat returns to Ready without the obsolete diagnosis, while the real earlier command failure stays visible. Evidence: `final-plain-readiness.json`, `final-plain-processes.json`.
 
 After exports, the normal deletion previews allowed cleanup of exactly nine created test chats, seven created projects and the evaluation setup. Original setups/helpers/model profile/weights and other projects/chats were preserved; generated artifacts remain privately under ignored scratch. Evidence: `cleanup-result.json`.
+
+The refreshed native app is left in a clean new conversation with the original Default agent, unchanged Qwen profile and Ready status. Post-cleanup requests for deleted test runs correctly return404; preserved exports and pre-cleanup evidence establish their completed outcomes. Launcher compatibility passes. This repair's main-spec requirements match its deltas; all17 tasks are complete and only this change is archived. Other active changes retain their status.
 
 
 ## Final outcome matrix and native control
