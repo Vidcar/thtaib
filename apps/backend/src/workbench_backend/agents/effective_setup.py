@@ -1,4 +1,4 @@
-"""ARCH-003 / Issue #57: resolve one effective setup before the harness runs.
+"""Issue #57: resolve one effective setup before the harness runs.
 
 Selected ≠ loaded ≠ applied. This is the Issue #53 contract made concrete on
 the existing Chat / Lab / Agent-run path. It is not a retrieval product and
@@ -36,11 +36,11 @@ from workbench_backend.agents.input_sources import (
 NO_RETRIEVAL_GAP = "no retrieval requested"
 RAG_GAP = NO_RETRIEVAL_GAP
 RECORDED_RETRIEVAL_GAP = "recorded-tool replay does not attach a live retrieval index"
-MEMORY_GAP = "no durable memory bound for this run (AGT-004)"
+MEMORY_GAP = "no durable memory bound for this run"
 SKILL_GAP = "no skill versions bound for this run"
 KNOWLEDGE_PREAMBLE = (
-    "The following durable knowledge is application-owned versioned content "
-    "(STATE-005). Protected instructions are policy in the authored system "
+    "The following durable knowledge is application-owned versioned content. "
+    "Protected instructions are policy in the authored system "
     "prompt, not Deep Agents memory= file data."
 )
 

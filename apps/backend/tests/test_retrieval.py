@@ -1,4 +1,4 @@
-"""STATE-006 retrieve-and-offload. Fake embeddings only — not live RAG proof."""
+"""Retrieve-and-offload. Fake embeddings only — not live RAG proof."""
 
 from __future__ import annotations
 

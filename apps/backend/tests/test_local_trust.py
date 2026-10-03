@@ -1,4 +1,4 @@
-"""Issue #40 desktop↔backend shared-secret trust (partial OQ-002)."""
+"""Issue #40 desktop↔backend shared-secret trust."""
 
 from __future__ import annotations
 

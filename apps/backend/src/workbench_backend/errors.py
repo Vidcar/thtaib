@@ -62,7 +62,7 @@ class InteractionPersistenceError(WorkbenchError):
 
 
 class DefinitionCompileError(WorkbenchError):
-    """WF-001 definition compiler error. Not a Builder or workflow-runtime claim."""
+    """Definition compiler error. Not a Builder or workflow-runtime claim."""
 
 
 class LocalTrustError(WorkbenchError):

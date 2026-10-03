@@ -1,4 +1,4 @@
-"""MOD-001 bundle import and MOD-002 inspect isolation."""
+"""Bundle import and inspection isolation."""
 
 from __future__ import annotations
 

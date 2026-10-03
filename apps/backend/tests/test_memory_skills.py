@@ -1,4 +1,4 @@
-"""Official Deep Agents memory= / skills= glue (AGT-004 / STATE-005)."""
+"""Official Deep Agents memory= / skills= glue for durable knowledge versions."""
 
 from __future__ import annotations
 

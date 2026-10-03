@@ -1,4 +1,4 @@
-"""Shareable case-export sanitization (LAB-003 / Issue #64).
+"""Shareable case-export sanitization (Issue #64).
 
 Uses the same Knowledge capture detector as context captures. The detector
 is incomplete; a clean flag is not proof that no secret is present.

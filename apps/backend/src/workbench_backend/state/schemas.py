@@ -16,7 +16,7 @@ class RelatedFile(BaseModel):
 
 
 class RunLinkage(BaseModel):
-    """Follow a persisted run to checkpoint ids and related files (STATE-001)."""
+    """Follow a persisted run to checkpoint ids and related files."""
 
     run_id: str
     thread_id: str | None = None
@@ -43,7 +43,7 @@ class RecoverAction(str, Enum):
 
 
 class ExternalEffect(BaseModel):
-    """STATE-004 side-effect record. Snapshots do not undo this."""
+    """Side-effect record. Snapshots do not undo this."""
 
     id: str
     run_id: str | None = None

@@ -5,10 +5,10 @@ description: Trace impact before substantive changes to shared behaviour, owners
 
 # Change impact
 
-Establish the smallest justified change boundary using the project's instructions, current contracts and verification entry point. Inspect the current checkout and existing implementation before proposing another owner.
+Establish the smallest justified change boundary using the project's instructions, current code, interfaces and verification entry point. Inspect the current checkout and executable behaviour before proposing another owner.
 
 Follow the affected user action or caller through its owner, inputs, dependencies and outputs to an observable result. Include failure and recovery paths where they affect that result. Identify consumers beyond the edited file, including shared records and contracts. Distinguish intentional snapshots, caches, projections and different operations from competing authorities; matching names or similar code do not establish duplication.
 
-Keep a short conclusion in the current task or existing change record: owner and relevant callers, behaviour to preserve or change, uncertainties that matter, and proportionate acceptance checks. Read only the needed contracts and interfaces. Resolve routine choices independently within the user's authorization. A material unresolved behaviour decision needs clarification; a complete repository map does not.
+Keep a short conclusion in the current task or pull request: owner and relevant callers, behaviour to preserve or change, uncertainties that matter, and proportionate acceptance checks. Read only the needed code, tests and interfaces. Resolve routine choices independently within the user's authorization. A material unresolved behaviour decision needs clarification; a complete repository map does not.
 
-Use the project's change process when needed. This analysis supports implementation; it does not create an extra approval gate or planning document.
+This analysis supports implementation; it does not create an extra approval gate, planning document or separate source of truth.

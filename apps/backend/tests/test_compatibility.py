@@ -1,4 +1,4 @@
-"""MOD-006 compatibility provenance: categories stay separate; unverified ≠ incompatible."""
+"""Compatibility provenance: categories stay separate; unverified ≠ incompatible."""
 
 from __future__ import annotations
 

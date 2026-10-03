@@ -1,4 +1,4 @@
-"""Enabled tool catalogue for the embedded harness (AGT-005).
+"""Enabled tool catalogue for the embedded harness.
 
 Visibility tools are application-owned. Filesystem tools are Deep Agents
 built-ins, bound to project storage. ``execute`` is the host-shell tool from

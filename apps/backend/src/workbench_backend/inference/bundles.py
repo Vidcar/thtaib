@@ -1,4 +1,4 @@
-"""Canonical model-bundle import and reuse (MOD-001)."""
+"""Canonical model-bundle import and reuse."""
 
 from __future__ import annotations
 

@@ -1,35 +1,51 @@
-# Local AI Workbench
+# thtaib — Local AI Workbench
 
-The Windows-first desktop for **thtaib**, a local-first AI workspace for using and understanding models, Chat, Lab and Workflows. **Agent run / Builder** are existing UI terms for Workflows; the desktop name remains Local AI Workbench. Current product contracts and future changes use [OpenSpec](openspec/). Contracts include intended capabilities; the presence of a requirement does not prove a feature is built. Remaining implementation is recorded in active change tasks: [Lab](openspec/changes/lab-workbench/tasks.md), [Workflows and media](openspec/changes/consolidate-product-contract/tasks.md), and [catalogue failure recovery](openspec/changes/startup-catalogue/tasks.md).
+A Windows-first desktop for running local models and working with AI. The current app includes Chat with project files, browser/preview tools and approvals; model import and configuration; saved agents, skills, memory and MCP connections; and a Lab for local trials. Existing Agent run and Builder screens remain available. Electron/React provides the desktop, FastAPI provides the local backend, llama.cpp runs models, and Deep Agents/LangGraph provides agent execution and checkpoints.
 
-## Use the local product
+## Set up and launch
 
-On this prepared Windows checkout, double-click **Launch Workbench.vbs**. It starts the backend if needed and opens the built desktop. Closing and reopening the desktop retains conversations and project files; the backend and any running model remain available in the background.
+This repository currently provides a checkout-based development launch. Prerequisites are Python 3.12, [uv](https://docs.astral.sh/uv/), Node.js 22–24 and pnpm 10 or newer; the desktop manifest pins pnpm 10.33.3. Keep the existing lockfiles.
 
-1. Open **Models**, choose an installed model and its configuration, then load it. **Save changes** updates that configuration; **Save as configuration** creates another. Loading changes use **Apply & reload**. An already running model can be used directly.
-2. Open **Chat**. Select a model and use its adjacent tuning control for thinking and context. **Apply** keeps an override for this model in this chat. During work, changes prepare the next message; its model loads at the safe handoff. Response limits and saved model defaults belong in **Models**.
-3. Add an existing project from the Chat list for file tasks. **Ask** pauses before edits, shell commands, and other effects unless a saved permission applies; **Full access** permits enabled tools. **Plan** remains read-only at either access level. Save tools, helpers and review criteria in **Agents**.
-4. Use **+**, **@** or **/** for context, saved skills and task prompts. Each accepted message freezes the latest saved instructions and knowledge; later edits cannot change work already accepted. **Knowledge** provides guided skill fields, native Source editing and supporting files saved together as one version.
-5. Use **Stop** to cancel active work. Queued messages follow a successful turn, and pause after cancellation or failure. Choose a saved conversation from the left to continue; visiting another destination retains its draft and reading position. Unload the model from **Models** when you want to release its memory.
+From the repository root in PowerShell:
 
-## Install and run
+```powershell
+uv sync --project apps/backend --locked
+pnpm --dir apps/desktop install --frozen-lockfile
+pnpm --dir apps/desktop run build
+```
 
-Requirements: Python 3.12.x with [uv](https://docs.astral.sh/uv/); Node.js 22–24 with pnpm 10+. Windows is the supported target; the real-model smoke tier also supports Linux. Validation runs locally; GitHub CI is disabled. Agent validation commands are maintained in [AGENTS.md](AGENTS.md).
+Double-click **Launch Workbench.vbs**. It uses `scripts/Launch-Workbench.ps1` to start or reuse the compatible backend at `127.0.0.1:8000` and open the built Electron desktop. Rebuild after desktop changes. For a launcher preflight:
 
-Backend setup, from `apps/backend`: `uv sync`, then `uv run python -m workbench_backend`.
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Launch-Workbench.ps1 -CheckOnly -ShowConsole
+```
 
-Desktop setup, from `apps/desktop`: `pnpm install`, then `pnpm run build`. The double-click launcher uses that build; rebuild after code changes. `pnpm run dev` is the development mode. Launcher errors and backend startup logs live under the product `logs` directory.
+The preflight can start the backend if needed. To run development processes separately, start the backend with `uv run --project apps/backend python -m workbench_backend`, then run `pnpm --dir apps/desktop run dev` in another terminal.
 
-## Where data lives
+Open **Models** to import a GGUF or download a selected Hugging Face variant, save its configuration and load it. Choose the model in **Chat**. Add a project for file work, select enabled tools and use **Ask** for approvals or **Full access** for permitted effects. Conversations and drafts persist; **Stop** cancels active work. Closing the desktop can leave work running in the background; use the tray's Quit action for deliberate shutdown.
 
-Product data—models, runtimes, state, cases, snapshots, knowledge and the SQLite databases—lives under `%LOCALAPPDATA%\LocalAIWorkbench\`. Throwaway files belong only under `.scratch/` at the repository root, which Git ignores. Model weights and secrets are never committed.
+## Check changes locally
 
-## Entry points
+```powershell
+uv run --project apps/backend python scripts/verify.py --plan
+uv run --project apps/backend python scripts/verify.py --tier acceptance --scope shared
+```
 
-| Need | Open |
+The second command runs backend default/integration tests, desktop checks/build and generated-contract freshness. Select smaller affected scopes for smaller changes: `docs`, `workflow`, `backend`, `desktop`, `shared`. `workflow` tests the verification runner. Omitting scopes runs all areas. Evidence goes in `.scratch/verification/`; remote CI is disabled. See [AGENTS.md](AGENTS.md) for focused checks and explicit real-model validation.
+
+## Storage
+
+Windows product data lives under `%LOCALAPPDATA%\LocalAIWorkbench\`: models, runtimes, state, workspaces, cases, snapshots, knowledge, logs, `application.sqlite` and `checkpoints.sqlite`. `WORKBENCH_DATA_ROOT` selects an alternate root; development tests use `.scratch/` in this checkout. On Linux the default is `$XDG_DATA_HOME/LocalAIWorkbench`, or `~/.local/share/LocalAIWorkbench`. Windows remains the desktop target. Launcher and backend logs are in the active data root's `logs/` directory. Keep model weights, credentials and user data out of Git.
+
+## Find the implementation
+
+| Area | Owner |
 | --- | --- |
-| Agent working rules | [AGENTS.md](AGENTS.md) |
-| LangChain framework references for development agents | [Local upstream references](.agents/references/langchain/README.md) |
-| Current product contracts | [OpenSpec capabilities](openspec/specs/) |
-| Proposed and active changes | [OpenSpec changes](openspec/changes/) |
-| Current delivery snapshot | [HANDOVER.md](HANDOVER.md) |
+| Backend startup and local services | `apps/backend/src/workbench_backend/app.py` and `__main__.py` |
+| Agent execution, Chat and streaming | Backend `agents/`, `chat/`, `interaction/`; desktop renderer `InteractionStream.tsx` |
+| Models and native runtime | Backend `inference/`; desktop renderer `ModelsPanel.tsx` |
+| Records, assets and knowledge | Backend `state/`, `assets/`, `knowledge/` |
+| Desktop, editor and previews | `apps/desktop/src/main/` and `apps/desktop/src/renderer/` |
+| Shared API contracts | [Generated contract guide](apps/backend/contracts/README.md); `scripts/generate_shared_contracts.py` |
+
+[AGENTS.md](AGENTS.md) is the development entry point; [HANDOVER.md](HANDOVER.md) records current delivery state. The implementation pack in `plans/` is retained for separately authorized tasks. Dependency versions come from manifests, lockfiles and installed source; framework source pointers are in AGENTS. [Third-party notices](apps/desktop/THIRD_PARTY_NOTICES.md) cover adapted desktop code; retained framework licence notices are under `.agents/notices/`.

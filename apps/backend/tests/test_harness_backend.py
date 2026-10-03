@@ -1,4 +1,4 @@
-"""CompositeBackend scratch isolation and reserved-path helpers (DEV-004)."""
+"""CompositeBackend scratch isolation and reserved-path helpers."""
 
 from __future__ import annotations
 

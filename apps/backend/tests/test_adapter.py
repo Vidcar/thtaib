@@ -1,4 +1,4 @@
-"""MOD-005: LangChain adapter targets a deployment endpoint and starts no process."""
+"""LangChain adapter targets a deployment endpoint and starts no process."""
 
 from __future__ import annotations
 

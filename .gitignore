@@ -36,9 +36,6 @@ out/
 *.gguf
 *.bin
 models/
-# OpenSpec's model capability is source documentation, not downloaded weights.
-!openspec/**/models/
-!openspec/**/models/spec.md
 data/
 desktop_backend_shared_secret
 

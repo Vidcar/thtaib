@@ -100,7 +100,7 @@ class CapturePolicyUnitTests(unittest.TestCase):
             presented_tools=["echo"],
             memory_versions=["knv_synth"],
             http_payload={"body": SYNTH_ASSIGNMENT},
-            capture_gaps=["no retrieval / RAG (OQ-006 unresolved)"],
+            capture_gaps=["no retrieval / RAG"],
         )
         applied = apply_capture_policy(
             capture, ContextCaptureSettings(redaction_mode="discard")

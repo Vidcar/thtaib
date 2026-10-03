@@ -1,4 +1,4 @@
-"""AGT-006: keep completion evidence distinct from model judgement."""
+"""Keep completion evidence distinct from model judgement."""
 
 from __future__ import annotations
 

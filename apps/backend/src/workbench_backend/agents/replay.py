@@ -1,4 +1,4 @@
-"""Recorded-tool fixture identity and isolated reconstruction (LAB-003 / #67).
+"""Recorded-tool fixture identity and isolated reconstruction (Issue #67).
 
 Recorded mode replays claimed tools from fixtures. It is not a live integration
 and is not proof of current live behaviour.

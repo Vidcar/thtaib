@@ -1,4 +1,4 @@
-"""STATE-005 / AGT-004: materialize selected memory and skill versions.
+"""Materialize selected memory and skill versions.
 
 Official Deep Agents 0.7.19 owns always-load (``memory=`` / MemoryMiddleware)
 and progressive disclosure (``skills=`` / SkillsMiddleware). This module is

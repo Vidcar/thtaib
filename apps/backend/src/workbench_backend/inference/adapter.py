@@ -1,4 +1,4 @@
-"""MOD-005: narrow LangChain adapter to a model-manager deployment endpoint.
+"""Narrow LangChain adapter to a model-manager deployment endpoint.
 
 The adapter talks to an existing OpenAI-compatible chat endpoint. It does
 not load weights and does not start, stop, or supervise an inference
@@ -32,7 +32,7 @@ from workbench_backend.inference.settings import normalize_on_off_auto
 from workbench_backend.inference.telemetry import LatestGenerationPublisher, RequestTelemetry, current_request_purpose
 from workbench_backend.inference.request_projection import project_outbound_payload, project_context_payload, ReasoningReplayScope
 
-# Transport timeout only — not a product task budget (AGT-003).
+# Transport timeout only — not a product task budget.
 DEFAULT_ADAPTER_TIMEOUT = 120.0
 INPUT_COUNT_TIMEOUT = 2.0
 INPUT_COUNT_CACHE_SIZE = 128

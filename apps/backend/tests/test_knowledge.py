@@ -1,4 +1,4 @@
-"""Durable knowledge versioning (STATE-005) and Lab/harness version refs."""
+"""Durable knowledge versioning and Lab/harness version refs."""
 
 from __future__ import annotations
 

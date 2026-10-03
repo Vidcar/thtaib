@@ -1,4 +1,4 @@
-"""AGT-001: embedded Deep Agents harness — start / observe / cancel.
+"""Embedded Deep Agents harness — start / observe / cancel.
 
 Deep Agents owns the model/tool loop. LangGraph is only the compiled graph
 returned by create_deep_agent — not a second Builder workflow editor.
@@ -159,7 +159,7 @@ log = logging.getLogger(__name__)
 
 
 class HarnessService:
-    """Harness runs persist in application.sqlite. Recovery remainder is OQ-004."""
+    """Harness runs persist in application.sqlite; external effects require reconciliation."""
 
     def __init__(
         self,

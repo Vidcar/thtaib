@@ -1,4 +1,4 @@
-"""Apply STATE-005 context-capture policy to diagnostic copies (Issue #64).
+"""Apply context-capture policy to diagnostic copies (Issue #64).
 
 Conversation transcripts, LangGraph checkpoints, and operational run event
 history are not discarded here. Those follow a separate operational retention

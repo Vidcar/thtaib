@@ -1,4 +1,4 @@
-"""WF-001: configuration links resolve setup and are not executable steps."""
+"""Configuration links resolve setup and are not executable steps."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from workbench_backend.errors import DefinitionCompileError
 
 
 def mixed_definition() -> MixedDefinition:
-    """Configuration + workflow definition used by the WF-001 acceptance check."""
+    """Configuration + workflow definition used by the compiler acceptance check."""
 
     return MixedDefinition(
         id="mixed-review",

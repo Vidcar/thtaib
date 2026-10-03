@@ -1,4 +1,4 @@
-"""MOD-006 compatibility records with separate provenance categories.
+"""Compatibility records with separate provenance categories.
 
 Unverified is not incompatible and is not a supported-capability claim.
 Compatibility records remain distinct from observed capability evidence.
