@@ -117,7 +117,7 @@ class OfflineProbe(HttpProbe):
     def props(self, endpoint: str) -> ServerProperties | None:
         return None
 
-    def smoke(self, endpoint: str) -> tuple[bool, str]:
+    def smoke(self, endpoint: str, *, model: str, autoload: bool = True) -> tuple[bool, str]:
         return False, "scripted fixture: no live server"
 
 

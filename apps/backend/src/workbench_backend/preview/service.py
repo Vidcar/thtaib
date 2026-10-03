@@ -91,6 +91,7 @@ class _Preview:
     kind: str = "command"
     entry_path: str | None = None
     health_token: str | None = None
+    stop_pending: bool = False
 
     @property
     def url(self) -> str:
@@ -115,14 +116,14 @@ class PreviewService:
             preview = self._owned.get(key)
             alive = bool(preview and preview.process.poll() is None)
             if preview and not alive:
-                self._owned.pop(key, None)
-                if preview.timer:
-                    preview.timer.cancel()
-                _kill_tree(preview.process, preview.job)
-                preview.log_file.close()
+                if self.stop(key):
+                    preview = None
+            stop_pending = bool(preview and preview.stop_pending)
         return {
             "thread_id": key,
-            "state": "active" if alive else ("lost" if self._marker(key).exists() else "closed"),
+            "state": "lost" if stop_pending else "active" if alive else ("lost" if self._marker(key).exists() else "closed"),
+            "stop_pending": stop_pending,
+            "error": "The preview stop is unconfirmed. Retry Stop before starting another preview or deleting this chat." if stop_pending else None,
             "url": preview.url if alive and preview else None,
             "kind": preview.kind if alive and preview else None,
             "entry_path": preview.entry_path if alive and preview else None,
@@ -196,6 +197,8 @@ class PreviewService:
             raise HarnessError("Choose an existing HTML file inside this project.", code="preview_entry_invalid", status_code=409) from exc
         with self._lock:
             existing = self._owned.get(key)
+            if existing and existing.stop_pending:
+                raise HarnessError("The preview stop is unconfirmed. Retry Stop before starting another preview.", code="preview_stop_unconfirmed", status_code=409)
             if existing and existing.process.poll() is None:
                 if existing.kind != "static" or canonical_root(existing.project_path) != canonical_root(project):
                     raise HarnessError("Stop this conversation's current preview before starting a static page.", code="preview_already_running", status_code=409)
@@ -225,6 +228,8 @@ class PreviewService:
         argv = [str(resolved_executable), *command[1:]]
         with self._lock:
             existing = self._owned.get(key)
+            if existing and existing.stop_pending:
+                raise HarnessError("The preview stop is unconfirmed. Retry Stop before starting another preview.", code="preview_stop_unconfirmed", status_code=409)
             if existing and existing.process.poll() is None:
                 if canonical_root(existing.project_path) != canonical_root(project) or existing.command != tuple(argv) or existing.port != port:
                     raise HarnessError("Stop this conversation's preview before changing its command or port.", code="preview_already_running", status_code=409)
@@ -293,16 +298,18 @@ class PreviewService:
     def stop(self, thread_id: str) -> bool:
         key = _key(thread_id)
         with self._lock:
-            preview = self._owned.pop(key, None)
+            preview = self._owned.get(key)
             if preview is None:
                 # A recovered marker is an unknown former process. Never kill a
                 # PID from disk, which may now belong to a different program.
                 return not self._marker(key).exists()
             if preview.timer:
                 preview.timer.cancel()
-            stopped = _kill_tree(preview.process, preview.job)
-            preview.log_file.close()
+            preview.stop_pending = True
+            stopped = _kill_tree(preview.process, preview.job, retain_job_on_failure=True)
             if stopped:
+                self._owned.pop(key, None)
+                preview.log_file.close()
                 self._marker(key).unlink(missing_ok=True)
             return stopped
 

@@ -230,11 +230,14 @@ REQUEST_PATHS.update({
     "reasoning_preserve": "chat_template_kwargs.preserve_reasoning",
 })
 
-# Host and port are required for the managed server. Pinned llama.cpp defaults
-# in DEFAULT_GPU_PROFILE stay catalogue facts; a fresh launch omits those flags.
+# Workbench owns its managed address and safe request-slot policy. Native Auto
+# shares one context pool across four slots; one slot lets llama.cpp queue other
+# calls while preserving the full context for each active request. Explicit
+# parallel choices still win. Other pinned defaults remain catalogue facts.
 DEFAULT_STARTUP: dict[str, Any] = {
     "host": "127.0.0.1",
     "port": 8080,
+    "parallel": 1,
 }
 
 # Shared validation and presentation facts. Suggested spans are comfortable UI

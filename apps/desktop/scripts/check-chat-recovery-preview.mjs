@@ -64,6 +64,21 @@ try {
     assert.match(html, new RegExp(label), `recovery routes ${action} to the relevant action`);
     assert.match(html, /Original worker connection failed/);
   }
+  const poolFailure = { ...failedRun, failure: { category: "capacity", code: "context_pool_exhausted", message: "The engine could not allocate enough context memory.", recovery_action: "change_limit" } };
+  let poolRecoveryRun;
+  let poolRenderer;
+  try {
+    await act(async () => { poolRenderer = create(React.createElement(RunActivitySummary, { run: poolFailure, onRecover(run) { poolRecoveryRun = run; } })); });
+    const recoveryButton = poolRenderer.root.findByType("button");
+    assert.equal(recoveryButton.props.children, "Review parallel setting", "shared allocation recovery targets parallelism rather than the response allowance");
+    await act(async () => recoveryButton.props.onClick());
+    assert.equal(poolRecoveryRun, poolFailure, "the exact failed run reaches the existing Models recovery route");
+  } finally {
+    if (poolRenderer) await act(async () => poolRenderer.unmount());
+  }
+  const poolHint = renderToStaticMarkup(React.createElement(RunActivitySummary, { run: poolFailure }));
+  assert.match(poolHint, /Wait for other work to finish, or reduce Parallel/);
+  assert.doesNotMatch(poolHint, /Adjust the response or context limit/);
 
   const old = { fetch: globalThis.fetch, window: globalThis.window, setInterval: globalThis.setInterval, clearInterval: globalThis.clearInterval };
   const pending = [];
@@ -117,6 +132,15 @@ try {
     await act(async () => button("Clear lost preview").props.onClick());
     await respond(take("second", "POST", "/reset"), { state: "closed" });
     assert.equal(button("Preview page").props.disabled, false, "lost ownership has an explicit recovery before starting another preview");
+    await poll();
+    await respond(take("second"), { state: "lost", stop_pending: true, error: "Preview stop unconfirmed" });
+    assert.match(view(), /Stop unconfirmed/);
+    assert.ok(button("Stop"), "an unconfirmed stop retains a retry through its owned identity");
+    assert.equal(button("Clear lost preview"), undefined, "a live owned process cannot be cleared as historical lost state");
+    assert.equal(button("Preview page").props.disabled, true, "a new launch is blocked until owned cleanup is confirmed");
+    await act(async () => button("Stop").props.onClick());
+    await respond(take("second", "DELETE"), { state: "closed", stop_pending: false });
+    assert.equal(button("Preview page").props.disabled, false, "successful cleanup restores ordinary preview controls");
     await poll();
     await respond(take("second"), { state: "active", url: "http://remote.invalid/" });
     assert.equal(renderer.root.findAllByType("a").length, 0, "the preview control never opens a non-loopback destination");

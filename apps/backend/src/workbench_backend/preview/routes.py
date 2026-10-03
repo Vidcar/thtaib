@@ -17,15 +17,21 @@ class StaticPreviewRequest(BaseModel):
 @router.post("/{thread_id}/start")
 def start_static_preview(request: Request, thread_id: str, body: StaticPreviewRequest):
     store = request.app.state.app_store
-    conversation_id = store.conversation_id_for_thread(thread_id)
-    conversation = store.get_conversation(conversation_id) if conversation_id else None
-    if conversation is None or conversation.archived:
-        raise HarnessError("Choose a saved project chat to preview its page.", code="preview_thread_required", status_code=404)
-    if not conversation.project_path or conversation.work_mode != "work":
-        raise HarnessError("Project previews require Work mode in a project chat.", code="preview_work_required", status_code=409)
-    if "start_preview" not in (conversation.presented_tools or []):
-        raise HarnessError("Enable project previews for this chat before starting a page.", code="preview_not_selected", status_code=409)
-    return request.app.state.preview.start_static(thread_id, conversation.project_path, body.entry_path)
+    # The UI start and chat deletion share one admission boundary. Re-read the
+    # chat under it so a queued start cannot resurrect a deleted chat's process.
+    with request.app.state.manager.lifecycle.mutate("chat_preview_start"):
+        conversation_id = store.conversation_id_for_thread(thread_id)
+        if conversation_id is None:
+            raise HarnessError("Choose a saved project chat to preview its page.", code="preview_thread_required", status_code=404)
+        with request.app.state.chat.store.conversation_lock(conversation_id):
+            conversation = store.get_conversation(conversation_id)
+            if conversation is None or conversation.archived:
+                raise HarnessError("Choose a saved project chat to preview its page.", code="preview_thread_required", status_code=404)
+            if not conversation.project_path or conversation.work_mode != "work":
+                raise HarnessError("Project previews require Work mode in a project chat.", code="preview_work_required", status_code=409)
+            if "start_preview" not in (conversation.presented_tools or []):
+                raise HarnessError("Enable project previews for this chat before starting a page.", code="preview_not_selected", status_code=409)
+            return request.app.state.preview.start_static(thread_id, conversation.project_path, body.entry_path)
 
 
 @router.get("/{thread_id}")

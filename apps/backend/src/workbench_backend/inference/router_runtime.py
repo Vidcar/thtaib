@@ -453,7 +453,12 @@ class ManagedRouter:
             "pid": identity.pid if identity else None, "process_identity": identity,
             "health": self.probe.health(record["endpoint"]) if status == DeploymentStatus.running else None,
             "server_props": props, "loaded_chat_template_origin": template_origin,
-            "resource_usage": self.processes.resource_usage(identity) if identity else ResourceUsage(available=False, reason="model not loaded"),
+            # The retained PID belongs to the router, not this model's child.
+            # Keep ownership for lifecycle checks without calling its RSS a
+            # per-model measurement.
+            "resource_usage": ResourceUsage(available=False, reason=(
+                "Model process RAM is unavailable; the recorded process belongs to the shared router."
+                if identity else "model not loaded")),
             "error": ("Model-specific llama.cpp properties are not available yet."
                       if status == DeploymentStatus.unhealthy else
                       "llama.cpp could not load this configuration."

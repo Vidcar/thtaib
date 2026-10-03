@@ -503,8 +503,10 @@ export function DeploymentsPanel({
     const thinking = d.applied_startup.reasoning_effort ?? d.applied_startup.reasoning;
     const hasSpeculation = speculation != null && !["", "none", "off"].includes(String(speculation));
     const hasThinkingOverride = thinking != null && !["", "auto", "default"].includes(String(thinking));
+    const ram = !d.router_preset_id && d.resource_usage?.available && typeof d.resource_usage.rss_bytes === "number"
+      ? formatBytes(d.resource_usage.rss_bytes) : null;
     return <li key={d.id} className="running-model">
-      <div className="section-heading"><div><strong>{name}</strong><p className="hint">{d.scope === "managed" ? "On this computer" : "External server"}{ctx ? ` · ${tokenLabel(ctx)} context` : ""}{d.resource_usage?.available ? ` · ${formatBytes(d.resource_usage.rss_bytes)} RAM` : ""}</p></div><StatusBadge label={state.label} tone={state.tone} /></div>
+      <div className="section-heading"><div><strong>{name}</strong><p className="hint">{d.scope === "managed" ? "On this computer" : "External server"}{ctx ? ` · ${tokenLabel(ctx)} context` : ""}{ram ? ` · ${ram} RAM` : d.status !== "stopped" ? <span title={d.router_preset_id ? "Model process RAM is unavailable; the recorded process belongs to the shared router." : d.resource_usage?.reason ?? "Model process RAM is not available."}> · RAM unavailable</span> : null}</p></div><StatusBadge label={state.label} tone={state.tone} /></div>
       {d.error && d.status !== "stopped" ? <Notice tone="error">{d.error}</Notice> : null}
       {gpuLayers != null || hasSpeculation || hasThinkingOverride || d.loaded_chat_template_origin ? <dl className="model-applied-facts" aria-label="Applied model settings">
         {d.loaded_chat_template_origin ? <div title="The running server reported the selected Hugging Face chat template"><dt>Chat template</dt><dd>{d.loaded_chat_template_origin === "publisher" ? "Publisher" : "GGUF repository"} · confirmed</dd></div> : null}

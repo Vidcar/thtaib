@@ -328,27 +328,49 @@ def compiled_helpers(owner, parent, control, *, inspection_only=False):
                 activity.error = None if cancelling else str(exc)
                 raise
             finally:
-                with owner._lock:
-                    if child is not None:
-                        if child.status in {AgentRunStatus.completed, AgentRunStatus.failed, AgentRunStatus.cancelled}:
-                            _settle_child(child, control)
-                        owner._persist(child)
-                    if activity.status in {"failed", "cancelled"}:
-                        # The task call itself has a known terminal result.
-                        # Unconfirmed child effects remain separate, scoped
-                        # outcomes on the parent and still block continuation.
-                        control.record_tool_outcome(parent, ToolOutcome(
-                            call_id=call_id, name="task", outcome="failed",
-                            failure_category="cancelled" if activity.status == "cancelled" else "runtime",
-                            recovery_action="continue", detail=activity.error or "The helper was cancelled.",
-                            result=activity.error or "The helper was cancelled.",
-                            evidence={"helper_run_id": child_id, "helper_status": activity.status}, updated_at=utc_now()))
-                    owner._persist_and_notify(parent)
+                await asyncio.to_thread(_finalize_child_activity, owner, parent, child, activity, call_id, child_id, control)
                 if child is not None:
                     await asyncio.to_thread(owner._close_model_client, child.id)
         specs.append({"name": snapshot.agent_id, "description": f"{snapshot.name}: {snapshot.role or 'Selected helper'}",
             "runnable": RunnableLambda(invoke, name=snapshot.name)})
     return specs
+
+
+def _finalize_child_activity(owner, parent, child, activity, call_id, child_id, control):
+    commands = getattr(owner, "managed_commands", None)
+    if child is not None and commands is not None and child.status in {
+            AgentRunStatus.completed, AgentRunStatus.failed, AgentRunStatus.cancelled}:
+        # Native job settlement can publish through control and owner locks.
+        # Stop every child-owned job before acquiring either finalization lock.
+        try:
+            commands.stop_run(child.id)
+        except Exception as error:
+            child.status, child.stop_reason = AgentRunStatus.failed, "command_stop_unconfirmed"
+            child.error = str(error)
+            activity.status, activity.error = "failed", child.error
+    # Background job outcomes publish authority -> owner. Finalization uses
+    # that same order and holds both locks through its coherent record update.
+    with control.synchronized_update(), owner._lock:
+        if child is not None:
+            if child.status in {AgentRunStatus.completed, AgentRunStatus.failed, AgentRunStatus.cancelled}:
+                _settle_child(child, control)
+                if child.status is AgentRunStatus.completed and any(item.name == "start_command"
+                        and item.outcome == "uncertain" and not item.evidence.get("acknowledged_at")
+                        for item in child.tool_outcomes.values()):
+                    child.status, child.stop_reason = AgentRunStatus.failed, "effects_unconfirmed"
+                    child.error = child.error or "An owned job was interrupted and its changes may be partial. Inspect effects before continuing."
+                    activity.status, activity.error = "failed", child.error
+            owner._persist(child)
+        if activity.status in {"failed", "cancelled"}:
+            # The task call itself has a known terminal result. Unconfirmed
+            # child effects stay scoped on the parent and block continuation.
+            control.record_tool_outcome(parent, ToolOutcome(
+                call_id=call_id, name="task", outcome="failed",
+                failure_category="cancelled" if activity.status == "cancelled" else "runtime",
+                recovery_action="continue", detail=activity.error or "The helper was cancelled.",
+                result=activity.error or "The helper was cancelled.",
+                evidence={"helper_run_id": child_id, "helper_status": activity.status}, updated_at=utc_now()))
+        owner._persist_and_notify(parent)
 
 
 def _settle_child(child, control):

@@ -16,10 +16,10 @@ import psutil
 from workbench_backend.errors import HarnessError
 
 
-def stop_process_tree(process: subprocess.Popen, job: "WindowsJob | None" = None) -> bool:
+def stop_process_tree(process: subprocess.Popen, job: "WindowsJob | None" = None, *, retain_job_on_failure: bool = False) -> bool:
     """Confirm an owned process tree has settled without targeting a historical PID."""
     if job is not None:
-        stopped = job.stop()
+        stopped = job.stop(retain_on_failure=True) if retain_job_on_failure else job.stop()
         if process.poll() is None and not stopped:
             process.terminate()
         try:
@@ -150,7 +150,7 @@ class WindowsJob:
             if process_handle:
                 kernel.CloseHandle(process_handle)
 
-    def stop(self) -> bool:
+    def stop(self, *, retain_on_failure: bool = False) -> bool:
         if not self.handle:
             return True
         from ctypes import wintypes
@@ -208,8 +208,13 @@ class WindowsJob:
             if kernel.WaitForSingleObject(handle, remaining_ms) != 0:
                 empty = False
             kernel.CloseHandle(handle)
+        # Retryable owners keep the exact job identity until stop is confirmed.
+        # Final owners close it here, retaining kill-on-close cleanup semantics.
+        if not empty and retain_on_failure:
+            return False
         closed = bool(kernel.CloseHandle(self.handle))
-        self.handle = 0
+        if closed or not retain_on_failure:
+            self.handle = 0
         return empty and closed
 
 

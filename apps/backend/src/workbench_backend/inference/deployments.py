@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
+import httpx
 import psutil
 
 from workbench_backend.errors import ManagerError
@@ -335,7 +336,15 @@ class DeploymentService:
         with self.lifecycle.reserve(deployment):
             if not deployment.endpoint:
                 raise ManagerError("Deployment has no endpoint", code="no_endpoint", status_code=409)
-            ok, detail = self.probe.smoke(deployment.endpoint)
+            # Use the same observed identity as real dispatch. In particular,
+            # a router preset is not its child model's alias, and checking a
+            # previously ready record must not warm an evicted child.
+            from workbench_backend.inference.adapter import _resolve_model_name
+
+            with httpx.Client(timeout=self.probe.timeout) as client:
+                model = _resolve_model_name(deployment, deployment.endpoint.rstrip("/"), client)
+            ok, detail = self.probe.smoke(deployment.endpoint, model=model,
+                autoload=deployment.router_preset_id is None)
             return SmokeResult(ok=ok, endpoint=deployment.endpoint, detail=detail)
 
     def reconcile(self) -> list[Deployment]:

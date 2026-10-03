@@ -27,7 +27,7 @@ from workbench_backend.inference.schemas import (
     SettingsBag,
 )
 from workbench_backend.inference.settings import (
-    DEFAULT_GPU_PROFILE, NATIVE_REQUEST_DEFAULTS, NATIVE_STARTUP_DEFAULTS,
+    DEFAULT_GPU_PROFILE, DEFAULT_STARTUP, NATIVE_REQUEST_DEFAULTS, NATIVE_STARTUP_DEFAULTS,
     STARTUP_ENUMS, STARTUP_KEYS, PER_REQUEST_KEYS,
     REQUEST_STARTUP_ALIASES, control_facts,
 )
@@ -45,6 +45,7 @@ def bundle_configuration_options(
     recommended_threads: int | None = None,
     huggingface_configuration: HuggingFaceConfiguration | None = None,
     selected_template_source: str | None = None,
+    selected_startup: dict[str, Any] | None = None,
 ) -> BundleConfigurationOptions:
     """Build controls from read-only bundle metadata and optional live props."""
 
@@ -84,7 +85,8 @@ def bundle_configuration_options(
                     default_value=value, default_source=source,
                     supported=True,
                 )
-    startup_defaults = {**_startup_catalogue(), **_startup_defaults(recommended_threads=recommended_threads),
+    loading = selected_startup if selected_startup is not None else deployment.applied_startup if deployment else None
+    startup_defaults = {**_startup_catalogue(managed_defaults=bool(bundle_id), selected_startup=loading), **_startup_defaults(recommended_threads=recommended_threads),
         **_speculative_descriptors(metadata)}
     history = reasoning_history_descriptor(metadata, deployment)
     if selected_source and history.source == "gguf_template":
@@ -279,16 +281,28 @@ def _request_catalogue(*, native_defaults: bool) -> dict[str, RuntimeControlDesc
     return result
 
 
-def _startup_catalogue() -> dict[str, RuntimeControlDescriptor]:
-    native = NATIVE_STARTUP_DEFAULTS
+def _startup_catalogue(*, managed_defaults: bool, selected_startup: dict[str, Any] | None) -> dict[str, RuntimeControlDescriptor]:
+    workbench = {"parallel": DEFAULT_STARTUP["parallel"]} if managed_defaults else {}
+    defaults = {**NATIVE_STARTUP_DEFAULTS, **workbench}
+    if managed_defaults:
+        # An omitted slot count in a frozen loading snapshot means native Auto,
+        # while a fresh candidate uses Workbench's explicit one-slot default.
+        parallel = selected_startup.get("parallel", -1) if selected_startup is not None else DEFAULT_STARTUP["parallel"]
+        defaults["kv_unified"] = parallel == -1
+    descriptions = {
+        "parallel": ("Workbench defaults to one active request with the full context; other requests wait in llama.cpp. "
+                     "Auto uses four request slots that share the context pool." if managed_defaults else
+                     "Auto uses four request slots with unified KV; simultaneous requests share the context pool."),
+        "kv_unified": ("Share context across request slots. Off with the default one request; native parallel Auto enables this."
+                       if managed_defaults else
+                       "Share context across request slots. Native parallel Auto enables this; select an explicit request count to disable it."),
+    }
     return {key: RuntimeControlDescriptor(
         key=key, flag=flag, label=key.replace("_", " ").title(),
-        description=("Auto uses four request slots with unified KV; simultaneous requests share the context pool."
-                     if key == "parallel" else
-                     "Share context across request slots. Native parallel Auto enables this; select an explicit request count to disable it."
-                     if key == "kv_unified" else "Saved loading setting; a resident model requires a deliberate reload."),
-        source="pinned_runtime_default" if key in native else "pinned_runtime_schema",
-        applied=native.get(key), default_value=native.get(key), default_source="pinned_runtime_default" if key in native else None, supported=True,
+        description=descriptions.get(key, "Saved loading setting; a resident model requires a deliberate reload."),
+        source="workbench_default" if key in workbench else "pinned_runtime_default" if key in defaults else "pinned_runtime_schema",
+        applied=defaults.get(key), default_value=defaults.get(key),
+        default_source="workbench_default" if key in workbench else "pinned_runtime_default" if key in defaults else None, supported=True,
         options=([RuntimeControlOption(value=-1, label="Auto")] if key in {
             "parallel", "threads", "threads_batch", "spec_draft_threads", "spec_draft_threads_batch"} else [])
             + [RuntimeControlOption(value=value, label=value.replace("-", " ").title())

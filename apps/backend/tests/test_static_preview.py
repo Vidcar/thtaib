@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from contextlib import nullcontext
 from urllib.parse import urlsplit
 
 from langchain_core.tools import ToolException
@@ -17,6 +18,7 @@ from langchain_core.tools import ToolException
 from workbench_backend.agents.tool_errors import recoverable_tool_error
 from workbench_backend.errors import HarnessError
 from workbench_backend.paths import WorkbenchPaths
+from workbench_backend.inference.lifecycle import LifecycleCoordinator
 from workbench_backend.preview.routes import StaticPreviewRequest, start_static_preview
 from workbench_backend.preview.service import PreviewService, _localhost_health
 
@@ -101,7 +103,9 @@ class StaticPreviewTests(unittest.TestCase):
     def test_ui_start_requires_saved_work_chat_and_selected_preview(self):
         conversation = SimpleNamespace(archived=False, project_path=str(self.project), work_mode="plan", presented_tools=["start_preview"])
         store = SimpleNamespace(conversation_id_for_thread=lambda _id: "chat", get_conversation=lambda _id: conversation)
-        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(app_store=store, preview=self.service)))
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(app_store=store, preview=self.service,
+            manager=SimpleNamespace(lifecycle=LifecycleCoordinator()),
+            chat=SimpleNamespace(store=SimpleNamespace(conversation_lock=lambda _: nullcontext())))))
         body = StaticPreviewRequest(entry_path="pages/game page.html")
         with self.assertRaises(HarnessError) as failure:
             start_static_preview(request, "thread_static", body)

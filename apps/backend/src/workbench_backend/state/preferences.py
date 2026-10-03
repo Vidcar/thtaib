@@ -42,6 +42,14 @@ class PermissionGrant(BaseModel):
 PROJECT_FILE_EXCLUSIONS = (".git", ".git/**", "**/.git", "**/.git/**")
 DEFAULT_SECRET_EXCLUSIONS = (".env", ".env.*", "**/.env", "**/.env.*")
 _EXCLUDED_EDIT_TOOLS = frozenset({"write_file", "edit_file", "apply_edits"})
+HOST_COMMAND_ACTIONS = frozenset({"execute", "start_command", "execute_skill_script", "start_preview"})
+
+
+def is_host_command_action(name: str, arguments: dict) -> bool:
+    """Custom preview argv uses the host; a confined static HTML entry does not."""
+    return name in HOST_COMMAND_ACTIONS and (
+        name != "start_preview" or isinstance(arguments, dict) and arguments.get("command") is not None
+    )
 
 
 class ProjectFileGrantRequest(BaseModel):
@@ -200,7 +208,7 @@ class PreferenceStore:
     def allow(self, run, action, scope: Literal["session", "always"]) -> PermissionGrant:
         arguments = dict(action.args)
         starting_folder = None
-        if action.name == "execute":
+        if is_host_command_action(action.name, action.args):
             # The card shows the resolved folder. Do not keep a model-supplied path.
             arguments.pop("starting_folder", None)
             starting_folder = resolved_starting_folder(run)
@@ -239,8 +247,8 @@ class PreferenceStore:
             return None
         if self.excluded_file_edit(run, name, arguments):
             return None
-        if name == "execute":
-            return next((grant for grant in self.grants() if self._execute_grant_matches(grant, run, arguments)), None)
+        if is_host_command_action(name, arguments):
+            return next((grant for grant in self.grants() if self._host_command_grant_matches(grant, run, name, arguments)), None)
         grants = self.grants()
         exact = next((grant for grant in grants if grant.kind == "exact_action" and grant.action == name and grant.arguments == arguments
             and grant.project_path == _project(run.project_path)
@@ -249,18 +257,23 @@ class PreferenceStore:
             return exact
         return next((grant for grant in grants if self._project_file_match(grant, run, name, arguments)), None)
 
-    def _execute_grant_matches(self, grant, run, arguments) -> bool:
-        if grant.kind != "exact_action" or grant.action != "execute":
+    def _host_command_grant_matches(self, grant, run, name, arguments) -> bool:
+        if grant.kind != "exact_action" or grant.action != name or not isinstance(arguments, dict):
             return False
         thread_id = chat_confirmation_thread(run)
         if thread_id is not None and not self.host_shell_confirmed(thread_id):
             return False
         if grant.scope != "always" and grant.thread_id != getattr(run, "thread_id", None):
             return False
-        command = arguments.get("command") if isinstance(arguments, dict) else None
-        stored = grant.arguments.get("command") if isinstance(grant.arguments, dict) else None
-        if not isinstance(command, str) or command != stored:
-            return False
+        if name == "execute":
+            command = arguments.get("command")
+            if not isinstance(command, str) or command != grant.arguments.get("command"):
+                return False
+        else:
+            supplied = dict(arguments)
+            supplied.pop("starting_folder", None)
+            if supplied != grant.arguments:
+                return False
         try:
             folder = resolved_starting_folder(run)
         except ValueError:
@@ -340,8 +353,8 @@ class PreferenceStore:
             return None
         if self.excluded_file_edit(run, name, arguments):
             return None
-        if grant.action == "execute":
-            return grant if self._execute_grant_matches(grant, run, arguments) else None
+        if is_host_command_action(name, arguments):
+            return grant if self._host_command_grant_matches(grant, run, name, arguments) else None
         if grant.kind == "project_files":
             return grant if self._project_file_match(grant, run, name, arguments) else None
         return grant if (grant.action == name and grant.arguments == arguments

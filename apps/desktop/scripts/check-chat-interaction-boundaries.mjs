@@ -2146,6 +2146,151 @@ async function testQueuedSubmitKeepsAttachmentsToolsAndOverrides(vite) {
   }
 }
 
+async function testQueueLostAcknowledgement(vite, loseRecovery = false, newerDraft = false) {
+  let queueAttempts = 0;
+  let recoveryReads = 0;
+  const recovery = deferred();
+  const busy = run("run_queue_lost_ack", "running");
+  const harness = makeHarness({
+    aRun: busy, threadARun: busy,
+    requestOverride: async ({ req, res, url, body, state }) => {
+      if (req.method === "PUT" && url.pathname === "/v1/chat/conversations/conv_a/draft") {
+        const payload = JSON.parse(body);
+        if (payload.expected_revision !== (state.conversations.conv_a.draft?.revision ?? 0)) {
+          json(res, 409, { error: "The Chat draft changed before this update.", code: "draft_revision_conflict" });
+          return true;
+        }
+      }
+      if (req.method === "POST" && url.pathname === "/v1/chat/conversations/conv_a/queue") {
+        const payload = JSON.parse(body);
+        state.requests.queues.push({ id: "conv_a", payload });
+        queueAttempts += 1;
+        const current = state.conversations.conv_a;
+        const existing = payload.input_message_id && current.queue?.find(item => item.input_message_id === payload.input_message_id);
+        if (!existing) {
+          const item = { id: `lost_ack_${queueAttempts}`, task: payload.task,
+            input_message_id: payload.input_message_id ?? null, attachment_ids: payload.attachment_ids ?? [],
+            intended_config: payload, status: "queued", revision: 0, created_at: now(), updated_at: now() };
+          state.conversations.conv_a = clearDraftIfRevision({ ...current, queue: [...(current.queue ?? []), item] }, payload.draft_revision);
+        }
+        json(res, queueAttempts === 1 ? 500 : 200, queueAttempts === 1
+          ? { error: "Lost queue acknowledgement" } : state.conversations.conv_a);
+        return true;
+      }
+      if (req.method === "GET" && url.pathname === "/v1/chat/conversations/conv_a" && queueAttempts > 0) {
+        recoveryReads += 1;
+        if (newerDraft && recoveryReads === 1) await recovery.promise;
+        if (loseRecovery && recoveryReads <= 2) {
+          json(res, 500, { error: "Recovery connection interrupted" });
+          return true;
+        }
+      }
+      return false;
+    },
+  });
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "queue recovery history ready");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "queue recovery chat bound");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Run this follow-up once" } }));
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(queueAttempts, 1), "first queue request committed");
+    const identity = harness.state.requests.queues[0].payload.input_message_id;
+    assert.ok(typeof identity === "string" && identity.length > 0, "Queue must send an input identity before acceptance");
+    if (newerDraft) {
+      await waitFor(() => assert.equal(recoveryReads, 1), "accepted queue recovery read waits");
+      await act(async () => textarea(renderer).props.onChange({ target: { value: "Newer unsent draft" } }));
+      await act(async () => recovery.resolve());
+      await waitFor(() => assert.equal(textarea(renderer).props.value, "Newer unsent draft"), "queue recovery preserves the newer draft");
+      await waitFor(() => assert.equal(harness.state.conversations.conv_a.draft?.content, "Newer unsent draft"), "newer draft remains durable after queue recovery");
+    } else if (loseRecovery) {
+      await waitFor(() => assert.match(allText(renderer), /Lost queue acknowledgement/), "lost response keeps uncertain message for deliberate retry");
+      assert.equal(textarea(renderer).props.value, "Run this follow-up once");
+      await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+      await waitFor(() => assert.equal(queueAttempts, 2), "uncertain Queue retried");
+      assert.equal(harness.state.requests.queues[1].payload.input_message_id, identity, "retry keeps the same accepted input identity");
+      await waitFor(() => assert.equal(textarea(renderer).props.value, ""), "accepted retry clears submitted draft");
+    } else {
+      await waitFor(() => assert.equal(textarea(renderer).props.value, ""), "lost acknowledgement recovers accepted Queue and clears submitted draft");
+      assert.equal(queueAttempts, 1, "recovery observes the accepted input without queuing again");
+    }
+    assert.equal(harness.state.conversations.conv_a.queue.length, 1, "one user follow-up becomes one accepted queue item");
+    assert.doesNotMatch(allText(renderer), /Lost queue acknowledgement|Recovery connection interrupted/, "confirmed acceptance clears the transport error");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "A deliberately new follow-up" } }));
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(harness.state.conversations.conv_a.queue.length, 2), "new follow-up is independently accepted");
+    assert.notEqual(harness.state.requests.queues.at(-1).payload.input_message_id, identity, "new work gets a new identity");
+  } finally {
+    recovery.resolve();
+    await closeHarness(renderer, harness);
+  }
+}
+
+async function testQueueUncertainRetryAfterCompletion(vite) {
+  const busy = run("run_before_lost_queue", "running");
+  let recoveries = 0;
+  const harness = makeHarness({
+    aRun: busy, threadARun: busy,
+    requestOverride: async ({ req, res, url, body, state }) => {
+      if (req.method === "PUT" && url.pathname === "/v1/chat/conversations/conv_a/draft") {
+        const payload = JSON.parse(body);
+        if (payload.expected_revision !== (state.conversations.conv_a.draft?.revision ?? 0)) {
+          json(res, 409, { error: "The Chat draft changed before this update.", code: "draft_revision_conflict" });
+          return true;
+        }
+      }
+      if (req.method === "POST" && url.pathname === "/v1/chat/conversations/conv_a/queue") {
+        const payload = JSON.parse(body);
+        state.requests.queues.push({ id: "conv_a", payload });
+        const item = { id: "queue_completed_without_ack", task: payload.task, input_message_id: payload.input_message_id,
+          intended_config: payload, status: "queued", revision: 0, created_at: now(), updated_at: now() };
+        state.conversations.conv_a = clearDraftIfRevision({ ...state.conversations.conv_a, queue: [item] }, payload.draft_revision);
+        json(res, 500, { error: "Lost queue acknowledgement" });
+        return true;
+      }
+      if (req.method === "GET" && url.pathname === "/v1/chat/conversations/conv_a" && state.requests.queues.length && ++recoveries === 1) {
+        json(res, 500, { error: "Recovery connection interrupted" });
+        return true;
+      }
+      return false;
+    },
+  });
+  let renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "completed Queue recovery history ready");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "completed Queue recovery chat bound");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Follow-up that already finished" } }));
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.match(allText(renderer), /Lost queue acknowledgement/), "unacknowledged Queue remains retryable");
+    const identity = harness.state.requests.queues[0].payload.input_message_id;
+    const completed = run("run_finished_unacknowledged_queue", "completed", identity, "Follow-up already completed");
+    const current = harness.state.conversations.conv_a;
+    harness.state.conversations.conv_a = { ...current, queue: [], current_run: completed, current_run_id: completed.id,
+      run_ids: [...current.run_ids, completed.id],
+      transcript: [...current.transcript, { id: identity, role: "user", content: "Follow-up that already finished", run_id: completed.id, at: now() }] };
+    harness.state.streamRuns.set("thread_a", completed);
+    await act(async () => harness.state.openStreams.get("thread_a")?.write(`data: ${JSON.stringify(streamFrame(completed))}\n\n`));
+    await waitFor(() => assert.equal(selectedRunId(renderer), completed.id), "queued work completed before retry");
+    await waitFor(() => assert.equal(textarea(renderer).props.value, ""), "ordinary hydration reconciles completed accepted Queue");
+    await waitFor(() => assert.equal(harness.state.conversations.conv_a.draft?.content ?? "", ""), "accepted Queue text is not restored as a new durable draft");
+    assert.equal(harness.state.requests.queues.length, 1, "completed Queue must not be queued again");
+    assert.equal(harness.state.requests.commands.length, 0, "changing Queue to Send must not create a second run");
+    assert.equal(harness.state.conversations.conv_a.transcript.filter(item => item.id === identity).length, 1);
+    await closeHarness(renderer, harness);
+    renderer = await renderChat(vite, harness);
+    await waitFor(() => button(renderer, "Conversation A"), "reopened Queue history ready");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.equal(selectedRunId(renderer), completed.id), "reopened panel observes completed Queue");
+    assert.equal(textarea(renderer).props.value, "", "reopening must not restore accepted work as a retryable draft");
+    assert.equal(harness.state.requests.queues.length, 1);
+    assert.equal(harness.state.requests.commands.length, 0);
+  } finally {
+    await closeHarness(renderer, harness);
+  }
+}
+
 async function testPersistedDraftRestoresAttachmentsAndIntendedConfig(vite) {
   const savedAsset = {
     id: "asset_saved",
@@ -4275,6 +4420,10 @@ try {
     ["attachment-only SDK submit metadata", testAttachmentOnlySdkSubmitKeepsMetadata],
     ["project attachment immutable scope", testProjectAttachmentScope],
     ["queued submit attachment/config capture", testQueuedSubmitKeepsAttachmentsToolsAndOverrides],
+    ["Queue lost acknowledgement recovers accepted input", testQueueLostAcknowledgement],
+    ["Queue uncertain retry keeps input identity", vite => testQueueLostAcknowledgement(vite, true)],
+    ["Queue recovery preserves newer draft", vite => testQueueLostAcknowledgement(vite, false, true)],
+    ["Queue uncertain retry after completion", testQueueUncertainRetryAfterCompletion],
     ["persisted draft attachment/config reload", testPersistedDraftRestoresAttachmentsAndIntendedConfig],
     ["late upload navigation guard", testLateUploadAfterNavigationDoesNotAttachToNewConversation],
     ["stopped managed deployment shows load-on-send notice", testStoppedManagedDeploymentShowsLoadOnSendNotice],

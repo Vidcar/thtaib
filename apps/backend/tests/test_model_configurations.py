@@ -157,6 +157,72 @@ class ModelConfigurationTests(unittest.TestCase):
         self.assertEqual(loading_startup_settings(automatic), loading_startup_settings(explicit))
         self.assertNotEqual(loading_startup_settings(automatic), loading_startup_settings(divided))
 
+    def test_frozen_historical_auto_identity_stays_distinct_from_new_default(self):
+        from workbench_backend.inference.configurations import loaded_model_identity, loading_startup_settings
+        from workbench_backend.inference.schemas import SettingsBag, SettingsBags
+        from workbench_backend.inference.settings import resolve_bags
+        historical = SettingsBags(startup=SettingsBag(requested={}, applied={"host": "127.0.0.1", "port": 8080}))
+        explicit_auto = resolve_bags(startup={"parallel": -1})
+        current_default = resolve_bags()
+        self.assertEqual(loading_startup_settings(historical), loading_startup_settings(explicit_auto))
+        self.assertEqual(loading_startup_settings(historical)["parallel"], 4)
+        self.assertEqual(loading_startup_settings(current_default)["parallel"], 1)
+        bundle = self.manager.get_bundle(self.bundle_id)
+        self.assertEqual(loaded_model_identity(None, bundle, historical), loaded_model_identity(None, bundle, explicit_auto))
+        self.assertNotEqual(loaded_model_identity(None, bundle, historical), loaded_model_identity(None, bundle, current_default))
+
+    def test_effective_shared_context_default_follows_selected_parallel_policy(self):
+        from workbench_backend.agents.effective_setup import effective_setting_values
+        from workbench_backend.inference.configurations import loading_startup_settings
+        for startup, expected in (({}, False), ({"parallel": -1}, True), ({"parallel": 2}, False)):
+            with self.subTest(startup=startup):
+                profile = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+                    display_name=f"Parallel policy {startup.get('parallel', 'default')}", startup=startup))
+                configuration = SetupConfiguration(profile_id=profile.id, bundle_id=self.bundle_id)
+                facts = effective_setting_values(self.manager, configuration, {})
+                shared = facts["startup.kv_unified"]
+                self.assertIs(shared.value, expected)
+                self.assertIs(shared.default_value, expected)
+                self.assertTrue(shared.known)
+                self.assertEqual(shared.source, "pinned_runtime_default")
+                self.assertIs(loading_startup_settings(profile.bags)["kv_unified"], expected)
+                self.assertNotIn("kv_unified", profile.bags.startup.requested)
+                switched = configuration.model_copy(update={"startup_overrides": {"parallel": -1 if expected is False else 2}})
+                self.assertIs(effective_setting_values(self.manager, switched, {})["startup.kv_unified"].value, not expected)
+        reset = SetupConfiguration(profile_id=profile.id, bundle_id=self.bundle_id, startup_overrides={"parallel": None})
+        self.assertFalse(effective_setting_values(self.manager, reset, {})["startup.kv_unified"].value)
+
+    def test_inherited_historical_loading_facts_do_not_become_new_defaults(self):
+        from workbench_backend.agents.effective_setup import effective_setting_values
+        from workbench_backend.inference.schemas import SettingsBag
+        deployment = self.deployment()
+        historical_startup = {key: value for key, value in deployment.applied_startup.items() if key != "parallel"}
+        historical_bags = deployment.settings.model_copy(update={"startup": SettingsBag(requested={}, applied=historical_startup)})
+        frozen = self.manager.store.put_deployment(deployment.model_copy(update={
+            "settings": historical_bags, "applied_startup": historical_startup}))
+        configuration = SetupConfiguration(deployment_id=deployment.id, bundle_id=self.bundle_id)
+        facts = effective_setting_values(self.manager, configuration, {})
+        self.assertEqual(facts["startup.parallel"].value, 4)
+        self.assertEqual(facts["startup.parallel"].source, "Loaded model")
+        self.assertEqual(facts["startup.parallel"].default_value, 1)
+        self.assertEqual(facts["startup.parallel"].default_source, "workbench_default")
+        self.assertIs(facts["startup.kv_unified"].value, True)
+        self.assertTrue(facts["startup.kv_unified"].known)
+        self.assertIs(facts["startup.kv_unified"].default_value, True)
+        self.assertEqual(self.manager.store.get_deployment(deployment.id), frozen)
+
+    def test_connected_effective_facts_do_not_claim_managed_slot_default(self):
+        from workbench_backend.agents.effective_setup import effective_setting_values
+        from workbench_backend.inference.schemas import ManagementScope, SettingsBags
+        connected = self.deployment().model_copy(update={
+            "id": "external-model", "scope": ManagementScope.connected, "bundle_id": None,
+            "profile_id": None, "settings": SettingsBags(), "applied_startup": {}})
+        self.manager.store.put_deployment(connected)
+        facts = effective_setting_values(self.manager, SetupConfiguration(deployment_id=connected.id), {})
+        self.assertEqual(facts["startup.parallel"].default_value, -1)
+        self.assertEqual(facts["startup.parallel"].default_source, "pinned_runtime_default")
+        self.assertNotEqual(facts["startup.parallel"].source, "workbench_default")
+
     def test_prepare_and_save_during_active_work_do_not_change_the_resident_record(self):
         current = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
             display_name="Current", startup={"ctx_size": 8192}, per_request={"temperature": 0.2}))

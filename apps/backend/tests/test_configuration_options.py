@@ -17,8 +17,8 @@ from workbench_backend.inference.schemas import LocalImportRequest, ManagedDeplo
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
-from support import close_workbench_sqlite, workbench_client, write_tiny_gguf
-from test_app import FakeHF
+from tests.support import close_workbench_sqlite, workbench_client, write_tiny_gguf
+from tests.test_app import FakeHF
 
 
 def set_first_tensor_type(path: Path, tensor_type: int) -> None:
@@ -129,8 +129,21 @@ class BundleConfigurationOptionsTests(unittest.TestCase):
         self.assertEqual(report.per_request_defaults["temperature"].suggested_maximum, 2)
         self.assertEqual(report.per_request_defaults["top_p"].maximum, 1)
         self.assertIn("flash_attn", report.startup_defaults["cache_type_v"].dependencies)
-        self.assertEqual(report.startup_defaults["parallel"].applied, -1)
+        parallel = report.startup_defaults["parallel"]
+        self.assertEqual(parallel.applied, 1)
+        self.assertEqual(parallel.default_value, 1)
+        self.assertEqual(parallel.source, "workbench_default")
+        self.assertEqual(parallel.default_source, "workbench_default")
+        self.assertIn("wait", parallel.description)
+        self.assertIn("share", parallel.description)
+        self.assertIn(-1, [option.value for option in parallel.options])
+        self.assertFalse(report.startup_defaults["kv_unified"].default_value)
         self.assertEqual(report.response_presets, [])
+
+    def test_connected_catalogue_does_not_claim_managed_parallel_policy(self) -> None:
+        report = bundle_configuration_options(None, GgufRuntimeMetadata())
+        self.assertEqual(report.startup_defaults["parallel"].default_value, -1)
+        self.assertEqual(report.startup_defaults["parallel"].default_source, "pinned_runtime_default")
 
     def test_comment_only_thinking_controls_are_not_template_evidence(self) -> None:
         report = bundle_configuration_options("bundle", GgufRuntimeMetadata(chat_template=

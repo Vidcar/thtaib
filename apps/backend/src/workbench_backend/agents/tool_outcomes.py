@@ -95,7 +95,7 @@ def reconcile_effects(run: Any) -> None:
             "detail": "The action started but its effects could not be confirmed. Inspect before repeating it.", "updated_at": utc_now()}
         if item.name in READ_ONLY_TOOLS:
             update.update(outcome="failed", recovery_action="continue", detail="The read did not return a result; it can be retried.")
-        elif item.name in {"execute", "execute_skill_script"} and item.evidence.get("exit_code") in {124, 130}:
+        elif item.name in {"execute", "execute_skill_script", "start_command"} and item.evidence.get("exit_code") in {124, 130}:
             update.update(failure_category="cancelled" if item.evidence["exit_code"] == 130 else "runtime",
                 recovery_action="inspect_effects",
                 detail="The command was interrupted. Its changes may be partial even when its processes have stopped. Inspect before continuing or repeating it.")
@@ -128,7 +128,7 @@ def failure_for_run(run: Any, *, code: str | None = None) -> RunFailure | None:
         return None
     code = code or run.stop_reason or "run_failed"
     category, action = "runtime", "continue"
-    if code in {"context_capacity_exceeded", "tool_budget_exhausted", "response_limit_reached"}:
+    if code in {"context_capacity_exceeded", "context_pool_exhausted", "tool_budget_exhausted", "response_limit_reached"}:
         category, action = "capacity", "change_limit"
     elif code in {"interaction_persistence_failed", "checkpoint_linkage_failed"}:
         category, action = "persistence", "continue"

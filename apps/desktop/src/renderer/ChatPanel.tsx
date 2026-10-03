@@ -954,6 +954,9 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const catalogueActive = useRef(false);
   const catalogueReads = useRef(new Map<string, { cancel: () => void; promise: Promise<void> }>());
   const [sending, setSending] = useState(false);
+  const queuedSubmissionIds = useRef(new Map<string, {
+    id: string; intent: Record<string, unknown>; draftRevision: number; submittedDraftRevision: number | null;
+  }>());
   const [pendingSubmit, setPendingSubmit] = useState<PendingChatSubmit | null>(null);
   const [pendingStop, setPendingStop] = useState<PendingStopRequest | null>(null);
   const [interactionThreadId, setInteractionThreadId] = useState<string | null>(null);
@@ -1094,6 +1097,9 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }, []);
 
   const clearSubmittedDraft = useCallback((pending: PendingChatSubmit): void => {
+    if (queuedSubmissionIds.current.get(pending.conversation_id)?.id === pending.id) {
+      queuedSubmissionIds.current.delete(pending.conversation_id);
+    }
     draftWriter.current.accepted(pending.conversation_id, pending.submitted_draft_revision);
     const owner = {
       conversationId: pending.conversation_id,
@@ -1298,6 +1304,21 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     serverDraftRevision.current = conversation.draft?.revision ?? 0;
     draftWriter.current.observe(conversation);
   }, [conversation?.id, conversation?.draft?.revision]);
+
+  useEffect(() => {
+    if (!conversation || sending || activeOwner.current.conversationId !== conversation.id) return;
+    const submitted = queuedSubmissionIds.current.get(conversation.id);
+    if (!submitted || !chatHasAcceptedInputMessage(conversation, submitted.id)) return;
+    queuedSubmissionIds.current.delete(conversation.id);
+    draftWriter.current.observe(conversation);
+    setMessage("");
+    if (draftRevision.current !== submitted.draftRevision) return;
+    draftRevision.current += 1;
+    setTask("");
+    setAttachmentIds([]);
+    setMessageSkillIds([]);
+    setShortcutIds([]);
+  }, [conversation, sending]);
 
   useEffect(() => {
     if (!conversation || selectionLoading || setupResolving || sending || pendingSubmit) {
@@ -1628,19 +1649,51 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     setSending(true);
     setMessage("");
     try {
-      const savedDraft = await persistBeforeLeaving();
-      const payload = {
+      const intent = {
         ...chatExecutionConfiguration(),
         task: text,
-        draft_revision: savedDraft?.draft?.revision ?? conversation?.draft?.revision ?? null,
         attachment_ids: attachmentIds,
         document_asset_ids: selectedDocumentIds,
         ...(editing ? { rewind_source_run_id: editing.runId, rewind_mode: "edit" as const } : {}),
       };
-      if (queueIntent && conversation && !editing) {
-        const queued = await api.enqueueChatTurn(conversation.id, {
-          ...payload, ...(queueAfterRunId ? { queue_after_run_id: queueAfterRunId } : {}),
-        });
+      // Draft revisions and the observed predecessor can advance while an
+      // acknowledgement is lost. The same authored work keeps its identity.
+      const previous = conversation ? queuedSubmissionIds.current.get(conversation.id) : undefined;
+      const retrySubmission = previous && sameDraftValue(previous.intent, intent) ? previous : undefined;
+      let recoveredQueue: ChatConversation | null = null;
+      if (conversation && retrySubmission && !editing) {
+        try {
+          const observed = await api.chatConversation(conversation.id);
+          if (chatHasAcceptedInputMessage(observed, retrySubmission.id)) recoveredQueue = observed;
+        } catch { /* An exact retry remains safe even when observation fails. */ }
+      }
+      // A committed Queue may already have cleared the server draft. Observe
+      // an uncertain exact retry before attempting a stale draft write.
+      const savedDraft = retrySubmission ? null : await persistBeforeLeaving();
+      const payload = { ...intent, draft_revision: retrySubmission ? retrySubmission.submittedDraftRevision
+        : savedDraft?.draft?.revision ?? conversation?.draft?.revision ?? null };
+      if ((queueIntent || recoveredQueue) && conversation && !editing) {
+        const submission = retrySubmission ?? { id: crypto.randomUUID(), intent,
+          draftRevision: capturedDraftRevision, submittedDraftRevision: payload.draft_revision };
+        queuedSubmissionIds.current.set(conversation.id, submission);
+        let queued: ChatConversation;
+        try {
+          queued = recoveredQueue ?? await api.enqueueChatTurn(conversation.id, {
+            ...payload, input_message_id: submission.id,
+            ...(queueAfterRunId ? { queue_after_run_id: queueAfterRunId } : {}),
+          });
+        } catch (error) {
+          // A failed response does not prove the operation failed. Observe the
+          // exact accepted input before offering another attempt of that ID.
+          let recovered: ChatConversation;
+          try { recovered = await api.chatConversation(conversation.id); }
+          catch { throw error; }
+          if (!chatHasAcceptedInputMessage(recovered, submission.id)) throw error;
+          queued = recovered;
+        }
+        if (queuedSubmissionIds.current.get(conversation.id)?.id === submission.id) {
+          queuedSubmissionIds.current.delete(conversation.id);
+        }
         draftWriter.current.observe(queued);
         if (selectionRequest.current !== requestId || activeOwner.current.conversationId !== conversation.id) {
           cacheConversation(queued);
@@ -1688,7 +1741,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       const { draft_revision: submittedDraftRevision, ...submissionPayload } = payload;
       if (editing) acceptedEditRun.current = editing.runId;
       setPendingSubmit({
-        id: crypto.randomUUID(),
+        id: retrySubmission?.id ?? crypto.randomUUID(),
         conversation_id: created.id,
         thread_id: threadId,
         selection_generation: generation,

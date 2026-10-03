@@ -250,7 +250,9 @@ def compact_tool(
     if tool.name == "execute" and "command" in properties:
         folder = "the project" if project_bound else "the resolved user profile"
         properties["command"]["description"] = f"Host shell command starting in {folder}; cmd.exe syntax on Windows."
-    description = COMPACT_DESCRIPTIONS.get(tool.name, tool.description)
+    # Native task guidance includes the exact accepted helper IDs and roles.
+    # Its compiler already keeps that description concise; never replace it.
+    description = tool.description if tool.name == "task" else COMPACT_DESCRIPTIONS.get(tool.name, tool.description)
     if framework_reader:
         paths = ", ".join(framework_read_paths or [])
         description = "Read framework-saved results or history with zero-based line pagination. Only these paths are permitted: " + paths + ". Project and knowledge files are not authorized by this reader."

@@ -455,10 +455,12 @@ class HttpProbe:
             return None
         return server_properties_from_payload(payload, source_url=url)
 
-    def smoke(self, endpoint: str) -> tuple[bool, str]:
+    def smoke(self, endpoint: str, *, model: str, autoload: bool = True) -> tuple[bool, str]:
         url = _chat_url(endpoint)
+        if not autoload:
+            url += "?autoload=false"
         payload = {
-            "model": "workbench-smoke",
+            "model": model,
             "messages": [{"role": "user", "content": "ping"}],
             "max_tokens": 8,
         }

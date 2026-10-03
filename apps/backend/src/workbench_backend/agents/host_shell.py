@@ -28,7 +28,7 @@ from langchain_core.tools import ToolException
 
 from workbench_backend.agents.harness_backend import host_shell_requested
 from workbench_backend.agents.memory_skills import knowledge_routes_selected
-from workbench_backend.state.preferences import chat_confirmation_thread, matched_permission_snapshot, resolved_starting_folder
+from workbench_backend.state.preferences import HOST_COMMAND_ACTIONS, chat_confirmation_thread, is_host_command_action, matched_permission_snapshot, resolved_starting_folder
 from workbench_backend.agents.schemas import (
     AgentRun,
     CapabilitySetupRequest,
@@ -129,29 +129,37 @@ def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | 
             run.tool_authorization_grants[ident] = matched_permission_snapshot(matched, run)
         return True
 
-    def requires_approval(request: ToolCallRequest) -> bool:
+    def requires_approval(request: ToolCallRequest, name="execute") -> bool:
         call = request.tool_call
         args = call.get("args", {}) if isinstance(call, dict) else getattr(call, "args", {})
+        if not is_host_command_action(name, args):
+            return False if auto_external else not saved_permission(name, args, request)
         thread_id = chat_confirmation_thread(run)
         # A chat shows one card before any stored grant, including Full access.
         if thread_id and not shell_confirmed():
             return True
         if auto_external and (shell_confirmed() or (not thread_id and run.project_path)):
             return False
-        if saved_permission("execute", args, request):
+        if saved_permission(name, args, request):
             return False
         return True
 
     result = {
-        "execute": {
+        name: {
             "allowed_decisions": ["approve", "reject"],
-            "when": requires_approval,
-            "description": (
+            "when": lambda request, name=name: requires_approval(request, name),
+            "description": (lambda call, state, runtime:
+                f"This computer command (no isolation). Approve to run on this machine starting in {starting_folder}."
+                if is_host_command_action("start_preview", call.get("args", {}))
+                else "Preview this exact project HTML entry. Approval does not enable host commands."
+            ) if name == "start_preview" else (
                 "This computer command (no isolation). Approve to run on this machine "
                 f"starting in {starting_folder}."
             ),
         }
-    } if host_shell_requested(run) else {}
+        for name in HOST_COMMAND_ACTIONS.intersection(run.presented_tools)
+        if name != "execute" or host_shell_requested(run)
+    }
     if "ask_user" in run.presented_tools:
         result["ask_user"] = {
             "allowed_decisions": ["respond", "reject"],
@@ -169,7 +177,7 @@ def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | 
         result[name] = {"allowed_decisions": ["approve", "reject"], "when": file_approval,
             "description": "Permanently delete this exact project target and its subtree. There is no recycle bin or automatic undo. Review the target before allowing deletion."
                 if name == "delete" else "Change a file in this project. Review the exact source and destination before allowing it."}
-    for name in VISUAL_ACTION_TOOLS.intersection(run.presented_tools):
+    for name in (VISUAL_ACTION_TOOLS - HOST_COMMAND_ACTIONS).intersection(run.presented_tools):
         def visual_approval(request: ToolCallRequest, name=name) -> bool:
             call = request.tool_call
             args = call.get("args", {}) if isinstance(call, dict) else getattr(call, "args", {})
@@ -310,7 +318,7 @@ def pending_interrupt_from_raw(raw: Any) -> PendingInterrupt | None:
     if value.get("kind") == "capability_setup" and all(action.setup is not None for action in actions):
         return PendingInterrupt(action_requests=actions, kind="capability_setup", environment="capability_setup",
             note="Repair the selected feature, then continue; setup does not grant additional access.")
-    if all(action.name == "execute" for action in actions):
+    if all(is_host_command_action(action.name, action.args) for action in actions):
         return PendingInterrupt(action_requests=actions)
     if all(action.name == "ask_user" for action in actions):
         return PendingInterrupt(action_requests=actions, environment="user_input",

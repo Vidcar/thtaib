@@ -71,15 +71,35 @@ class ManagedCommandsTests(unittest.TestCase):
         self.assertEqual(self.service.stop(self.run, launch["command_id"])["state"], "stopped")
 
     def test_timeout_and_cancel_are_distinct_confirmed_outcomes(self):
+        outcomes = []
         argv = self.script("import time\ntime.sleep(30)")
-        timeout = self.service.start(self.run, argv, 1)
+        timeout = self.service.start(self.run, argv, 1, record_outcome=outcomes.append)
         self.assertEqual(self.service.status(self.run, timeout["command_id"], wait_seconds=10)["state"], "timed_out")
+        self.assertEqual([row.outcome for row in outcomes], ["running", "uncertain"])
+        self.assertEqual((outcomes[-1].recovery_action, outcomes[-1].evidence["exit_code"]), ("inspect_effects", 124))
+        record = self.service.effects.get_effect(self.service._commands[timeout["command_id"]].effect_id)
+        self.assertFalse(record.unresolved, "the process lifecycle is confirmed separately from its partial effects")
+        self.assertEqual(record.evidence["effect_scope"], "process_lifecycle")
+        self.assertTrue(record.evidence["partial_effects_unconfirmed"])
         cancel = threading.Event()
-        created = self.service.start(self.run, argv, 30, cancel_requested=cancel.is_set)
+        created = self.service.start(self.run, argv, 30, cancel_requested=cancel.is_set, record_outcome=outcomes.append)
         cancel.set()
+        self.service.stop_run(self.run.id)  # Cleanup racing the watcher must preserve cancellation evidence.
         status = self.service.status(self.run, created["command_id"], wait_seconds=10)
         self.assertEqual((status["state"], status["exit_code"]), ("cancelled", 130))
         self.assertFalse(psutil.pid_exists(created["pid"]))
+        self.assertEqual([row.outcome for row in outcomes], ["running", "uncertain", "running", "uncertain"])
+        self.assertEqual((outcomes[-1].failure_category, outcomes[-1].evidence["exit_code"]), ("cancelled", 130))
+
+    def test_explicit_stop_and_known_completion_do_not_create_partial_effect_warning(self):
+        outcomes = []
+        argv = self.script("import time\ntime.sleep(30)")
+        stopped = self.service.start(self.run, argv, 30, record_outcome=outcomes.append)
+        self.assertEqual(self.service.stop(self.run, stopped["command_id"])["state"], "stopped")
+        completed = self.service.start(self.run, self.script("import sys\nsys.exit(7)"), 30, record_outcome=outcomes.append)
+        self.assertEqual(self.service.status(self.run, completed["command_id"], wait_seconds=10)["exit_code"], 7)
+        self.assertEqual([row.outcome for row in outcomes], ["running", "succeeded", "running", "failed"])
+        self.assertTrue(all(row.outcome != "uncertain" for row in outcomes))
 
     def test_cancellation_during_launch_waits_for_that_command_cleanup(self):
         entered, release = threading.Event(), threading.Event()
@@ -110,7 +130,8 @@ class ManagedCommandsTests(unittest.TestCase):
         self.assertFalse(psutil.pid_exists(int((self.project / "child.pid").read_text())))
 
     def test_unconfirmed_stop_is_an_error_and_not_replayed(self):
-        launch = self.service.start(self.run, self.script("import time\ntime.sleep(30)"), 60)
+        outcomes = []
+        launch = self.service.start(self.run, self.script("import time\ntime.sleep(30)"), 60, record_outcome=outcomes.append)
         from workbench_backend.agents import managed_commands
         real_stop = managed_commands.stop_process_tree
         def unconfirmed(*args):
@@ -120,6 +141,8 @@ class ManagedCommandsTests(unittest.TestCase):
             with self.assertRaisesRegex(HarnessError, "uncertain"):
                 self.service.stop(self.run, launch["command_id"])
         self.assertEqual(self.service.status(self.run, launch["command_id"])["state"], "uncertain")
+        self.assertEqual([row.outcome for row in outcomes], ["running", "uncertain"])
+        self.assertFalse(outcomes[-1].evidence["process_stopped"])
 
     def test_cleanup_attempts_every_command_before_reporting_failure(self):
         argv = self.script("import time\ntime.sleep(30)")

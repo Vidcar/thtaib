@@ -39,8 +39,8 @@ from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 from workbench_backend.state.migrate import open_application_store
 
-from support import OfflineProbe, write_tiny_gguf
-from test_app import FakeHF
+from tests.support import OfflineProbe, write_tiny_gguf
+from tests.test_app import FakeHF
 
 
 class RecordingSupervisor(ProcessSupervisor):
@@ -211,6 +211,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertIsNotNone(deployment.endpoint)
         self.assertIn("port", deployment.applied_startup)
         self.assertIsNotNone(deployment.resource_usage)
+        self.assertTrue(deployment.resource_usage.available)
+        self.assertGreater(deployment.resource_usage.rss_bytes, 0, "the directly owned child retains measured RAM")
         self.assertIsNotNone(deployment.process_identity)
         self.assertEqual(deployment.pid, deployment.process_identity.pid)
         refreshed = self.manager.deployment_health(deployment.id)

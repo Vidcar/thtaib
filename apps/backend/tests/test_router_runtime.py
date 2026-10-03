@@ -56,6 +56,20 @@ class RouterRuntimeTests(unittest.TestCase):
         self.assertNotIn("host =", content)
         self.assertNotIn("port =", content)
 
+    def test_default_and_explicit_parallel_reach_router_and_direct_launch(self) -> None:
+        from workbench_backend.inference.deployments import managed_argv
+        for startup, expected in (({}, 1), ({"parallel": -1}, -1), ({"parallel": 2}, 2)):
+            with self.subTest(startup=startup):
+                deployment = self.manager.create_managed(ManagedDeploymentRequest(
+                    bundle_id=self.bundle_id, startup=startup, auto_start=False))
+                section = self.router._sections(self.router._presets())[deployment.id]
+                self.assertIn(f"parallel = {expected}", section)
+                self.assertNotIn("kv-unified =", section)
+                bundle = self.manager.get_bundle(self.bundle_id)
+                argv = managed_argv("llama-server", bundle, deployment.applied_startup)
+                self.assertEqual(argv[argv.index("--parallel") + 1], str(expected))
+                self.assertEqual(deployment.requested_startup, startup)
+
     def test_default_policy_and_status_read_do_not_start_router(self) -> None:
         self._deployment()
         with patch.object(self.router.processes, "start") as start:
@@ -116,6 +130,23 @@ class RouterRuntimeTests(unittest.TestCase):
         self.assertEqual(started.applied_startup["port"], 18080)
         post.assert_called_once_with(record["endpoint"], "/models/load", {"model": deployment.id})
         props_probe.assert_called_once_with(record["endpoint"], model=deployment.id)
+
+    def test_model_observation_does_not_report_router_parent_ram(self) -> None:
+        deployment = self._deployment()
+        identity = ProcessIdentity(pid=123, create_time=1.0, executable="llama-server")
+        record = {"endpoint": "http://127.0.0.1:18080/v1", "identity": identity}
+        props = ServerProperties(fetched=utc_now(), source_url="fixture", n_ctx=4096)
+        health = HealthReport(healthy=True, endpoint=record["endpoint"], checked=utc_now())
+        with (patch.object(self.router.probe, "props", return_value=props),
+              patch.object(self.router.probe, "health", return_value=health),
+              patch.object(self.router.processes, "resource_usage", return_value=ResourceUsage(
+                  available=True, rss_bytes=218 * 1024 * 1024)) as parent_usage):
+            loaded = self.router._record_observation(deployment, record, {"status": {"value": "loaded"}})
+        self.assertEqual(loaded.process_identity, identity, "router ownership remains available for lifecycle guards")
+        self.assertFalse(loaded.resource_usage.available)
+        self.assertIsNone(loaded.resource_usage.rss_bytes)
+        self.assertIn("shared router", loaded.resource_usage.reason)
+        parent_usage.assert_not_called()
 
     def test_legacy_owned_process_is_never_orphaned_by_status_or_start(self) -> None:
         deployment = self._deployment()

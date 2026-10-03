@@ -138,7 +138,7 @@ def _load_display_options(manager, configuration):
 
 
 def _resolve_effective_setting(*, bag_name, key, selected, overrides, requested, descriptor, deployment, bags,
-        selected_source, source_id, origin):
+        selected_source, source_id, origin, inherited_loading):
     """One displayed setting, including startup reload against the loaded server."""
     from workbench_backend.agents.setup_schemas import ResolvedSetting
 
@@ -147,7 +147,9 @@ def _resolve_effective_setting(*, bag_name, key, selected, overrides, requested,
     source = origin.source if origin else selected_source
     known = True
     if is_default:
-        if descriptor and descriptor.default_value is not None:
+        if bag_name == "startup" and key in {"parallel", "kv_unified"} and inherited_loading is not None:
+            value, source = inherited_loading[key], "Loaded model"
+        elif descriptor and descriptor.default_value is not None:
             value, source = descriptor.default_value, descriptor.default_source or descriptor.source
         elif descriptor and descriptor.observed is not None:
             value, source = descriptor.observed, "Loaded model"
@@ -162,7 +164,10 @@ def _resolve_effective_setting(*, bag_name, key, selected, overrides, requested,
     parent_value = origin.inherited_value if origin and origin.inherited_source else selected.get(key)
     parent_source = origin.inherited_source if origin and origin.inherited_source else selected_source
     if parent_value is None or (key == "reasoning_effort" and parent_value == "default") or (key == "reasoning" and parent_value == "auto"):
-        parent_value, parent_source = default_value, default_source
+        if bag_name == "startup" and key in {"parallel", "kv_unified"} and inherited_loading is not None:
+            parent_value, parent_source = inherited_loading[key], "Loaded model"
+        else:
+            parent_value, parent_source = default_value, default_source
     reload = False
     if bag_name == "startup" and deployment and key in requested:
         normalized = resolve_bags(startup={**selected, **overrides}, startup_defaults={
@@ -185,6 +190,11 @@ def effective_setting_values(manager, configuration, provenance: dict) -> dict:
     a synthetic override to the outbound request.
     """
     deployment, bags, selected_source, source_id, defaults = _load_display_options(manager, configuration)
+    inherited_loading = None
+    if (selected_source == "Loaded model" and deployment is not None and deployment.scope == "managed"
+            and not configuration.startup_overrides):
+        from workbench_backend.inference.configurations import loading_startup_settings
+        inherited_loading = loading_startup_settings(bags)
     result = {}
     for bag_name, selected, overrides in (("startup", bags.startup.requested, configuration.startup_overrides or {}),
             ("per_request", bags.per_request.requested, configuration.per_request_overrides or {})):
@@ -194,7 +204,7 @@ def effective_setting_values(manager, configuration, provenance: dict) -> dict:
             path = f"{bag_name}.{key}"
             result[path] = _resolve_effective_setting(bag_name=bag_name, key=key, selected=selected, overrides=overrides,
                 requested=requested, descriptor=defaults[bag_name].get(key), deployment=deployment, bags=bags,
-                selected_source=selected_source, source_id=source_id, origin=provenance.get(path))
+                selected_source=selected_source, source_id=source_id, origin=provenance.get(path), inherited_loading=inherited_loading)
     return result
 
 

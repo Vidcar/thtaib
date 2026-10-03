@@ -24,6 +24,8 @@ from langchain_core.tools import BaseTool, ToolException, tool
 from pydantic import Field
 
 from workbench_backend.agents.harness_backend import sanitize_thread_id
+from workbench_backend.agents.execution_policy import CURRENT_TOOL_CALL
+from workbench_backend.agents.schemas import ToolOutcome
 from workbench_backend.agents.tool_results import OwnedToolResults, bounded_content_payload, read_bounded_log, result_owner
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.ids import utc_now
@@ -45,6 +47,8 @@ class _Command:
     deadline: float
     cancel_requested: Callable[[], bool]
     effect_id: str | None = None
+    record_outcome: Callable[[ToolOutcome], None] | None = None
+    source_tool_call_id: str = ""
     state: str = "running"
     exit_code: int | None = None
     retained: dict | None = None
@@ -69,6 +73,10 @@ class ManagedCommandService:
         return command
 
     def _persist(self, command: _Command, evidence: dict) -> None:
+        # This ledger confirms process ownership/stop, not arbitrary file or
+        # external changes. Interrupted effects belong to the run's ToolOutcome.
+        evidence = {**evidence, "effect_scope": "process_lifecycle",
+            "partial_effects_unconfirmed": command.state in {"timed_out", "cancelled", "uncertain"}}
         if self.effects and command.effect_id:
             if evidence.get("process_stop_confirmed"):
                 self.effects.reconcile(command.effect_id, ReconcileEffectRequest(evidence=evidence))
@@ -78,7 +86,8 @@ class ManagedCommandService:
                     "unresolved": True, "evidence": evidence, "note": "The owned command stop remains unconfirmed. It was not replayed."}))
 
     def start(self, run, command: list[str], timeout_seconds: int = 300,
-              *, cancel_requested: Callable[[], bool] | None = None) -> dict:
+              *, cancel_requested: Callable[[], bool] | None = None,
+              record_outcome: Callable[[ToolOutcome], None] | None = None) -> dict:
         if run.project_path:
             if not Path(run.project_path).is_dir():
                 raise ToolException("An available bound project is required for managed commands.")
@@ -116,10 +125,12 @@ class ManagedCommandService:
                 if sys.platform == "win32":
                     job = WindowsJob.attach_suspended(process)
                 owned = _Command(identity, run, process, job, log, log_path, time.monotonic() + timeout_seconds, cancel,
-                    effect_id=effect.id if effect else None)
+                    effect_id=effect.id if effect else None, record_outcome=record_outcome,
+                    source_tool_call_id=CURRENT_TOOL_CALL.get())
                 self._commands[identity] = owned
                 if effect:
                     self.effects.acknowledge(effect.id, AcknowledgeEffectRequest(evidence={"command_id": identity, "state": "running", "pid": process.pid, "started_at": utc_now()}))
+                self._record_outcome(owned, process_stopped=False)
                 threading.Thread(target=self._watch, args=(owned,), name="workbench-command-" + identity[:8], daemon=True).start()
             except BaseException:
                 stopped = stop_process_tree(process, job) if process else True
@@ -151,6 +162,7 @@ class ManagedCommandService:
         with command.lock:
             if command.settled.is_set():
                 return
+            stopped = False
             try:
                 stopped = stop_process_tree(command.process, command.job)
                 command.job = None
@@ -171,7 +183,26 @@ class ManagedCommandService:
                 command.error = "The command owner could not confirm cleanup or record its result. Inspect its effects before continuing."
                 command.log_file.close()
             finally:
-                command.settled.set()
+                try:
+                    self._record_outcome(command, process_stopped=stopped)
+                finally:
+                    command.settled.set()
+
+    def _record_outcome(self, command: _Command, *, process_stopped: bool) -> None:
+        if command.record_outcome is None:
+            return
+        interrupted = command.state in {"timed_out", "cancelled", "uncertain"}
+        failed = command.state == "completed" and command.exit_code not in {None, 0}
+        outcome = "running" if command.state == "running" else "uncertain" if interrupted else "failed" if failed else "succeeded"
+        command.record_outcome(ToolOutcome(
+            call_id="managed-command:" + command.id, name="start_command", outcome=outcome,
+            failure_category=("cancelled" if command.exit_code == 130 else "runtime") if interrupted else "tool" if failed else None,
+            recovery_action="inspect_effects" if interrupted else "continue" if failed else "none",
+            detail="The job was interrupted or its stop remains unconfirmed. Its changes may be partial. Inspect before continuing or repeating it."
+                if interrupted else "The owned job is running." if outcome == "running" else "The owned job has stopped with a known result.",
+            evidence={"command_id": command.id, "source_tool_call_id": command.source_tool_call_id,
+                "state": command.state, "exit_code": command.exit_code, "process_stopped": process_stopped,
+                "retained_result": command.retained}, updated_at=utc_now()))
 
     def status(self, run, command_id: str, *, wait_seconds: float = 0) -> dict:
         if not 0 <= wait_seconds <= 10:
@@ -208,7 +239,8 @@ class ManagedCommandService:
             if status.get("state") == "lost":
                 raise HarnessError(status["notice"], code="command_outcome_unknown", status_code=409)
             return status
-        self._finish(command, "stopped")
+        cancelled = command.cancel_requested()
+        self._finish(command, "cancelled" if cancelled else "stopped", 130 if cancelled else None)
         if command.state == "uncertain":
             raise HarnessError("The command's owned process tree could not be confirmed stopped. Its outcome is uncertain.", code="command_stop_unconfirmed", status_code=409)
         return self.status(run, command_id)
@@ -235,14 +267,15 @@ class ManagedCommandService:
             raise HarnessError("Cleanup attempted every owned command, but these stops remain unconfirmed: " + ", ".join(errors),
                 code="command_stop_unconfirmed", status_code=409)
 
-    def tools_for_run(self, run, *, cancel_requested=None) -> list[BaseTool]:
+    def tools_for_run(self, run, *, cancel_requested=None, record_outcome=None) -> list[BaseTool]:
         if run.work_mode != "work" or getattr(run, "tool_mode", None) == "recorded-tool":
             return []
         @tool("start_command")
         async def start_command(command: Annotated[list[Annotated[str, Field(min_length=1, max_length=4096, pattern=r"^[^\x00]+$")]], Field(min_length=1, max_length=40)],
                                 timeout_seconds: Annotated[int, Field(ge=1, le=86400, description="Owned job timeout in seconds, independent of a whole-task budget.")] = 300) -> str:
             """Launch executable argv in this run's starting folder without shell syntax or isolation. Return an owned command identity; status and stop use that exact identity. Active jobs are stopped when the run ends."""
-            launch = asyncio.create_task(asyncio.to_thread(self.start, run, command, timeout_seconds, cancel_requested=cancel_requested))
+            launch = asyncio.create_task(asyncio.to_thread(self.start, run, command, timeout_seconds,
+                cancel_requested=cancel_requested, record_outcome=record_outcome))
             try:
                 return json.dumps(await asyncio.shield(launch), ensure_ascii=False)
             except asyncio.CancelledError:

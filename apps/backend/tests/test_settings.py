@@ -76,15 +76,27 @@ class SettingsBagTests(unittest.TestCase):
             self.assertEqual(note.key, "max_iterations")
             self.assertEqual(note.requested, 3)
 
-    def test_empty_startup_omits_engine_defaults_and_keeps_the_managed_address(self) -> None:
+    def test_empty_startup_keeps_the_managed_address_and_single_request_policy(self) -> None:
         bags = resolve_bags(startup={})
         self.assertEqual(bags.startup.applied["host"], "127.0.0.1")
         self.assertEqual(bags.startup.applied["port"], 8080)
-        for key in ("ctx_size", "n_gpu_layers", "flash_attn", "fit", "parallel", "kv_unified"):
+        self.assertEqual(bags.startup.applied["parallel"], 1)
+        self.assertEqual(bags.startup.requested, {})
+        for key in ("ctx_size", "n_gpu_layers", "flash_attn", "fit", "kv_unified"):
             self.assertNotIn(key, bags.startup.applied)
         self.assertNotIn("ctx_size", DEFAULT_GPU_PROFILE)
         self.assertEqual(DEFAULT_GPU_PROFILE["n_gpu_layers"], "auto")
         self.assertIn(DEFAULT_GPU_PROFILE["flash_attn"], {"on", "off", "auto"})
+
+    def test_explicit_native_parallel_choices_override_workbench_default(self) -> None:
+        for value in (-1, 2):
+            with self.subTest(value=value):
+                bag = resolve_bags(startup={"parallel": value}).startup
+                self.assertEqual(bag.applied["parallel"], value)
+                self.assertEqual(bag.requested, {"parallel": value})
+                args = startup_cli_args(bag.applied)
+                self.assertEqual(args[args.index("--parallel") + 1], str(value))
+        self.assertNotIn("parallel", resolve_declared_startup().applied)
 
     def test_auto_omits_context_and_cpu_weights_leave_companion_placement_independent(self) -> None:
         automatic = resolve_bags(startup={"ctx_size": None})
