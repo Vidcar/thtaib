@@ -291,7 +291,7 @@ class ApplicationFixture:
         from tests_integration.assets import resolve_assets
         from tests_integration.test_real_model_smoke import RealLlamaServer
         from workbench_backend.chat.schemas import ChatConversationCreateRequest
-        from workbench_backend.inference.schemas import ConnectedDeploymentRequest, ProfileWriteRequest
+        from workbench_backend.inference.schemas import ConnectedDeploymentRequest
         from workbench_backend.inference.hashes import sha256_file
         assets = resolve_assets()
         self.real_server = RealLlamaServer(assets, self.root / "real-llama-server.log")
@@ -311,9 +311,10 @@ class ApplicationFixture:
             "inference": "actual local llama.cpp; no scripted model", "startup": {"ctx_size": 8192, "parallel": 1}}
         manager = self.app.state.manager
         deployment = manager.attach_connected(ConnectedDeploymentRequest(endpoint=self.real_server.endpoint, display_name="Existing real local model", startup={"ctx_size": 8192}))
-        profile = manager.create_profile(ProfileWriteRequest(display_name="Real sending setup", startup={}, per_request={"temperature": 0.0, "seed": 7, "max_tokens": 128}, agent={}))
-        conversation = self.app.state.chat.create(ChatConversationCreateRequest(title="Real model conversation", project_id=project.id, deployment_id=deployment.id, profile_id=profile.id, approval_mode="full_access", presented_tools=["write_file"], input_policy={"tool_loading": "always"}))
-        self.seed_data = {"project_id": project.id, "conversation_id": conversation.id, "deployment_id": deployment.id, "profile_id": profile.id,
+        # Connected servers have no installed bundle. Use their public setup
+        # ownership with authored request overrides, not an orphan model profile.
+        conversation = self.app.state.chat.create(ChatConversationCreateRequest(title="Real model conversation", project_id=project.id, deployment_id=deployment.id, per_request_overrides={"temperature": 0.0, "seed": 7, "max_tokens": 128}, approval_mode="full_access", presented_tools=["write_file"], input_policy={"tool_loading": "always"}))
+        self.seed_data = {"project_id": project.id, "conversation_id": conversation.id, "deployment_id": deployment.id, "profile_id": None,
             "fixture_root": str(self.root), "project_path": str(project_path), "seed_run_ids": [], "retained_asset_ids": [], "real_model_identity": self.real_identity}
         self.seed_path.write_text(json.dumps(self.seed_data), encoding="utf-8")
         return {**self.seed_data, "scenario": self.scenario}

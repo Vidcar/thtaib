@@ -10,8 +10,21 @@ test("actual Windows real model sending survives lost responses and writes one f
       await reconnectAcceptedWork(page, backend, surface, true);
     }
     await openSurface(page, backend, "Chat");
-    await send(page, "Chat", "Call write_file once. Set file_path to exactly /hello.txt. Content must be exactly: hello from qwen");
+    const beforeWrite = (await backend.state<SendingState>()).run_count;
+    const fileTask = "Call write_file once. Set file_path to exactly /hello.txt. Content must be exactly: hello from qwen";
+    const messages = page.locator(".persistent-chat .message-feed");
+    const answersBefore = await messages.locator(".bubble-assistant .message-answer").count();
+    await send(page, "Chat", fileTask);
+    // Waiting for a new admission prevents an earlier completed Agent turn from
+    // satisfying this turn's terminal check before the command has been accepted.
+    await expect.poll(async () => (await backend.state<SendingState>()).run_count).toBe(beforeWrite + 1);
     await expect.poll(async () => (await backend.state<SendingState>()).runs.at(-1)?.status, { timeout: 120_000 }).toBe("completed");
+    await expect(messages.locator(".user-message-text").getByText(fileTask, { exact: true })).toHaveCount(1);
+    // A tool turn renders its created-file outcome and its final response; it
+    // need not have the single assistant bubble of a text-only turn.
+    await expect.poll(async () => messages.locator(".bubble-assistant .message-answer").count()).toBeGreaterThan(answersBefore);
+    await expect(messages.locator(".bubble-assistant .message-answer").last()).not.toHaveText("");
+    await expect(messages.getByText("Created hello.txt", { exact: true })).toBeVisible();
     await assertRealFile(backend);
     const runs = await backend.state<SendingState & { runs: Array<{ tool_invocations: Array<{ name: string }> }> }>();
     expect(runs.runs.at(-1)?.tool_invocations.filter(tool => tool.name === "write_file")).toHaveLength(1);

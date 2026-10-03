@@ -33,6 +33,27 @@ export async function withNativeWorkbench(testInfo: TestInfo, inference: "determ
   const source = path.join(desktopRoot, "dist"), renderer = safePath("renderer"), document = path.join(renderer, "index.html");
   const before = { main: await hash(main), preload: await hash(preload), renderer: await treeHashes(source) };
   let backend: BackendHandle | undefined, desktop: ElectronApplication | undefined;
+  let ownedProcessChain: Array<{ pid: number; parentPid: number; executable: string; createdUtc: string }> = [];
+  const powershell = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  async function closeOwnedDesktop(): Promise<void> {
+    if (!desktop) return;
+    let deadline: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([desktop.close(), new Promise<never>((_, reject) => {
+        deadline = setTimeout(() => reject(new Error("Owned native desktop did not quit within 30 seconds.")), 30_000);
+      })]);
+    } catch (error) {
+      const owner = ownedProcessChain.find(item => item.pid === desktop?.process().pid);
+      if (!owner) throw new Error("Native quit failed; captured ownership is unavailable for safe fallback.", { cause: error });
+      const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
+      const command = `$p=Get-CimInstance Win32_Process -Filter 'ProcessId=${owner.pid}'; if ($p) { if ($p.ExecutablePath -ne ${literal(owner.executable)} -or $p.CreationDate.ToUniversalTime().ToString('o') -ne ${literal(owner.createdUtc)}) { throw 'Owned native process identity changed' }; & taskkill.exe /PID ${owner.pid} /T /F; if ($LASTEXITCODE -ne 0) { throw 'Owned native fallback failed' } }`;
+      await promisify(execFile)(powershell, ["-NoProfile", "-NonInteractive", "-Command", command], { windowsHide: true, timeout: 10_000, encoding: "utf8" });
+      // Successful fallback prevents leaks; graceful-quit failure still fails the check.
+      throw new Error("Owned native desktop required forced cleanup.", { cause: error });
+    } finally {
+      if (deadline) clearTimeout(deadline);
+    }
+  }
   try {
     backend = await startBackend({ dataRoot: safePath("data"), inference });
     await cp(source, renderer, { recursive: true, errorOnExist: true, force: false });
@@ -71,20 +92,46 @@ export async function withNativeWorkbench(testInfo: TestInfo, inference: "determ
     expect(bridge.origin).toBe(backend.origin); expect(bridge.authenticatedStatus).toBe(200); expect(bridge.secretVisible).toBe(false);
     const launcherPid = desktop.process().pid;
     expect(launcherPid).toBeGreaterThan(0);
-    const powershell = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
     const command = `$ids=@(${identity.pid},${launcherPid}); @($ids | ForEach-Object { $p=Get-CimInstance Win32_Process -Filter ('ProcessId='+$_); if (!$p) { throw 'Owned process exited' }; [pscustomobject]@{pid=[int]$p.ProcessId; parentPid=[int]$p.ParentProcessId; executable=$p.ExecutablePath; createdUtc=$p.CreationDate.ToUniversalTime().ToString('o')} }) | ConvertTo-Json -Compress`;
-    const processChain = JSON.parse((await promisify(execFile)(powershell, ["-NoProfile", "-NonInteractive", "-Command", command], { windowsHide: true, timeout: 10_000, encoding: "utf8" })).stdout) as Array<{ pid: number; parentPid: number; executable: string }>;
+    const processChain = JSON.parse((await promisify(execFile)(powershell, ["-NoProfile", "-NonInteractive", "-Command", command], { windowsHide: true, timeout: 10_000, encoding: "utf8" })).stdout) as typeof ownedProcessChain;
+    ownedProcessChain = processChain;
     expect(processChain.find(item => item.pid === identity.pid)?.parentPid).toBe(launcherPid);
-    await operation(page, backend);
-    expect(await hash(main)).toBe(before.main); expect(await hash(preload)).toBe(before.preload); expect(await treeHashes(source)).toEqual(before.renderer);
-    expect(await treeHashes(renderer)).toEqual(copied);
-    const state = await backend.state();
-    const safe = JSON.stringify({ identity, processChain, artifacts: before, copiedRenderer: copied, authenticatedStatus: bridge.authenticatedStatus, inference,
-      backend: { pid: backend.pid, dataRoot: backend.dataRoot }, state, limit: "Unpackaged Windows application; copied document differs only in isolated backend connect-src" }, null, 2).replaceAll(backend.token, "[redacted]");
-    await testInfo.attach("sending-native-identity-and-outcomes", { body: safe, contentType: "application/json" });
-    await page.screenshot({ path: testInfo.outputPath("sending-native.png"), timeout: 5000 });
+    const ownedBackend = backend;
+    async function capture(outcome: "passed" | "failed"): Promise<void> {
+      const state = await ownedBackend.state();
+      const renderedText = await page.locator("body").innerText();
+      const safe = JSON.stringify({ outcome, identity, processChain, artifacts: before, copiedRenderer: copied, authenticatedStatus: bridge.authenticatedStatus, inference,
+        backend: { pid: ownedBackend.pid, dataRoot: ownedBackend.dataRoot }, state, renderedText,
+        limit: "Unpackaged Windows application; copied document differs only in isolated backend connect-src" }, null, 2).replaceAll(ownedBackend.token, "[redacted]");
+      const evidence = testInfo.outputPath(`sending-native-${outcome}-${identity.pid}.json`);
+      await writeFile(evidence, safe, "utf8");
+      await testInfo.attach("sending-native-identity-and-outcomes", { path: evidence, contentType: "application/json" });
+      await page.screenshot({ path: testInfo.outputPath(`sending-native-${outcome}-${identity.pid}.png`), timeout: 5000 });
+    }
+    try {
+      await operation(page, backend);
+      expect(await hash(main)).toBe(before.main); expect(await hash(preload)).toBe(before.preload); expect(await treeHashes(source)).toEqual(before.renderer);
+      expect(await treeHashes(renderer)).toEqual(copied);
+    } catch (error) {
+      // Preserve the original failed assertion even if diagnostics are unavailable.
+      await capture("failed").catch(() => undefined);
+      throw error;
+    }
+    await capture("passed");
   } finally {
-    try { await desktop?.close(); }
-    finally { await backend?.close(); }
+    // A failed assertion can leave real work active. Quiesce only this owned,
+    // disposable backend through its normal lifecycle API before Electron quits,
+    // otherwise the native Keep-running dialog correctly holds the app open.
+    try {
+      if (backend) {
+        const stopped = await fetch(`${backend.origin}/v1/desktop/stop-owned-work`, {
+          method: "POST", headers: { "X-Workbench-Local-Token": backend.token }, signal: AbortSignal.timeout(20_000),
+        });
+        expect(stopped.status).toBe(200);
+      }
+    } finally {
+      try { await closeOwnedDesktop(); }
+      finally { await backend?.close(); }
+    }
   }
 }

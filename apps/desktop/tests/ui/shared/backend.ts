@@ -14,7 +14,7 @@ export interface BackendSeed {
   project_id: string;
   conversation_id: string;
   deployment_id: string;
-  profile_id: string;
+  profile_id: string | null;
   fixture_root: string;
   paths?: Record<string, string>;
   [key: string]: unknown;
