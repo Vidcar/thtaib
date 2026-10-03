@@ -1,6 +1,6 @@
 # Current handover
 
-Updated 2026-10-03. Tracking setup is complete in the private [Local AI Workbench Project](https://github.com/users/Vidcar/projects/5), linked to `Vidcar/thtaib`, delivered in [PR262](https://github.com/Vidcar/thtaib/pull/262). Browserless maintenance guidance is being delivered on `codex/project-tracking-guide`.
+Updated 2026-10-03. Tracking setup is complete in the private [Local AI Workbench Project](https://github.com/users/Vidcar/projects/5), linked to `Vidcar/thtaib`, delivered in [PR262](https://github.com/Vidcar/thtaib/pull/262). Browserless maintenance instructions are in [PR263](https://github.com/Vidcar/thtaib/pull/263).
 
 [Context #243](https://github.com/Vidcar/thtaib/issues/243), task sub-issues #244–256 and decision sub-issues #257–261 preserve the implementation pack and material unresolved choices. Native prerequisites preserve task order and require owning decisions before Ready. Task 01 is Done/Agreed in [PR242](https://github.com/Vidcar/thtaib/pull/242); its acceptance evidence remains `.scratch/verification/20261003T155738Z-f8bb3758/report.json`.
 
@@ -10,4 +10,4 @@ GitHub CLI 2.100.0 is authenticated as Vidcar through Windows keyring with `repo
 
 [AGENTS.md](AGENTS.md#maintain-the-github-project) now documents commands, agreement/status rules, dependencies, evidence, readback and authentication recovery. The Project README links back to it. Routine tracking uses CLI/API; automation configuration, field defaults and view sorting/grouping still require a browser. Keep automatic completion/closure/archiving and remote CI disabled.
 
-Documentation fast checks and independent review passed. Next: finish Git delivery of this guide. [Task 02 #245](https://github.com/Vidcar/thtaib/issues/245) still requires Dave's scope review/instruction before implementation. No application checks or restart are needed for this documentation change.
+Documentation fast checks, `git diff --check` and independent review passed. This tracking setup and guidance task is complete when PR263 is merged; no application checks or restart are needed. [Task 02 #245](https://github.com/Vidcar/thtaib/issues/245) still requires Dave's scope review/instruction before implementation.
