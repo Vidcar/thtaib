@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +7,7 @@ import { installAppearancePreview } from "./appearancePreviewWindow";
 import { probeBackendCompatibility } from "./backendCompatibility";
 import { installBackground, retainWindowInBackground } from "./background";
 import { clearDesktopProcess, publishDesktopProcess } from "./desktopProcess";
+import { requireDesktopTestScratchPath, resolveDesktopTestIsolation } from "./desktopTestIsolation";
 import { configureWindowsNotificationIdentity, ensureWindowsNotificationShortcut, WINDOWS_LAUNCH_BACKEND_ARG } from "./windowsNotificationIdentity";
 
 import {
@@ -21,6 +22,19 @@ import {
 } from "./trustBoundary";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
+const repositoryRoot = path.resolve(currentDir, "../../..");
+const testIsolation = resolveDesktopTestIsolation(repositoryRoot, process.env, app.isPackaged);
+const backendOrigin = testIsolation?.backendOrigin ?? WORKBENCH_BACKEND_ORIGIN;
+const rendererDocument = testIsolation?.rendererDocument ?? path.join(currentDir, "../dist/index.html");
+if (testIsolation) {
+  // Electron's profile also owns the instance lock. Isolate it before acquiring one.
+  requireDesktopTestScratchPath(repositoryRoot, resolveProductDataRoot(), "Resolved test data root");
+  mkdirSync(testIsolation.profileRoot, { recursive: true });
+  const sessions = path.join(testIsolation.profileRoot, "sessions");
+  mkdirSync(sessions, { recursive: true });
+  app.setPath("userData", testIsolation.profileRoot);
+  app.setPath("sessionData", sessions);
+}
 const ownsSingleInstance = app.requestSingleInstanceLock();
 let mainWindow: BrowserWindow | undefined;
 const STALE_BACKEND_NOTIFIED_ARG = "--workbench-stale-backend-notified";
@@ -54,6 +68,7 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      ...(testIsolation ? { additionalArguments: [`--workbench-test-backend-origin=${backendOrigin}`] } : {}),
     },
   });
 
@@ -68,14 +83,14 @@ function createWindow(): void {
 
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
   if (devServerUrl) {
-    installTrustedAppWindow(window, { appUrl: devServerUrl });
+    installTrustedAppWindow(window, { appUrl: devServerUrl, backendOrigin });
     // Vite's URL is a development bundler helper, not a product HTTP surface.
     void window.loadURL(devServerUrl);
     return;
   }
 
-  const indexHtmlPath = path.join(currentDir, "../dist/index.html");
-  installTrustedAppWindow(window, { appUrl: packagedAppDocumentUrl(indexHtmlPath) });
+  const indexHtmlPath = rendererDocument;
+  installTrustedAppWindow(window, { appUrl: packagedAppDocumentUrl(indexHtmlPath), backendOrigin });
   void window.loadFile(indexHtmlPath);
 }
 
@@ -93,11 +108,11 @@ function focusExistingWindow(): void {
 
 function installApplicationTrust(): void {
   const token = ensureSharedSecret(resolveProductDataRoot());
-  installLocalTrustHeader(token);
+  installLocalTrustHeader(token, backendOrigin);
 }
 
 function shouldLaunchBackendFromShortcut(argv = process.argv): boolean {
-  return process.platform === "win32" && !app.isPackaged && argv.includes(WINDOWS_LAUNCH_BACKEND_ARG);
+  return !testIsolation && process.platform === "win32" && !app.isPackaged && argv.includes(WINDOWS_LAUNCH_BACKEND_ARG);
 }
 
 async function ensureBackendFromShortcut(argv = process.argv): Promise<boolean> {
@@ -156,7 +171,7 @@ async function runLauncherNoDesktop(launcher: string): Promise<void> {
 
 async function backendCompatibility() {
   return probeBackendCompatibility(
-    WORKBENCH_BACKEND_ORIGIN,
+    backendOrigin,
     ensureSharedSecret(resolveProductDataRoot()),
   );
 }
@@ -196,10 +211,12 @@ if (ownsSingleInstance) {
     });
     await ensureBackendFromShortcut();
     const compatibility = await backendCompatibility();
-    await installBackground(focusExistingWindow);
+    await installBackground(focusExistingWindow, backendOrigin);
     installAppearancePreview({
       preloadPath: preloadScriptPath(),
-      appUrl: process.env.VITE_DEV_SERVER_URL || packagedAppDocumentUrl(path.join(currentDir, "../dist/index.html")),
+      backendOrigin,
+      additionalArguments: testIsolation ? [`--workbench-test-backend-origin=${backendOrigin}`] : undefined,
+      appUrl: process.env.VITE_DEV_SERVER_URL || packagedAppDocumentUrl(rendererDocument),
       mainWindow: () => mainWindow,
       createWindow: options => new BrowserWindow(options),
       load: window => {
@@ -210,7 +227,7 @@ if (ownsSingleInstance) {
           void window.loadURL(url.toString());
           return;
         }
-        void window.loadFile(path.join(currentDir, "../dist/index.html"), { hash: "appearance-preview" });
+        void window.loadFile(rendererDocument, { hash: "appearance-preview" });
       },
     });
     createWindow();

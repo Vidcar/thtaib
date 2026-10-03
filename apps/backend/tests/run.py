@@ -38,6 +38,7 @@ INTEGRATION_PREFIXES = (
     "tests.test_recorded_tools.RecordedToolHarnessTests.",
     "tests.test_retrieval.RetrievalHarnessTests.",
     "tests.test_knowledge.KnowledgeLabHarnessTests.",
+    "tests.test_ui_fixture.",
 )
 
 

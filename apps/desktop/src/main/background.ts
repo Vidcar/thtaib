@@ -12,9 +12,10 @@ let checkingQuit = false;
 let timer: ReturnType<typeof setInterval> | undefined;
 let polling = false;
 const notified = new Set<string>();
+let backendOrigin = WORKBENCH_BACKEND_ORIGIN;
 
 async function backend<T>(route: string, method = "GET", body?: object): Promise<T> {
-  const response = await fetch(`${WORKBENCH_BACKEND_ORIGIN}/v1/${route}`, {
+  const response = await fetch(`${backendOrigin}/v1/${route}`, {
     method, headers: { [WORKBENCH_LOCAL_TOKEN_HEADER]: ensureSharedSecret(resolveProductDataRoot()), "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
     signal: AbortSignal.timeout(20000),
@@ -51,7 +52,8 @@ export function retainWindowInBackground(window: BrowserWindow): void {
   });
 }
 
-export async function installBackground(openWindow: () => void): Promise<void> {
+export async function installBackground(openWindow: () => void, origin = WORKBENCH_BACKEND_ORIGIN): Promise<void> {
+  backendOrigin = origin;
   tray = new Tray(await app.getFileIcon(process.execPath, { size: "small" }));
   tray.setToolTip("Local AI Workbench");
   tray.setContextMenu(Menu.buildFromTemplate([

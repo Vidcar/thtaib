@@ -1,9 +1,17 @@
 import { contextBridge, ipcRenderer } from "electron";
 
+const testOriginArgument = process.argv.find(value => value.startsWith("--workbench-test-backend-origin="));
+const backendUrl = testOriginArgument?.slice("--workbench-test-backend-origin=".length) ?? "http://127.0.0.1:8000";
+if (testOriginArgument) {
+  const match = /^http:\/\/127\.0\.0\.1:([1-9][0-9]{0,4})$/.exec(backendUrl);
+  const port = Number(match?.[1]);
+  if (!match || port > 65535 || port === 8000) throw new Error("Invalid isolated desktop backend origin.");
+}
+
 contextBridge.exposeInMainWorld("workbench", {
   productName: "Local AI Workbench",
   surface: "managed-inference",
-  backendUrl: "http://127.0.0.1:8000",
+  backendUrl,
   selectPath: (kind: "file" | "folder") => ipcRenderer.invoke("workbench:select-path", kind),
   readAppearance: () => ipcRenderer.invoke("workbench:appearance-read"),
   writeAppearance: (value: unknown) => ipcRenderer.invoke("workbench:appearance-write", value),
