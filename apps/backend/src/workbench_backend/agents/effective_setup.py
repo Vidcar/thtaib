@@ -29,7 +29,7 @@ from workbench_backend.agents.memory_skills import (
 from workbench_backend.knowledge.schemas import KnowledgeKind, KnowledgeRefs, KnowledgeVersion
 from workbench_backend.agents.setup_schemas import AgentInputPolicy, InputSourceRow, InstructionLayer
 from workbench_backend.agents.input_sources import (
-    WORKBENCH_CORE_INSTRUCTIONS, authored_instruction_sections, build_input_sources,
+    WORKBENCH_CORE_INSTRUCTIONS, WORKBENCH_HOST_CONTEXT, authored_instruction_sections, build_input_sources,
     reference_source_mode,
 )
 
@@ -507,6 +507,8 @@ def compose_system_prompt(
         base = surface
     else:
         base = default_system_prompt
+    if WORKBENCH_HOST_CONTEXT not in base:
+        base = f"{base}\n\n{WORKBENCH_HOST_CONTEXT}"
     retrieval = (retrieval_instructions or "").strip()
     if retrieval:
         base = f"{base}\n\n{retrieval}"

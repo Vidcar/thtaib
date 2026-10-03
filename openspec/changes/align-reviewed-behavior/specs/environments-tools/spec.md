@@ -284,3 +284,18 @@ Selected Browser access SHALL run one owned Chrome per conversation, without a v
 - **WHEN** the owned browser is closed or expires, or the stopped profile is reset after confirmation
 - **THEN** close or expiry MUST stop the owned process tree and retain sign-ins until a confirmed reset clears the stopped profile
 - **AND** the product MUST NOT copy those sign-ins into an application backup, because there is no application backup.
+
+#### Scenario: First navigation with concurrent viewing
+- **WHEN** the first authorized browser action launches Chrome while the live view or status monitor observes its startup
+- **THEN** observation waits for coherent initialized page state and the action continues in the same owned context
+- **AND** partially initialized state MUST NOT establish browser loss or cause a healthy browser to be terminated.
+
+#### Scenario: Recover a lost browser without clearing sign-ins
+- **WHEN** a lost session is closed and a fresh session is started
+- **THEN** the existing Close/start path retains the conversation profile and recovery guidance identifies it distinctly from Reset
+- **AND** neither recovery path automatically repeats completed or uncertain actions.
+
+#### Scenario: Background live-view failure
+- **WHEN** background frame capture fails while a foreground browser action succeeds
+- **THEN** the live-view error remains observable without changing that action's successful result
+- **AND** actual foreground action failures, directly requested frame failures and genuine worker loss retain their existing error and recovery boundaries.

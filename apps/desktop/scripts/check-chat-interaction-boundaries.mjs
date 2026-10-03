@@ -2458,6 +2458,75 @@ async function testStoppedManagedDeploymentShowsLoadOnSendNotice(vite) {
   }
 }
 
+async function testHealthyBoundDeploymentClearsStaleHealthNotice(vite) {
+  const diagnostic = "Bound deployment is not healthy. Live Chat completion requires a healthy managed/connected llama.cpp. Continuity/thread linkage is not proof of live completion.";
+  let observed = { ...stoppedManagedDeployment, status: "unhealthy", health: { healthy: false } };
+  const harness = makeHarness({ aRun: null, threadARun: null,
+    deployments: () => [observed],
+    readiness: () => observed.health.healthy
+      ? { status: "ready", can_send: true, issues: [], selection: null }
+      : { status: "incompatible", can_send: false, issues: [{ code: "deploy_unhealthy", message: diagnostic }], selection: null } });
+  harness.state.conversations.conv_a = conversation("conv_a", "Conversation A", null, {
+    deploy_health: { deployment_id: observed.id, deployment_status: observed.status,
+      healthy: false, code: "deploy_unhealthy", message: diagnostic, detail: null },
+  });
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "chat opened before model recovery");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Continue this chat" } }));
+    await waitFor(() => assert.equal(buttonByAriaLabel(renderer, "Send").props.disabled, true), "unhealthy readiness still blocks Send");
+    assert.match(allText(renderer), /Bound deployment is not healthy/, "a genuinely unhealthy model keeps its notice");
+    observed = { ...observed, status: "running", health: { healthy: true } };
+    harness.state.conversations.conv_a = { ...harness.state.conversations.conv_a,
+      deploy_health: { deployment_id: observed.id, deployment_status: "running", healthy: true, code: null, message: null, detail: null } };
+    const priorReadiness = harness.state.requests.readiness.length;
+    // Use the ordinary model-catalogue polling callback, without reopening
+    // the chat or replacing its retained conversation view.
+    await act(async () => {
+      for (const callback of harness.state.testIntervals.values()) callback();
+      await Promise.resolve();
+    });
+    await waitFor(() => assert.ok(harness.state.requests.readiness.length > priorReadiness), "healthy transition refreshes readiness");
+    await waitFor(() => assert.equal(buttonByAriaLabel(renderer, "Send").props.disabled, false), "current healthy readiness enables Send");
+    assert.doesNotMatch(allText(renderer), /Bound deployment is not healthy/, "healthy bound catalogue clears the stale conversation notice");
+  } finally {
+    await closeHarness(renderer, harness);
+  }
+}
+
+async function testDeploymentHealthNoticePreservesUnconfirmedAndOtherErrors(vite) {
+  const scenarios = [
+    { name: "unknown current health", health: null, code: "deploy_unhealthy", diagnosticId: "dep_1" },
+    { name: "current unhealthy", health: { healthy: false }, code: "deploy_unhealthy", diagnosticId: "dep_1" },
+    { name: "another diagnostic deployment", health: { healthy: true }, code: "deploy_unhealthy", diagnosticId: "dep_other" },
+    { name: "selected different deployment", health: { healthy: true }, code: "deploy_unhealthy", diagnosticId: "dep_1", selectedId: "dep_other" },
+    { name: "connection failure", health: { healthy: true }, code: "deploy_unreachable", diagnosticId: "dep_1" },
+    { name: "missing deployment", health: { healthy: true }, code: "deploy_missing", diagnosticId: "dep_1" },
+  ];
+  for (const scenario of scenarios) {
+    const diagnostic = `Keep ${scenario.name} diagnostic`;
+    const harness = makeHarness({ aRun: null, threadARun: null, deployments: [
+      { ...baseDeployment, id: scenario.selectedId ?? "dep_1", health: scenario.health }] });
+    harness.state.conversations.conv_a = conversation("conv_a", "Conversation A", null, {
+      ...(scenario.selectedId ? { draft: { content: "", revision: 1, attachment_ids: [],
+        intended_config: { deployment_id: scenario.selectedId }, updated_at: now() } } : {}),
+      deploy_health: { deployment_id: scenario.diagnosticId, deployment_status: "unhealthy",
+        healthy: false, code: scenario.code, message: diagnostic, detail: null },
+    });
+    const renderer = await renderChat(vite, harness);
+    try {
+      await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
+      await act(async () => button(renderer, "Conversation A").props.onClick());
+      await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), `${scenario.name} chat opened`);
+      assert.ok(allText(renderer).includes(diagnostic), `${scenario.name} notice must remain visible`);
+    } finally {
+      await closeHarness(renderer, harness);
+    }
+  }
+}
+
 async function testUnknownProjectionRequiresAuthoritativeCurrentRun(vite) {
   const known = run("run_known_previous", "completed", "old-input", "previous answer");
   const unknown = run("run_unknown_stream", "running", "new-input", "new queued answer");
@@ -4427,6 +4496,8 @@ try {
     ["persisted draft attachment/config reload", testPersistedDraftRestoresAttachmentsAndIntendedConfig],
     ["late upload navigation guard", testLateUploadAfterNavigationDoesNotAttachToNewConversation],
     ["stopped managed deployment shows load-on-send notice", testStoppedManagedDeploymentShowsLoadOnSendNotice],
+    ["healthy bound deployment clears stale health notice", testHealthyBoundDeploymentClearsStaleHealthNotice],
+    ["deployment health notice preserves unconfirmed and other errors", testDeploymentHealthNoticePreservesUnconfirmedAndOtherErrors],
     ["unknown projection requires authoritative current run", testUnknownProjectionRequiresAuthoritativeCurrentRun],
     ["measurement-only projection refresh and isolation", testMeasurementOnlyProjectionRefreshesCurrentConversation],
     ["activity-only composer transitions and isolation", testActivityOnlyProjectionUpdatesComposer],

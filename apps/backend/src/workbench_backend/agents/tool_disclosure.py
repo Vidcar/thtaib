@@ -175,7 +175,16 @@ def append_selected_tools_index(system_prompt: str, presented, input_policy) -> 
     return system_prompt + "\n\n" + index
 
 
-def _discovery_score(query: str, name: str, description: str) -> int:
+def _tool_lookup_names(name: str) -> set[str]:
+    """Native call names and registered presentation labels/aliases for exact lookup."""
+    names = {name.casefold(), name.replace("_", " ").casefold()}
+    if row := presentation(name):
+        names.add(row.label.casefold())
+        names.update(alias.casefold() for alias in row.aliases)
+    return names
+
+
+def _discovery_score(query: str, name: str, description: str, *, include_label: bool = True) -> int:
     """Prefer task families and name terms before weak prose matches."""
     terms = set(re.findall(r"[\w]+", query.casefold())) - {"tool", "tools", "use", "the", "a", "to"}
     name_terms = set(name.casefold().split("_"))
@@ -196,7 +205,8 @@ def _discovery_score(query: str, name: str, description: str) -> int:
         score += 40
     if terms.intersection({"shell", "command", "powershell", "terminal", "execute"}) and name in SHELL_TOOL_NAMES:
         score += 40
-    if name.casefold() in terms or query.strip().casefold() == name.replace("_", " ").casefold():
+    lookup_names = _tool_lookup_names(name) if include_label else {name.casefold(), name.replace("_", " ").casefold()}
+    if name.casefold() in terms or query.strip().casefold() in lookup_names:
         score += 1000
     return score
 
@@ -331,7 +341,7 @@ class ToolDisclosureMiddleware(AgentMiddleware):
         self.ensure_approval = ensure_approval
         self.reference_requirements: dict[str, Any] = {}
         self._definitions: dict[str, BaseTool] = {}
-        self._metadata = {name: row.description + " " + " ".join(row.aliases) for name, row in TOOL_PRESENTATIONS.items()}
+        self._metadata = {name: " ".join((row.label, row.description, *row.aliases)) for name, row in TOOL_PRESENTATIONS.items()}
         self._groups = {name: row.group for name, row in TOOL_PRESENTATIONS.items()}
         self._remote_names = {}
         for connection in run.connection_snapshots:
@@ -408,7 +418,7 @@ class ToolDisclosureMiddleware(AgentMiddleware):
             description = self._metadata.get(name, getattr(self._definitions.get(name), "description", ""))
             score = _discovery_score(query, name, description)
             if remote_name := self._remote_names.get(name):
-                score = max(score, _discovery_score(query, remote_name, description))
+                score = max(score, _discovery_score(query, remote_name, description, include_label=False))
             if score:
                 priority = {"read_file": 0, "edit_file": 1, "write_file": 2, "glob": 3, "grep": 4, "ls": 5}.get(name, 10)
                 scores.append((-score, priority, name, description))
@@ -436,7 +446,7 @@ class ToolDisclosureMiddleware(AgentMiddleware):
         # A page cursor follows stable ranking. A fresh broad search skips loaded
         # names, while an exact lookup always remains reachable.
         indices = [index for index, name in enumerate(ordered) if index >= offset and
-            (cursor or name not in loaded or exact in {name.casefold(), name.replace("_", " ").casefold(), self._remote_names.get(name, "").casefold()})][:DISCOVERY_LIMIT]
+            (cursor or name not in loaded or exact in _tool_lookup_names(name) | {self._remote_names.get(name, "").casefold()})][:DISCOVERY_LIMIT]
         lookup = {row[2]: row for row in scores}
         matches = [lookup[ordered[index]] for index in indices]
         next_offset = indices[-1] + 1 if indices else len(ordered)
@@ -447,7 +457,7 @@ class ToolDisclosureMiddleware(AgentMiddleware):
         for _, _, name, description in matches:
             known = name in self._definitions or name in getattr(self.loader, "definitions", {})
             if not known:
-                explicit = name.casefold() in terms or query.strip().casefold() == name.replace("_", " ").casefold()
+                explicit = name.casefold() in terms or exact in _tool_lookup_names(name)
                 explicit_feature = (name.startswith("browser_") and terms.intersection({"browser", "chrome"})
                     or name.startswith("desktop_") and terms.intersection({"desktop", "windows", "window", "winapp"}))
                 if not explicit and not explicit_feature:
@@ -467,18 +477,19 @@ class ToolDisclosureMiddleware(AgentMiddleware):
                 self.ensure_approval(name)
             if name not in activated:
                 activated.append(name)
+            row = presentation(name)
             if name == "read_file" and "read_file" not in self.run.presented_tools and self.run.framework_read_paths:
                 description = "Only these paths are permitted: " + ", ".join(self.run.framework_read_paths) + "."
             elif name in {"ls", "read_file"} and not getattr(self.run, "project_path", None):
                 description = _projectless_reader_limit(projectless_virtual_read_paths(self.run))
             else:
-                description = COMPACT_DESCRIPTIONS.get(name, description)
-            lines.append(f"{name}: {description}")
-            row = presentation(name)
+                description = COMPACT_DESCRIPTIONS.get(name, row.description if row else description)
             results.append({"name": name, "label": row.label if row else self._remote_names.get(name, name),
                 "group": self._groups.get(name, row.group if row else "other"),
                 "already_disclosed": name in set(runtime.state.get(DISCLOSED_TOOLS) or []) | bootstrap_tool_names(self.run),
                 "description": description})
+        if results:
+            lines.insert(0, "Matching selected tool schemas are available.")
         if not matches:
             lines = ["No selected tools match. Try a specific task, tool name or group. Discovery cannot enable unselected tools."]
         return Command(update={DISCLOSED_TOOLS: activated, "messages": [ToolMessage(

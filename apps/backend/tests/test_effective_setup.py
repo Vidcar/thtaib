@@ -22,6 +22,7 @@ from workbench_backend.agents.effective_setup import (
     resolve_effective_setup,
 )
 from workbench_backend.agents.harness import DEFAULT_SYSTEM_PROMPT, HarnessService
+from workbench_backend.agents.input_sources import WORKBENCH_HOST_CONTEXT
 from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.app import create_app
 from workbench_backend.errors import HarnessError
@@ -271,7 +272,7 @@ class EffectiveSetupResolverTests(unittest.TestCase):
             default_system_prompt=DEFAULT_SYSTEM_PROMPT,
             versions=[],
         )
-        self.assertEqual(prompt, "same identity")
+        self.assertEqual(prompt, f"same identity\n\n{WORKBENCH_HOST_CONTEXT}")
         self.assertNotIn(SURFACE_PROMPT_HEADING, prompt)
 
     def test_profile_per_request_and_startup_mismatch(self) -> None:

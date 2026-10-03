@@ -31,6 +31,33 @@ The harness SHALL receive the run's backend, filesystem permissions, `interrupt_
 - **THEN** one Deep Agents summarizer applies its native model-aware compaction defaults against the full observed model capacity with the framework policy applied once
 - **AND** no custom early threshold or second summarizer shrinks that budget again.
 
+#### Scenario: Browser handoff context is delivered once
+
+- **WHEN** a browser handoff or lifecycle change supplies a fresh observation
+- **THEN** the next successful model request SHALL receive its marked, untrusted tool context once, with native checkpoint history and a delivery receipt
+- **AND** counting, failed generation, cancellation or a resumed typed question SHALL NOT append repeated observation prompts or create a new real user-turn boundary
+- **AND** a newer handoff revision SHALL remain deliverable even when its page text matches an earlier snapshot.
+
+#### Scenario: A newer browser result supersedes handoff context
+
+- **WHEN** a successful parent browser action after a handoff produces a newer result before the pending observation is dispatched
+- **THEN** the observation SHALL identify its historical provenance and the newer result as superseding it
+- **AND** failed calls and helper-local results SHALL NOT falsely establish a newer parent page
+- **AND** token counting, outgoing request context and retained native history SHALL agree.
+
+#### Scenario: Preserve native tool content and artifact separation
+
+- **WHEN** the browser MCP adapter returns model content and a separate artifact
+- **THEN** browser text projection SHALL preserve the native model content without stringifying absent artifacts or adding separate artifact metadata as response text
+- **AND** permitted image acquisition, source identity, redaction and retained-result access SHALL remain usable.
+
+#### Scenario: Execution platform is available before tool discovery
+
+- **WHEN** a newly accepted task is composed for the local harness
+- **THEN** its initial system context SHALL state the actual host operating system before platform-dependent work, independently of deferred tool-schema discovery
+- **AND** input preview, accounting and root/helper composition SHALL use the same factual text without changing authored instructions, implying shell permissions or claiming installed dependencies
+- **AND** the accepted prompt SHALL remain frozen for resume, without appending another environment prompt after ordinary answers or tool results.
+
 ### Requirement: AGT-004 - Separate active context from durable knowledge
 
 The product SHALL use application-versioned user, agent, and project memory, skills, and protected instructions through configured backends. Selected versions SHALL use explicit loading modes: Always include memories through native memory middleware, When needed reference metadata with full original bodies read through their frozen versioned backend, skills through native progressive skill loading, and included protected instructions through the composed system prompt. Each newly submitted input SHALL atomically resolve the latest saved versions of selected memory, skills and protected instructions by their selected record identities and freeze those exact versions, including explicit deselection, before it is accepted for execution or queueing. Unsaved edits SHALL NOT participate. Running, queued and paused turns SHALL keep their frozen versions; approval or question resumes SHALL NOT refresh them. A missing or deleted selected record SHALL produce an actionable error rather than silently omitting it. A new chat SHALL start with its own selections. There is no second conversation that inherits them. Newly accepted selected references SHALL default to When needed. Always include SHALL include the full original memory text with visible estimated cost or fail actionably when irreducibly oversized. When needed SHALL disclose concise identifying metadata and retain full original readable text at the exact frozen version; it MUST NOT silently substitute keyword excerpts or summaries. Explicit Off/exclusions SHALL suppress future injection without deleting the source. Tools-off with a selected deferred reference SHALL provide actionable Include now, Remove or Enable reading choices without silently enabling tools. A new user turn SHALL load its admission-frozen current saved skill versions, including saved edits and deselection; an approval or question resume MUST NOT reload them. A memory suggestion SHALL remain a proposal until the person accepts or rejects it on the Knowledge page. There SHALL be no automatic-save switch. Full access and an approval card MUST NOT save a memory. Agents MUST NOT write skills or protected instructions. An accepted memory SHALL become a versioned record. Loading an accepted memory or skill into the prompt SHALL use the official memory and skills parameters already required by this capability. Protected instructions MUST reject agent-origin writes.
