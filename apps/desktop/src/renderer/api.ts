@@ -81,7 +81,10 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers ?? {}),
     },
   });
-  const body = (await response.json().catch(() => ({}))) as T;
+  // A successful status does not establish a readable body. In particular,
+  // navigation can interrupt JSON after headers arrive; let the caller retain
+  // its failed-read/retry state rather than publish an empty object as data.
+  const body = (response.ok ? await response.json() : await response.json().catch(() => ({}))) as T;
   if (!response.ok) {
     const failure = readApiFailure(body);
     throw new ApiError(failure.message ?? `${response.status} ${path}`, response.status, failure.code);
