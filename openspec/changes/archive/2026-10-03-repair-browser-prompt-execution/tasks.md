@@ -24,4 +24,4 @@
 ## 3. Verify and deliver
 
 - [x] 3.1 Resolve fresh independent review and affected backend/default/integration/native, desktop/contract and OpenSpec checks against stable source; record exact reports and declared skips.
-- [ ] 3.2 Deliver reviewed Git/local changes, verify the running final application, clean created test records after retaining evidence, and refresh the concise handover/result matrix with actual outcomes and remaining limits.
+- [x] 3.2 Deliver reviewed Git/local changes, verify the running final application, clean created test records after retaining evidence, and refresh the concise handover/result matrix with actual outcomes and remaining limits.
