@@ -3542,7 +3542,7 @@ async function testProjectBusySendAcknowledgesDurableQueue(vite) {
       await act(async () => textarea(renderer).props.onChange({ target: { value: "Work after the other chat" } }));
       await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
       await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "one queued command accepted");
-      await waitFor(() => assert.equal(textarea(renderer).props.value, ""), "durable queued acceptance clears submitted draft");
+      await waitFor(() => assert.equal(textarea(renderer).props.value, ""), `${variant}: durable queued acceptance clears submitted draft`);
       if (!variant.includes("already")) assert.match(allText(renderer), /Waiting for project/, "queue remains visibly waiting");
       assert.doesNotMatch(allText(renderer), /Acceptance response was interrupted|Follow-up read temporarily unavailable/, "accepted work is not presented as a failed Send");
       assert.equal(selectedRunId(renderer), variant.includes("already") ? "queued_execution" : previous?.id ?? null, "queue admission only adopts an authoritative run");
@@ -3904,7 +3904,16 @@ async function testAgentRefreshKeepsSelectionOwnership(vite) {
         assert.match(textOf(agentTrigger()), /Default agent/);
       }
       await waitFor(() => assert.equal(harness.state.consumedResponses.filter(item => item.path !== "/v1/deployments").length,
-        harness.state.outgoingRequests.filter(item => item.path !== "/v1/deployments").length), "other refresh observations settled");
+        harness.state.outgoingRequests.filter(item => item.path !== "/v1/deployments").length,
+        JSON.stringify(harness.state.outgoingRequests.filter(item => item.path !== "/v1/deployments").reduce((counts, item) => {
+          const key = `${item.method} ${item.path}`;
+          counts[key] = (counts[key] ?? 0) + 1;
+          return counts;
+        }, {})) + " consumed=" + JSON.stringify(harness.state.consumedResponses.filter(item => item.path !== "/v1/deployments").reduce((counts, item) => {
+          const key = `${item.method} ${item.path}`;
+          counts[key] = (counts[key] ?? 0) + 1;
+          return counts;
+        }, {}))), "other refresh observations settled");
       heldRefresh.resolve();
       await waitFor(() => assert.ok(pickerFor(renderer).props.deployments.some(item => item.id === managed.id)), "delayed model observation delivered");
       await waitFor(() => assert.equal(agentTrigger().props.disabled, false), "agent preparation settled");
@@ -4400,6 +4409,57 @@ async function testExecutionPreferencesSurviveDraftAndFreezeAtSubmission(vite) {
   }
 }
 
+async function testUnresolvedSubmissionSurvivesConversationSelection(vite, sameTextRevision = false) {
+  const held = deferred();
+  let executions = 0;
+  const harness = makeHarness({ aRun: null, threadARun: null, requestOverride: async ({ req, res, url, body, state }) => {
+    if (req.method !== "POST" || url.pathname !== "/v1/agent-interaction/threads/thread_a/commands") return false;
+    const payload = JSON.parse(body);
+    state.requests.commands.push({ threadId: "thread_a", payload });
+    await held.promise;
+    const input = payload.params.input.messages[0];
+    if (!state.conversations.conv_a.run_ids.length) {
+      executions += 1;
+      const accepted = run("selection_original", "completed", input.id, "Original result");
+      accepted.messages = [{ type: "human", id: input.id, content: input.content }, { type: "ai", id: "selection_answer", content: "Original result" }];
+      state.streamRuns.set("thread_a", accepted);
+      state.conversations.conv_a = { ...state.conversations.conv_a, current_run: accepted, current_run_id: accepted.id, run_ids: [accepted.id],
+        transcript: [{ id: input.id, role: "user", content: input.content, at: now(), run_id: accepted.id, content_blocks: [] }] };
+    }
+    json(res, 503, { type: "error", id: payload.id, error: "unknown_error", message: "Original acknowledgement interrupted" });
+    return true;
+  } });
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "selection recovery history");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "original conversation ready");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Original retained task" } }));
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "original dispatch held before acceptance");
+    const original = harness.state.requests.commands[0].payload.params;
+    if (sameTextRevision) await act(async () => {
+      textarea(renderer).props.onChange({ target: { value: "A temporary newer draft" } });
+      textarea(renderer).props.onChange({ target: { value: "Original retained task" } });
+    });
+    await act(async () => button(renderer, "Conversation B").props.onClick());
+    await waitFor(() => assert.match(activeConversationTitle(renderer), /Conversation B/), "another conversation selected");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.equal(textarea(renderer).props.value, "Original retained task"), "original draft restored");
+    await waitFor(() => button(renderer, "Retry original task"), "original unresolved identity restored");
+    assert.equal(harness.state.requests.commands.length, 1, "reopening only observes the original request");
+    if (!sameTextRevision) await act(async () => textarea(renderer).props.onChange({ target: { value: "Newer unsent task" } }));
+    await act(async () => button(renderer, "Retry original task").props.onClick());
+    await waitFor(() => assert.equal(harness.state.requests.commands.length, 2), "one explicit original retry");
+    assert.deepEqual(harness.state.requests.commands[1].payload.params, original, "selection retry keeps original identity/configuration/content");
+    held.resolve();
+    await waitFor(() => assert.equal(selectedRunId(renderer), "selection_original"), "accepted original recovered after selection");
+    assert.equal(executions, 1, "original identity produces one intended execution");
+    assert.equal(textarea(renderer).props.value, sameTextRevision ? "Original retained task" : "Newer unsent task", "late original acceptance preserves newer authored revision, including restored identical text");
+    assert.doesNotMatch(allText(renderer), /Original acknowledgement interrupted/);
+  } finally { held.resolve(); await closeHarness(renderer, harness); }
+}
+
 export { ChatHarness, ErrorBoundary, makeHarness, run, conversation, deferred, json, renderChat, closeHarness, button, textarea, composeForm, allText, textOf, waitFor, flush, streamFrame };
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -4508,6 +4568,8 @@ try {
     ["accepted submit error preserves newer draft", testAcceptedSubmitErrorRefreshSuppressesStaleErrorButKeepsNewerDraft],
     ["accepted submit error navigation guard", testAcceptedSubmitErrorRefreshAfterNavigationDoesNotRetarget],
     ["accepted ack navigation/revisit", testAcceptedSubmitTargetsOriginalThreadAfterNavigationAndRevisit],
+    ["unresolved submission retains original across selection", testUnresolvedSubmissionSurvivesConversationSelection],
+    ["same text newer revision survives selection recovery", vite => testUnresolvedSubmissionSurvivesConversationSelection(vite, true)],
     ["early shell actions", testEarlyShellActions],
     ["archive immediately leaves history and search", testArchiveImmediatelyLeavesHistoryAndSearch],
     ["model switch clears only model-specific overrides", testModelChangeClearsOnlyModelSpecificOverrides],

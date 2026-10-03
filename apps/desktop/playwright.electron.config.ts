@@ -7,12 +7,12 @@ const results = path.join(repositoryRoot, ".scratch", "ui-baseline", "electron-r
 
 export default defineConfig({
   testDir: "./tests",
-  testMatch: "electron.spec.ts",
+  testMatch: process.env.WORKBENCH_NATIVE_REAL_MODEL === "required" ? "electron-real-model.spec.ts" : ["electron.spec.ts", "electron-sending.spec.ts"],
   fullyParallel: false,
   workers: 1,
   retries: 0,
   forbidOnly: true,
-  timeout: 60_000,
+  timeout: process.env.WORKBENCH_NATIVE_REAL_MODEL === "required" ? 300_000 : 120_000,
   expect: { timeout: 15_000 },
   outputDir: path.join(results, "artifacts"),
   reporter: [["list"], ["json", { outputFile: process.env.PLAYWRIGHT_JSON_OUTPUT_NAME ?? path.join(results, "report.json") }]],

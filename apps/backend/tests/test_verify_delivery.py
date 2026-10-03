@@ -86,10 +86,15 @@ class VerificationSelectionTests(unittest.TestCase):
         self.assertEqual(smoke.command[-1], "tests_integration.test_real_model_smoke")
         self.assertEqual(smoke.minimum_tests, 4)
         ui = self.checks("--scope", "desktop")["desktop-ui"]
-        self.assertEqual(len(ui.required_cases), 5)
+        self.assertEqual(len(ui.required_cases), 12)
         self.assertNotIn("desktop-electron", self.checks("--scope", "desktop"))
         native = self.checks("--tier", "delivery", "--scope", "desktop")["desktop-electron"]
-        self.assertEqual(len(native.required_cases), 1)
+        self.assertEqual(len(native.required_cases), 2)
+        real = self.checks("--tier", "delivery", "--scope", "shared", "--real-model")["desktop-real-model"]
+        self.assertEqual(real.env, {"WORKBENCH_NATIVE_REAL_MODEL": "required"})
+        self.assertEqual(real.required_cases, ("actual Windows real model sending survives lost responses and writes one file",))
+        self.assertNotIn("desktop-real-model", self.checks("--tier", "delivery", "--scope", "backend", "--real-model"))
+        self.assertNotIn("desktop-real-model", self.checks("--tier", "delivery", "--scope", "desktop"))
 
     def test_plan_has_no_execution_or_evidence(self) -> None:
         with redirect_stdout(io.StringIO()) as output, patch.object(

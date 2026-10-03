@@ -16,8 +16,9 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
 from deepagents.middleware.summarization import create_summarization_middleware
-from workbench_backend.agents.schemas import AgentRun
+from workbench_backend.agents.schemas import AgentRun, AgentRunStatus
 from workbench_backend.app import create_app
+from workbench_backend.errors import InteractionPersistenceError
 from workbench_backend.inference.capabilities import setup_fingerprint
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.schemas import ServerProperties
@@ -641,6 +642,151 @@ class InteractionApiTests(unittest.TestCase):
 
         run_ids = [item["id"] for item in self.client.get("/v1/agent-runs").json()]
         self.assertEqual(len(run_ids), 1)
+        self.assertEqual(model._index, 1)
+
+    def test_initial_publication_failure_settles_accepted_run_without_starting_worker(self) -> None:
+        model = self._install_model([AIMessage(content="Must not execute")])
+        thread_id = self._register_agent()
+        with patch.object(self.app.state.app_store, "append_interaction", side_effect=InteractionPersistenceError()), \
+                self.assertLogs("workbench_backend.agents.harness", level="ERROR"):
+            failed = self._run_start(thread_id, message_id="publication-input")
+        self.assertEqual(failed.status_code, 500, failed.text)
+        self.assertEqual(failed.json()["error"], "interaction_persistence_failed")
+        runs = self.app.state.app_store.list_runs_operational()
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0].status, AgentRunStatus.failed)
+        self.assertEqual(runs[0].stop_reason, "interaction_persistence_failed")
+        self.assertEqual(model._index, 0)
+        self.assertNotIn(runs[0].id, self.app.state.harness._threads)
+        # The binding was never published. A read repairs it from durable
+        # acceptance, and a changed replay cannot turn that failure into work.
+        self.assertIsNone(self.app.state.app_store.get_interaction(thread_id)["run_id"])
+        duplicate = self._run_start(thread_id, message_id="publication-input", content="Changed task",
+            metadata={"approval_mode": "full_access"})
+        self.assertEqual(duplicate.status_code, 409, duplicate.text)
+        self.assertEqual(duplicate.json()["error"], "duplicate_input")
+        state = self.client.get(f"/v1/agent-interaction/threads/{thread_id}/state").json()
+        self.assertEqual(state["values"]["workbench"]["run"]["id"], runs[0].id)
+        self.assertEqual(state["values"]["workbench"]["run"]["status"], "failed")
+        self.assertEqual([message["id"] for message in state["values"]["messages"]], ["publication-input"])
+        self.assertEqual(state["next"], [])
+        self.assertEqual(model._index, 0)
+        self.assertEqual(len(self.app.state.app_store.list_runs_operational()), 1)
+
+    def test_initial_persistence_failure_does_not_retain_unaccepted_start_controls(self) -> None:
+        model = self._install_model([AIMessage(content="One explicit retry")])
+        thread_id = self._register_agent()
+        harness = self.app.state.harness
+        with patch.object(self.app.state.app_store, "put_execution_run", side_effect=InteractionPersistenceError()):
+            failed = self._run_start(thread_id, message_id="unsaved-input")
+        self.assertEqual(failed.status_code, 500, failed.text)
+        self.assertEqual(self.app.state.app_store.list_runs_operational(), [])
+        self.assertEqual(harness._runs, {})
+        self.assertEqual(harness._cancels, {})
+        self.assertEqual(harness._decision_ready, {})
+        self.assertEqual(harness._pending_decisions, {})
+        self.assertEqual(harness._threads, {})
+        self.assertEqual(model._index, 0)
+        retried = self._run_start(thread_id, message_id="unsaved-input")
+        self.assertEqual(retried.status_code, 200, retried.text)
+        self._wait_state(thread_id)
+        self.assertEqual(len(self.app.state.app_store.list_runs_operational()), 1)
+        self.assertEqual(model._index, 1)
+
+    def test_unpublished_active_root_rejects_duplicate_and_new_input(self) -> None:
+        hold = threading.Event()
+        set_generate_hold(hold)
+        model = self._install_model([AIMessage(content="Only answer")], hold=hold)
+        thread_id = self._register_agent()
+        try:
+            with patch.object(self.app.state.interaction, "observe"):
+                accepted = self._run_start(thread_id, message_id="unpublished-input")
+                self.assertEqual(accepted.status_code, 200, accepted.text)
+                wait_for_generate_hold()
+                self.assertIsNone(self.app.state.app_store.get_interaction(thread_id)["run_id"])
+                duplicate = self._run_start(thread_id, message_id="unpublished-input", content="Edited",
+                    metadata={"approval_mode": "full_access"})
+                other = self._run_start(thread_id, message_id="new-input", content="Other")
+                self.assertEqual(duplicate.status_code, 409, duplicate.text)
+                self.assertEqual(duplicate.json()["error"], "duplicate_input")
+                self.assertEqual(other.status_code, 409, other.text)
+                self.assertEqual(other.json()["error"], "run_active")
+                self.assertEqual(len(self.app.state.app_store.list_runs_operational()), 1)
+            state = self.client.get(f"/v1/agent-interaction/threads/{thread_id}/state").json()
+            self.assertEqual(state["values"]["workbench"]["run"]["id"], accepted.json()["result"]["run_id"])
+        finally:
+            hold.set()
+        self._wait_state(thread_id)
+        self.assertEqual(model._index, 1)
+
+    def test_agent_state_repairs_stale_binding_from_newest_durable_root(self) -> None:
+        thread_id = self._register_agent()
+        graph_id = self.app.state.app_store.get_interaction(thread_id)["graph_thread_id"]
+        older = AgentRun(id="older-root", thread_id=graph_id, deployment_id=self.deployment_id,
+            task="Older", input_message_id="older-input", enabled_tools=[], presented_tools=[],
+            status=AgentRunStatus.completed, created_at="2026-10-03T12:00:00Z", updated_at="2026-10-03T12:00:00Z")
+        newer = older.model_copy(update={"id": "newer-root", "task": "Newer", "input_message_id": "newer-input",
+            "created_at": "2026-10-03T12:00:01Z", "updated_at": "2026-10-03T12:00:01Z"})
+        child = newer.model_copy(update={"id": "child", "parent_run_id": newer.id,
+            "input_message_id": "child-input", "created_at": "2026-10-03T12:00:02Z"})
+        self.app.state.app_store.put_run(older)
+        self.app.state.interaction.observe(older, None)
+        self.app.state.app_store.put_execution_runs([newer, child])
+        state = self.client.get(f"/v1/agent-interaction/threads/{thread_id}/state").json()
+        self.assertEqual(state["values"]["workbench"]["run"]["id"], newer.id)
+        self.assertEqual([message["id"] for message in state["values"]["messages"]], ["older-input", "newer-input"])
+        again = self.client.get(f"/v1/agent-interaction/threads/{thread_id}/state").json()
+        self.assertEqual(again, state)
+        self.assertEqual(self.app.state.harness._threads, {})
+
+    def test_exact_retry_waits_behind_slow_admission_without_duplicate_execution(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+        retry_entered = threading.Event()
+        original_ready = self.manager.ensure_deployment_ready
+        original_command = self.app.state.interaction.command
+        model = self._install_model([AIMessage(content="One admitted answer")])
+        thread_id = self._register_agent()
+        results: dict[str, Any] = {}
+
+        def slow_ready(deployment_id):
+            entered.set()
+            if not release.wait(10):
+                raise TimeoutError("test did not release admission")
+            return original_ready(deployment_id)
+
+        def observed_command(binding_id, body):
+            if body["id"] == "retry-command":
+                retry_entered.set()
+            return original_command(binding_id, body)
+
+        def submit(name):
+            results[name] = self._run_start(thread_id, command_id=f"{name}-command", message_id="slow-input")
+
+        with patch.object(self.manager, "ensure_deployment_ready", side_effect=slow_ready), \
+                patch.object(self.app.state.interaction, "command", side_effect=observed_command):
+            first = threading.Thread(target=submit, args=("first",))
+            retry = threading.Thread(target=submit, args=("retry",))
+            first.start()
+            try:
+                self.assertTrue(entered.wait(5), "original submission did not reach admission")
+                state = self.client.get(f"/v1/agent-interaction/threads/{thread_id}/state").json()
+                self.assertIsNone(state["values"]["workbench"].get("run"))
+                retry.start()
+                self.assertTrue(retry_entered.wait(5), "retry did not reach the command owner")
+                self.assertTrue(retry.is_alive(), "retry passed slow admission prematurely")
+            finally:
+                release.set()
+                first.join(10)
+                if retry.ident is not None:
+                    retry.join(10)
+            self.assertFalse(first.is_alive())
+            self.assertFalse(retry.is_alive())
+        self.assertEqual(results["first"].status_code, 200, results["first"].text)
+        self.assertEqual(results["retry"].status_code, 409, results["retry"].text)
+        self.assertEqual(results["retry"].json()["error"], "duplicate_input")
+        self._wait_state(thread_id)
+        self.assertEqual(len(self.app.state.app_store.list_runs_operational()), 1)
         self.assertEqual(model._index, 1)
 
     def test_unauthenticated_interaction_post_state_and_stream_are_rejected(self) -> None:

@@ -32,6 +32,7 @@ export interface BackendHandle {
   state<T = Record<string, unknown>>(): Promise<T>;
   restart(): Promise<void>;
   close(): Promise<void>;
+  loseNextCommandResponseBeforeAcceptance(): void;
 }
 
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -60,7 +61,7 @@ async function terminateOwnedProcess(child: ChildProcess | undefined): Promise<v
 }
 
 /** Actual product requests pass through unchanged. Authentication exists only on the server hop. */
-async function startAuthBoundary(target: () => { origin: string; token: string }): Promise<{ server: Server; origin: string }> {
+async function startAuthBoundary(target: () => { origin: string; token: string }, faults: { loseCommandResponse: boolean }): Promise<{ server: Server; origin: string }> {
   const server = createServer((incoming, outgoing) => {
     const current = target();
     const route = incoming.url ?? "/";
@@ -74,11 +75,14 @@ async function startAuthBoundary(target: () => { origin: string; token: string }
       return;
     }
     const headers = { ...incoming.headers };
+    const loseResponse = faults.loseCommandResponse && incoming.method === "POST" && route.endsWith("/commands");
+    if (loseResponse) faults.loseCommandResponse = false;
     for (const key of Object.keys(headers)) {
       if (["host", "x-workbench-local-token", "authorization", "cookie"].includes(key.toLowerCase())) delete headers[key];
     }
     headers[localTokenHeader] = current.token;
     const upstream = httpRequest(upstreamUrl, { method: incoming.method, headers }, response => {
+      if (loseResponse) { response.resume(); return; }
       const responseHeaders = { ...response.headers };
       for (const key of Object.keys(responseHeaders)) {
         if (["x-workbench-local-token", "authorization", "set-cookie"].includes(key.toLowerCase())) delete responseHeaders[key];
@@ -96,11 +100,15 @@ async function startAuthBoundary(target: () => { origin: string; token: string }
       response.pipe(outgoing);
     });
     upstream.on("error", () => {
+      if (loseResponse) return;
       if (!outgoing.headersSent) outgoing.writeHead(503, { "Content-Type": "application/json" });
       outgoing.end(JSON.stringify({ detail: "The isolated backend is restarting." }));
     });
-    outgoing.once("close", () => upstream.destroy());
+    outgoing.once("close", () => { if (!loseResponse) upstream.destroy(); });
     incoming.pipe(upstream);
+    // The original request continues to the actual admission owner. Only the
+    // acknowledgement is lost; this boundary never issues an execution retry.
+    if (loseResponse) incoming.once("end", () => outgoing.writeHead(503, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "Baseline transport ended while admission was pending" })));
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -111,7 +119,7 @@ async function startAuthBoundary(target: () => { origin: string; token: string }
   return { server, origin: `http://127.0.0.1:${address.port}` };
 }
 
-export async function startBackend(options: { dataRoot?: string; scenario?: string } = {}): Promise<BackendHandle> {
+export async function startBackend(options: { dataRoot?: string; scenario?: string; inference?: "deterministic" | "real" } = {}): Promise<BackendHandle> {
   const dataRoot = path.resolve(options.dataRoot ?? path.join(scratchRoot, `case-${randomUUID()}`));
   const relative = path.relative(path.join(repositoryRoot, ".scratch"), dataRoot);
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("UI tests require a distinct data root inside repository .scratch.");
@@ -123,14 +131,15 @@ export async function startBackend(options: { dataRoot?: string; scenario?: stri
   let pid = 0;
   let closed = false;
   let startupFailure = "";
-  const boundary = await startAuthBoundary(() => ({ origin, token }));
+  const faults = { loseCommandResponse: false };
+  const boundary = await startAuthBoundary(() => ({ origin, token }), faults);
 
   async function launch(): Promise<void> {
     const readyFile = path.join(dataRoot, "test-ready.json");
     requireDesktopTestScratchPath(repositoryRoot, readyFile, "UI backend readiness file");
     await rm(readyFile, { force: true });
     startupFailure = "";
-    child = spawn("uv", ["run", "--no-sync", "--project", "apps/backend", "python", "-m", "tests_ui.server", "--data-root", dataRoot, "--port", "0", "--ready-file", readyFile], {
+    child = spawn("uv", ["run", "--no-sync", "--project", "apps/backend", "python", "-m", "tests_ui.server", "--data-root", dataRoot, "--port", "0", "--ready-file", readyFile, "--inference", options.inference ?? "deterministic"], {
       cwd: repositoryRoot, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, PYTHONPATH: path.join(repositoryRoot, "apps", "backend"), WORKBENCH_DATA_ROOT: dataRoot, PYTHONUTF8: "1" },
     });
@@ -142,7 +151,7 @@ export async function startBackend(options: { dataRoot?: string; scenario?: stri
       if (child?.exitCode !== null && child?.exitCode !== undefined) throw new Error(`The isolated backend exited during startup (${child.exitCode}). ${startupFailure.replaceAll(token || "__no_secret__", "[redacted]")}`);
       try { return JSON.parse(await readFile(readyFile, "utf8")) as { origin?: string; backend_url?: string; pid: number; data_root: string }; }
       catch { return undefined; }
-    });
+    }, options.inference === "real" ? 180_000 : 30_000);
     await rm(readyFile, { force: true });
     origin = ready.origin ?? ready.backend_url ?? "";
     const parsed = new URL(origin);
@@ -158,7 +167,8 @@ export async function startBackend(options: { dataRoot?: string; scenario?: stri
 
   async function control<T>(route: string, body?: unknown): Promise<T> {
     if (!route.startsWith("/__test__/")) throw new Error("Fixture control calls must use the isolated control namespace.");
-    const response = await fetch(origin + route, { method: body === undefined ? "GET" : "POST", headers: { [localTokenHeader]: token, "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(15_000) });
+    const timeout = options.inference === "real" && route === "/__test__/seed" ? 180_000 : 15_000;
+    const response = await fetch(origin + route, { method: body === undefined ? "GET" : "POST", headers: { [localTokenHeader]: token, "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(timeout) });
     if (!response.ok) throw new Error(`Fixture control ${route} failed (${response.status}): ${(await response.text()).replaceAll(token, "[redacted]")}`);
     return await response.json() as T;
   }
@@ -166,7 +176,7 @@ export async function startBackend(options: { dataRoot?: string; scenario?: stri
   async function stop(): Promise<void> {
     const failures: unknown[] = [];
     if (origin && child && child.exitCode === null && child.signalCode === null) {
-      try { await control("/__test__/scenario", { release_model: true, release_model_load: true }); }
+      try { await control("/__test__/scenario", { release_model: true, release_model_load: true, release_submit: true }); }
       catch (error) { failures.push(error); }
       try { await control("/__test__/shutdown", {}); }
       catch (error) { failures.push(error); }
@@ -187,6 +197,7 @@ export async function startBackend(options: { dataRoot?: string; scenario?: stri
   const handle: BackendHandle = {
     get origin() { return origin; }, get browserOrigin() { return boundary.origin; }, get dataRoot() { return dataRoot; }, get pid() { return pid; }, get token() { return token; },
     seed: {} as BackendSeed, control,
+    loseNextCommandResponseBeforeAcceptance: () => { faults.loseCommandResponse = true; },
     state: <T = Record<string, unknown>>() => control<T>("/__test__/state"),
     restart: async () => { await stop(); origin = ""; await launch(); handle.seed = await control<BackendSeed>("/__test__/seed", { scenario: options.scenario ?? "baseline" }); },
     close: async () => {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { api } from "./api";
+import { api, request } from "./api";
 import { standardToolSelection, type ToolCatalogueProjection } from "./chatSetup";
 import { AgentMessageFeed } from "./AgentMessageFeed";
 import { ChatModelControls } from "./ChatModelControls";
@@ -13,7 +13,8 @@ import { EmptyState } from "./EmptyState";
 import { errorMessage } from "./errors";
 import { HoverHelp } from "./HoverHelp";
 import { Icon } from "./Icon";
-import { InteractionStream, useWorkbenchProjection, visibleApprovalInterrupt, type WorkbenchStream } from "./InteractionStream";
+import { InteractionStream, useWorkbenchProjection, visibleApprovalInterrupt, type WorkbenchStream, type WorkbenchInteractionValues } from "./InteractionStream";
+import { useInteractionSubmission, SubmissionRecoveryNotice, cancelAcceptedInteraction, type InteractionSubmissionController } from "./interactionSubmission";
 import { InterruptApproval } from "./InterruptApproval";
 import { Notice } from "./Notice";
 import { RunProgress } from "./RunProgress";
@@ -55,30 +56,53 @@ function AgentRunStream(props: {
 }) {
   const { threadId, generation, run, pendingSubmit, clearPendingSubmit, updateRun, clearSubmittedDraft, setMessage, isCurrentOwner } = props;
   const owner = { threadId, generation };
+  const [observationEpoch, setObservationEpoch] = useState(0);
+  const controller = useInteractionSubmission<PendingAgentSubmit, AgentRun | null>({
+    pending: pendingSubmit ? {
+      id: pendingSubmit.id, threadId, ownerKey: JSON.stringify(owner), source: pendingSubmit,
+      input: { messages: [{ type: "human", content: pendingSubmit.task, id: pendingSubmit.id }] },
+      options: { multitaskStrategy: "reject", metadata: { workbench: {
+        ...pendingSubmit.configuration, approval_mode: pendingSubmit.approvalMode,
+        deployment_id: pendingSubmit.deploymentId, presented_tools: undefined, workspace_id: undefined,
+        project_path: pendingSubmit.projectPath || undefined,
+        embedding_deployment_id: pendingSubmit.embeddingDeploymentId || undefined,
+      } } },
+    } : null,
+    ownerKey: JSON.stringify(owner),
+    isCurrentOwner: () => isCurrentOwner(owner),
+    read: async () => (await request<{ values: WorkbenchInteractionValues }>(`/v1/agent-interaction/threads/${encodeURIComponent(threadId)}/state`)).values.workbench?.run ?? null,
+    hasAccepted: (next, inputId) => next?.input_message_id === inputId,
+    runInView: next => next,
+    projectedView: next => next,
+    onAccepted: (submitted, next) => {
+      if (next) updateRun(next, owner);
+      clearSubmittedDraft(submitted);
+      clearPendingSubmit(submitted);
+      setMessage("");
+    },
+    onRejected: (submitted, error) => { clearPendingSubmit(submitted); setMessage(errorMessage(error)); },
+    onFailure: error => { if (isCurrentOwner(owner)) setMessage(errorMessage(error)); },
+    refreshObservation: () => setObservationEpoch(value => value + 1),
+  });
   return (
-    <InteractionStream
-      threadId={threadId}
-      onError={(error) => {
-        if (isCurrentOwner(owner)) {
-          setMessage(errorMessage(error));
-        }
-      }}
-    >
-      {(stream) => (
-        <AgentRunStreamContent
-          stream={stream}
-          owner={owner}
-          run={run}
-          pendingSubmit={pendingSubmit}
-          clearPendingSubmit={clearPendingSubmit}
-          updateRun={updateRun}
-          clearSubmittedDraft={clearSubmittedDraft}
-          setMessage={setMessage}
-          isCurrentOwner={isCurrentOwner}
-          onConfigureSetup={props.onConfigureSetup}
-        />
-      )}
-    </InteractionStream>
+    <>
+      <SubmissionRecoveryNotice controller={controller} />
+      <InteractionStream key={observationEpoch} threadId={threadId} onError={controller.onError}>
+        {(stream) => (
+          <AgentRunStreamContent
+            stream={stream}
+            controller={controller}
+            owner={owner}
+            run={run}
+            pendingSubmit={pendingSubmit}
+            updateRun={updateRun}
+            setMessage={setMessage}
+            isCurrentOwner={isCurrentOwner}
+            onConfigureSetup={props.onConfigureSetup}
+          />
+        )}
+      </InteractionStream>
+    </>
   );
 }
 
@@ -89,74 +113,26 @@ interface AgentRunOwner {
 
 function AgentRunStreamContent(props: {
   stream: WorkbenchStream;
+  controller: InteractionSubmissionController;
   owner: AgentRunOwner;
   run: AgentRun | null;
   pendingSubmit: PendingAgentSubmit | null;
-  clearPendingSubmit: (pending: PendingAgentSubmit) => void;
   updateRun: (run: AgentRun, owner: AgentRunOwner) => void;
-  clearSubmittedDraft: (pending: PendingAgentSubmit) => void;
   setMessage: (message: string) => void;
   isCurrentOwner: (owner: AgentRunOwner) => boolean;
   onConfigureSetup?: (setup: CapabilitySetupRequest) => void;
 }) {
-  const { stream, owner, run, pendingSubmit, clearPendingSubmit, updateRun, clearSubmittedDraft, setMessage, isCurrentOwner } = props;
+  const { stream, controller, owner, run, pendingSubmit, updateRun, setMessage, isCurrentOwner } = props;
   const projection = useWorkbenchProjection(stream);
   const displayRun = projection.run ?? run;
   const visibleInterrupt = visibleApprovalInterrupt(stream, displayRun);
-  const submittedIds = useRef(new Set<string>());
-
   useEffect(() => {
     if (projection.run) {
-      if (
-        pendingSubmit &&
-        pendingSubmit.threadId === owner.threadId &&
-        pendingSubmit.generation === owner.generation &&
-        projection.run.input_message_id === pendingSubmit.id
-      ) {
-        clearPendingSubmit(pendingSubmit);
-      }
+      controller.observe(projection.run);
       updateRun(projection.run, owner);
     }
-  }, [clearPendingSubmit, owner, pendingSubmit, projection.run, updateRun]);
-
-  useEffect(() => {
-    if (!pendingSubmit) {
-      return;
-    }
-    if (pendingSubmit.threadId !== owner.threadId || pendingSubmit.generation !== owner.generation || !isCurrentOwner(owner)) {
-      return;
-    }
-    if (submittedIds.current.has(pendingSubmit.id)) {
-      return;
-    }
-    submittedIds.current.add(pendingSubmit.id);
-    void stream
-      .submit(
-        { messages: [{ type: "human", content: pendingSubmit.task, id: pendingSubmit.id }] },
-        {
-          multitaskStrategy: "reject",
-          metadata: {
-            workbench: {
-              ...pendingSubmit.configuration,
-              approval_mode: pendingSubmit.approvalMode,
-              deployment_id: pendingSubmit.deploymentId,
-              presented_tools: undefined,
-              workspace_id: undefined,
-              project_path: pendingSubmit.projectPath || undefined,
-              embedding_deployment_id: pendingSubmit.embeddingDeploymentId || undefined,
-            },
-          },
-        },
-      )
-      .then(() => clearSubmittedDraft(pendingSubmit))
-      .catch((error: unknown) => {
-        clearPendingSubmit(pendingSubmit);
-        if (!isCurrentOwner(owner)) {
-          return;
-        }
-        fail(error);
-      });
-  }, [clearPendingSubmit, clearSubmittedDraft, isCurrentOwner, owner, pendingSubmit, stream]);
+  }, [controller, projection.run, updateRun, owner]);
+  useEffect(() => { controller.submit(stream); }, [controller, pendingSubmit, stream]);
 
   function fail(error: unknown): void {
     setMessage(errorMessage(error));
@@ -168,6 +144,7 @@ function AgentRunStreamContent(props: {
         <InterruptApproval
           ownerLabel={helperApprovalOwner(displayRun, visibleInterrupt.namespace)}
           pending={visibleInterrupt.pending}
+          busy={stream.isLoading}
           onConfigureSetup={props.onConfigureSetup}
           onRespond={(payload) => {
             void stream
@@ -191,19 +168,8 @@ function AgentRunStreamContent(props: {
           <RunProgress
             run={displayRun}
             title={displayRun.task}
-            onCancel={() => {
-              if (displayRun.finalization_phase === "saving_changes") return;
-              const runId = displayRun.id;
-              void api.cancelAgentRun(runId).then((next) => {
-                if (next.id === runId) {
-                  updateRun(next, owner);
-                }
-              }).catch((error: unknown) => {
-                if (isCurrentOwner(owner)) {
-                  fail(error);
-                }
-              });
-            }}
+            onCancel={() => cancelAcceptedInteraction(displayRun, () => isCurrentOwner(owner),
+              api.cancelAgentRun, next => updateRun(next, owner), fail)}
           />
         </div>
       ) : (

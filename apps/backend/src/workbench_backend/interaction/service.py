@@ -677,23 +677,29 @@ class InteractionService:
 
     def state(self, thread_id: str) -> dict[str, Any]:
         binding = self.binding(thread_id)
-        status = self.store.run_status(binding.get("run_id"))
+        # Acceptance is durable before display publication. A failed initial
+        # write can leave an Agent binding unlinked, or linked to an older turn.
+        latest = self._latest_agent_root(binding)
+        run_id = latest.id if latest is not None else binding.get("run_id")
+        status = self.store.run_status(run_id)
         projected_status = ((binding["snapshot"].get("workbench") or {}).get("run") or {}).get("status")
-        if binding["run_id"] and (status != projected_status or (status and is_run_lifecycle_live(status))):
+        if run_id and (run_id != binding["run_id"] or status != projected_status or (status and is_run_lifecycle_live(status))):
             # Existing recovery owner reconciles orphaned workers before we
             # advertise finality. It never invokes the model on a state read.
             # Retain the run owner's lock until reconciliation publishes, so
             # a delayed read cannot overwrite a newer completed worker state.
-            with self.harness.run_read_lock(binding["run_id"]):
-                current = self.harness.get_run_operational(binding["run_id"])
+            with self.harness.run_read_lock(run_id):
+                current = self.harness.get_run_operational(run_id)
                 with self._projection_lock:
                     binding = self.binding(thread_id)
+                    latest = self._latest_agent_root(binding)
+                    owns_projection = (latest.id == current.id if latest is not None else binding["run_id"] == current.id)
                     saved_interrupts = self._saved_interrupts(current)
                     missing_interrupt = bool(saved_interrupts) and (
                         binding["snapshot"].get("__interrupt__") != saved_interrupts or
                         binding["snapshot"].get("workbench", {}).get("interrupt_run_id") != current.id
                     )
-                    if binding["run_id"] == current.id and (missing_interrupt or
+                    if owns_projection and (missing_interrupt or
                             self._stored_run(current) != binding["snapshot"].get("workbench", {}).get("run")):
                         self.observe(current, None)
         with self._projection_lock:
@@ -826,6 +832,24 @@ class InteractionService:
                 return self._start(binding, body.get("params"))
             return self._respond(binding, body.get("params"))
 
+    def _agent_roots(self, binding: dict[str, Any]) -> list[Any]:
+        if binding["surface"] != "agent":
+            return []
+        return self.store.list_run_lifecycle(thread_id=binding["graph_thread_id"], roots_only=True, details=False)
+
+    def _latest_agent_root(self, binding: dict[str, Any]) -> Any | None:
+        roots = self._agent_roots(binding)
+        return roots[-1] if roots else None
+
+    def _validate_agent_admission(self, binding: dict[str, Any], input_id: str) -> None:
+        roots = self._agent_roots(binding)
+        for root in roots:
+            accepted = self.store.get_execution_run(root.id)
+            if accepted is not None and accepted.input_message_id == input_id:
+                raise invalid("This input was already submitted.", "duplicate_input", 409)
+        if any(is_run_lifecycle_live(root.status) for root in roots):
+            raise invalid("Wait for the current run to finish or cancel it.", "run_active", 409)
+
     def _start(self, binding: dict[str, Any], params: Any) -> dict[str, Any]:
         params = fields(params, {"assistant_id", "input", "config", "metadata", "multitaskStrategy"}, "run.start")
         self._validate_config(binding, params.get("config"))
@@ -852,6 +876,7 @@ class InteractionService:
         ident = message.get("id") or str(uuid4())
         if not isinstance(ident, str) or not ident or len(ident) > 200:
             raise invalid("Invalid user message identity.")
+        self._validate_agent_admission(binding, ident)
         if any(m.get("id") == ident for m in binding["snapshot"].get("messages", [])):
             raise invalid("This input was already submitted.", "duplicate_input", 409)
         if binding["run_id"] and is_run_lifecycle_live(self.harness.get_run_operational(binding["run_id"]).status):
