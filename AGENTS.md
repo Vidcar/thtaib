@@ -6,7 +6,53 @@ thtaib ships as **Local AI Workbench**, a Windows-first local AI desktop. Own th
 
 Read [HANDOVER.md](HANDOVER.md), inspect Git state, open PRs and ongoing agent work, then trace the affected code and callers. Preserve unrelated changes and serialize writers to shared files. The user's instructions define the requested outcome; current code, generated API contracts and executable behaviour establish the implementation baseline. Do not introduce another specification or planning system.
 
-The files in `plans/` are the retained implementation pack. Work only on the task Dave authorizes, in its stated order; leave later tasks untouched. Check their source references against the current checkout. Keep one concise current handover, normally under 300 words, updated at meaningful milestones and before finishing substantial work. Replace stale status; record actual checks, relevant branch/PR and the next concrete step if unfinished.
+The [Local AI Workbench GitHub Project](https://github.com/users/Vidcar/projects/5) tracks agreed work, unresolved choices, dependencies and delivery. Read its README and the relevant issue before substantial work. Reviewed issue content records the intended change; the files in `plans/` and their retained issue copies are proposals, not blanket approval. Work only on the task Dave authorizes, in its agreed order; leave later tasks untouched and check source references against the current checkout. Keep one concise current handover, normally under 300 words, updated at meaningful milestones and before finishing substantial work. Replace stale status; link the issue, actual checks, branch/PR and next concrete step if unfinished.
+
+## Maintain the GitHub Project
+
+Use GitHub CLI/API for routine tracking; no browser is needed to maintain issues, comments, item fields, membership, parent/sub-issue relationships or prerequisites. The owner is `Vidcar`, project number `5`, repository `Vidcar/thtaib`. [Context #243](https://github.com/Vidcar/thtaib/issues/243) holds the retained pack boundaries; task issues are #244–256 and decision issues #257–261. Find the current item before creating anything; do not duplicate it or treat these ranges as a permanent inventory.
+
+### Access and commands
+
+On this Windows host, invoke the installed executable directly. GitHub CLI 2.100.0 supports the name-based commands below; on another host, locate `gh.exe`/`gh` and check its help. Verify authentication and actual private-project access at the start of a fresh session:
+
+```powershell
+$gh = 'C:\Program Files\GitHub CLI\gh.exe'
+& $gh auth status --hostname github.com
+& $gh project view 5 --owner Vidcar --format json
+& $gh project field-list 5 --owner Vidcar --format json
+& $gh project item-list 5 --owner Vidcar --limit 100 --format json --jq '{totalCount,items:[.items[] | del(.content.body)]}'
+```
+
+Raise the limit or paginate when the returned items do not cover `totalCount`. Then read the selected issue and comments with `gh issue view` and inspect its native parent/prerequisites. Access was verified on 2026-10-03: active account `Vidcar`, Windows keyring credentials, `repo` and `project` scopes, repository admin and Project write access. Recheck rather than assuming another session/host has access. If authentication fails, ask Dave to complete the CLI login; if only the Project scope is missing, use `gh auth refresh --hostname github.com --scopes project`. Do not refresh working credentials, expose tokens, or save credentials in this repository. A successful login alone does not prove Project write permission.
+
+Set the variables below from the currently authorized task; examples show syntax, not authorization to start a task. Write multiline content to a UTF-8 file and pass `--body-file`. Always specify the repository/owner.
+
+```powershell
+& $gh issue view $issueNumber --repo Vidcar/thtaib --comments
+& $gh issue edit $issueNumber --repo Vidcar/thtaib --body-file $bodyFile
+& $gh issue comment $issueNumber --repo Vidcar/thtaib --body-file $evidenceFile
+& $gh project item-add 5 --owner Vidcar --url $issueUrl
+& $gh project item-edit 5 --owner Vidcar --url $issueUrl --field Status --value 'In progress'
+& $gh project item-edit 5 --owner Vidcar --url $issueUrl --field Agreement --value Agreed
+& $gh project item-edit 5 --owner Vidcar --url $issueUrl --field Order --number $order
+& $gh issue edit $issueNumber --repo Vidcar/thtaib --parent $parentNumber --add-blocked-by $prerequisiteNumber
+```
+
+Each item-edit updates one field. Current CLI also supports removing prerequisites and adding/removing sub-issues; inspect help before unfamiliar operations. For GraphQL, use `gh api graphql` with a structured JSON input file; discover current node/field/option IDs rather than hardcoding them. See the [Project API guide](https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects) and [item-edit manual](https://cli.github.com/manual/gh_project_item-edit).
+
+### Keep agreement and delivery truthful
+
+- At the start, reconcile the issue, Agreement, Status, Order and open prerequisites with Dave's current instruction and the checkout. Existing authorization remains valid; do not ask again just to satisfy a field. Record the agreed outcome, boundaries and acceptance criteria before implementation. Respect explicit read-only requests.
+- New proposals start **Backlog / Needs review**. Set these explicitly when adding an item. Use `plan-task`, `decision` or `plan-reference` labels as appropriate. Retain the original pack text; update the reviewed summary and record decisions with their rationale. Plan tasks belong under #243; decision issues belong under their owning task and block it until resolved. Give decisions their owner's Order. Do not reorder later work without an agreed reason.
+- **Agreement:** Needs review = unconfirmed; Agreed = authorized scope recorded; Revisit = a material change or reopened outcome needs review. **Status:** Ready requires agreed scope, clear acceptance and satisfied prerequisites; In progress means implementation has started; In review means verification/review is underway; Blocked requires a concrete reason and next unblocking step.
+- During authorized work, update at meaningful milestones and before finishing. Record PR links, checks and results, independent review, actual Windows/model evidence, local delivery and remaining limits in the issue. Update its summary when scope changes; preserve Dave's edits and unrelated work. Keep HANDOVER concise with links to this detail.
+- Set **Done** and close with `--reason completed` only after the agreed outcome is verified, relevant changes are merged and required local delivery is complete. A decision can be Done once Dave's decision and rationale are recorded; it does not require an implementation PR. Use **Not planned** and close with `--reason 'not planned'` for rejected/withdrawn work. Reopened work returns to review with Agreement Revisit before further implementation.
+- Serialize remote writers, re-read saved issue/field/relationship values after changes and reconcile partial failures before retrying. Report an access or update failure honestly; do not claim synchronization from a command being dispatched.
+
+Plan, Delivery, Decisions and Completed are the saved views. Auto-add issues/sub-issues and the Backlog default are configured; automatic closure, completion and archiving remain disabled. Maintain both issue state and Project status explicitly: issue closure or PR merge alone does not establish Done. Routine CLI/API maintenance covers Project description/README, fields, items and relationships. Workflow activation/filter changes, field defaults and view sorting/grouping currently require the browser; use it only for requested settings changes. Project workflows are separate from GitHub Actions; keep remote CI disabled.
+
+The Project is private but repository issues are public. Keep secrets, private logs and unnecessary personal data out of issues and notes. Preserve Project visibility, access and unrelated items/settings unless Dave authorizes a change.
 
 ## Keep the native owners
 
