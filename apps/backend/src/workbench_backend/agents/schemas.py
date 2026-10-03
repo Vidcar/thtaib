@@ -1,4 +1,4 @@
-"""Harness run records. Application DB is the run SoR (STATE-001)."""
+"""Harness run records. Application DB is the run system of record."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ AgentRunStatus = RunLifecycleStatus
 
 
 class AgentBudgets(BaseModel):
-    """Optional user-selected product budgets. Unset by default (AGT-003)."""
+    """Optional user-selected product budgets. Unset by default."""
 
     max_steps: int | None = Field(default=None, gt=0)
     max_tool_calls: int | None = Field(default=None, gt=0)

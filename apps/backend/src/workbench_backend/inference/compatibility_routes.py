@@ -1,4 +1,4 @@
-"""HTTP routes for MOD-006 compatibility records. Loopback smoke only."""
+"""HTTP routes for compatibility records. Loopback smoke only."""
 
 from __future__ import annotations
 

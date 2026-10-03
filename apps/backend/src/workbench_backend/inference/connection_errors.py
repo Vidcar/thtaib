@@ -1,7 +1,7 @@
 """Classify llama.cpp / OpenAI-compatible adapter connection failures.
 
 Chat-facing honesty for Issue #78. This is not process ownership (#62)
-and not run observability (OQ-012).
+and not run observability.
 """
 
 from __future__ import annotations

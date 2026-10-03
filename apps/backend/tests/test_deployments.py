@@ -1,4 +1,4 @@
-"""MOD-004 deployments and OQ-007 partial lifecycle rules."""
+"""Deployments and observed lifecycle rules."""
 
 from __future__ import annotations
 

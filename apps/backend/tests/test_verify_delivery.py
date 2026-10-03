@@ -6,6 +6,7 @@ from contextlib import redirect_stderr, redirect_stdout
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -27,17 +28,38 @@ class VerificationSelectionTests(unittest.TestCase):
 
     def test_default_and_shared_acceptance_include_both_consumers(self) -> None:
         required = {"backend-default", "backend-integration", "desktop-build", "shared-contracts"}
-        self.assertTrue(required <= self.checks().keys())
+        self.assertEqual(set(self.checks()), {"working-diff", "staged-diff", *required})
         self.assertTrue(required <= self.checks("--scope", "shared").keys())
         self.assertEqual(self.checks("--scope", "shared")["shared-contracts"].cwd, verify.ROOT / "apps/backend")
+
+    def test_default_plan_does_not_require_external_executables(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(verify.ROOT / "scripts/verify.py"), "--plan"],
+            capture_output=True, text=True, env={**os.environ, "PATH": ""}, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("scopes: backend, desktop, docs, shared, workflow", result.stdout)
+        planned = {line.strip().split(": ", 1)[0] for line in result.stdout.splitlines()
+                   if line.startswith("  ") and not line.startswith("    ")}
+        self.assertEqual(planned, {"working-diff", "staged-diff", "backend-default",
+                                   "backend-integration", "desktop-build", "shared-contracts"})
+        self.assertIn("nothing executed", result.stdout)
+
+    def test_removed_scope_is_rejected_even_alongside_all(self) -> None:
+        for argv in (["--scope", "spec"], ["--scope", "all", "--scope", "spec"]):
+            with self.subTest(argv=argv), redirect_stderr(io.StringIO()) as error:
+                with self.assertRaises(SystemExit) as raised:
+                    verify.arguments(argv)
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn("invalid choice", error.getvalue())
 
     def test_workflow_and_trivial_docs_do_not_require_product_builds(self) -> None:
         self.assertEqual(set(self.checks("--scope", "docs")), {"working-diff", "staged-diff"})
         self.assertEqual(set(self.checks("--scope", "workflow")), {"working-diff", "staged-diff", "verification-regressions"})
 
     def test_explicit_scopes_are_additive_and_fast_allows_focused_feedback(self) -> None:
-        checks = self.checks("--tier", "fast", "--scope", "backend", "--scope", "spec", "--test", "tests.test_verify_delivery")
-        self.assertEqual(set(checks), {"working-diff", "staged-diff", "backend-focused", "openspec"})
+        checks = self.checks("--tier", "fast", "--scope", "backend", "--scope", "workflow", "--test", "tests.test_verify_delivery")
+        self.assertEqual(set(checks), {"working-diff", "staged-diff", "backend-focused", "verification-regressions"})
         self.assertEqual(checks["backend-focused"].command[-1], "tests.test_verify_delivery")
         desktop = self.checks("--tier", "fast", "--scope", "desktop", "--desktop-check", "scripts/check-model-settings.mjs")
         self.assertEqual(set(desktop), {"working-diff", "staged-diff", "desktop-typecheck", "desktop-check-model-settings"})

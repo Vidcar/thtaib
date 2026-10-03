@@ -1,4 +1,4 @@
-"""HTTP routes for the model manager. Privileged /v1; Issue #40 partial OQ-002."""
+"""HTTP routes for the model manager. Privileged /v1 with local trust (Issue #40)."""
 
 from __future__ import annotations
 

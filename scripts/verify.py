@@ -23,7 +23,7 @@ import uuid
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCOPES = ("docs", "workflow", "backend", "desktop", "shared", "spec")
+SCOPES = ("docs", "workflow", "backend", "desktop", "shared")
 
 
 @dataclass(frozen=True)
@@ -104,8 +104,6 @@ def select_checks(args: argparse.Namespace, root: Path = ROOT) -> list[Check]:
     if "shared" in args.scopes:
         checks.append(Check("shared-contracts", ("uv", "run", "python", "../../scripts/generate_shared_contracts.py", "--check"),
                             backend, "shared scope: generated contract freshness, alongside both consumer suites"))
-    if "spec" in args.scopes:
-        checks.append(Check("openspec", ("openspec", "validate", "--all"), root, "spec scope: all current contracts and active changes"))
     if args.real_model:
         checks.append(Check("real-model-smoke", ("uv", "run", "python", "-m", "unittest", "tests_integration.test_real_model_smoke"),
                             backend, "explicit delivery request: isolated real runtime plumbing, not model capability or the open desktop",

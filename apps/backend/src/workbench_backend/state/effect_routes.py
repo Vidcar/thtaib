@@ -1,4 +1,4 @@
-"""HTTP routes for STATE-004 unknown-effect safety. Loopback smoke only."""
+"""HTTP routes for unknown-effect safety. Loopback smoke only."""
 
 from __future__ import annotations
 

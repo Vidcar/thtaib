@@ -220,7 +220,7 @@ class ChatTranscriptReplaceRequest(BaseModel):
 
 
 class ChatDeployHealth(BaseModel):
-    """Chat-facing deploy/connection honesty (Issue #78). Not OQ-012 traces."""
+    """Chat-facing deploy/connection honesty (Issue #78), separate from run traces."""
 
     deployment_id: str
     deployment_status: str

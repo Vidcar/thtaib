@@ -1,4 +1,4 @@
-"""STATE-003 / LAB-002 restore integrity: missing tree and hash mismatch fail."""
+"""Restore integrity: missing tree and hash mismatch fail."""
 
 from __future__ import annotations
 

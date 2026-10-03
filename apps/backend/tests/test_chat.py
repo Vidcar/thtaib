@@ -1,4 +1,4 @@
-"""Chat → embedded harness wiring, STATE-002, and project filesystem tools."""
+"""Chat → embedded harness wiring and project filesystem tools."""
 
 from __future__ import annotations
 

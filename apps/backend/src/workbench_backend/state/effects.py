@@ -1,8 +1,8 @@
-"""STATE-004 unknown-effect safety.
+"""Unknown-effect safety.
 
 Snapshots do not undo external actions. Reconnect/resume/restart must not
 silently repeat an operation whose outcome is unknown. This is not an
-exactly-once claim and does not close OQ-004.
+exactly-once claim or automatic reconciliation of external outcomes.
 """
 
 from __future__ import annotations

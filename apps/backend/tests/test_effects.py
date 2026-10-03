@@ -1,4 +1,4 @@
-"""STATE-004 unknown-effect safety: no silent replay, no rollback promise."""
+"""Unknown-effect safety: no silent replay, no rollback promise."""
 
 from __future__ import annotations
 

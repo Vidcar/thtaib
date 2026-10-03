@@ -1,4 +1,4 @@
-"""Harness middleware: request capture (AGT-002) and tool policy (AGT-005)."""
+"""Harness middleware: request capture and tool policy."""
 
 from __future__ import annotations
 
@@ -1130,7 +1130,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
 
         When ``memory=`` / ``skills=`` is attached, ``ls`` / ``read_file`` may
         target knowledge routes, and ``edit_file`` / ``write_file`` may target
-        ``/memories/**`` scratch only. Those edits are not STATE-005 versions.
+        ``/memories/**`` scratch only. Those edits are not durable knowledge versions.
         """
 
         name, args, call_id = _tool_call_parts(request)

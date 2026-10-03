@@ -1035,7 +1035,7 @@ class ChatService:
         """Replace displayed history only.
 
         Project files, durable knowledge, and the LangGraph thread are not
-        touched (STATE-002 / Issue #56). Edited transcript is not replayed
+        touched (Issue #56). Edited transcript is not replayed
         into the harness.
         """
 

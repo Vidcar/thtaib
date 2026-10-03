@@ -2647,7 +2647,7 @@ export interface components {
     schemas: {
         /**
          * AgentBudgets
-         * @description Optional user-selected product budgets. Unset by default (AGT-003).
+         * @description Optional user-selected product budgets. Unset by default.
          */
         AgentBudgets: {
             /** Max Steps */
@@ -4307,7 +4307,7 @@ export interface components {
         };
         /**
          * ChatDeployHealth
-         * @description Chat-facing deploy/connection honesty (Issue #78). Not OQ-012 traces.
+         * @description Chat-facing deploy/connection honesty (Issue #78), separate from run traces.
          */
         ChatDeployHealth: {
             /** Code */
@@ -5962,7 +5962,7 @@ export interface components {
             not_rag: true;
             /**
              * Note
-             * @default Durable knowledge versioning (STATE-005). This store is not a retrieval index. Query-time RAG is a derived per-run index (STATE-006). Automatic saves require permission for the exact destination scope.
+             * @default Durable knowledge versioning. This store is not a retrieval index. Query-time RAG is a derived per-run index. Automatic saves require permission for the exact destination scope.
              */
             note: string;
             /** Scope Policies */
@@ -8012,7 +8012,7 @@ export interface components {
          * @description What llama-server's ``GET /props`` reported once the deployment was healthy.
          *
          *     Recorded as reported, not interpreted. This is not a compatibility
-         *     record and not a capability claim (MOD-006 / OQ-007 stay open).
+         *     record and not a capability claim.
          */
         ServerProperties: {
             /** Bos Token */

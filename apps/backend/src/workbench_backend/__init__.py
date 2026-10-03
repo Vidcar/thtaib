@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-# Tracing is optional and not the product home (OQ-012). Disable unless set.
+# Tracing is optional and not the product home. Disable unless set.
 os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
 os.environ.setdefault("LANGSMITH_TRACING", "false")
 

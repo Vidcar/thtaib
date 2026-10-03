@@ -1,8 +1,8 @@
-"""Requested versus applied settings bags (MOD-003).
+"""Requested versus applied settings bags.
 
 Known keys may be passed through. Unknown keys are unsupported. Values the
-workbench accepts but has not UAT-verified remain unverified. This does not
-close OQ-007.
+workbench accepts but has not UAT-verified remain unverified; accepting a
+setting does not prove that the runtime applied it.
 
 Valued startup enums (Issue #21): ``flash_attn`` serializes as
 ``--flash-attn on|off|auto`` and ``load_mode`` as ``--load-mode MODE``.

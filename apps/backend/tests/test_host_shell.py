@@ -1,4 +1,4 @@
-"""ENV-001/002: Windows host-shell policy and Deep Agents interrupt_on."""
+"""Windows host-shell policy and Deep Agents interrupt_on."""
 
 from __future__ import annotations
 

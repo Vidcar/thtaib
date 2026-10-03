@@ -2,7 +2,7 @@
   "components": {
     "schemas": {
       "AgentBudgets": {
-        "description": "Optional user-selected product budgets. Unset by default (AGT-003).",
+        "description": "Optional user-selected product budgets. Unset by default.",
         "properties": {
           "max_steps": {
             "anyOf": [
@@ -5236,7 +5236,7 @@
         "type": "object"
       },
       "ChatDeployHealth": {
-        "description": "Chat-facing deploy/connection honesty (Issue #78). Not OQ-012 traces.",
+        "description": "Chat-facing deploy/connection honesty (Issue #78), separate from run traces.",
         "properties": {
           "code": {
             "anyOf": [
@@ -10281,7 +10281,7 @@
             "type": "boolean"
           },
           "note": {
-            "default": "Durable knowledge versioning (STATE-005). This store is not a retrieval index. Query-time RAG is a derived per-run index (STATE-006). Automatic saves require permission for the exact destination scope.",
+            "default": "Durable knowledge versioning. This store is not a retrieval index. Query-time RAG is a derived per-run index. Automatic saves require permission for the exact destination scope.",
             "title": "Note",
             "type": "string"
           },
@@ -15722,7 +15722,7 @@
         "type": "object"
       },
       "ServerProperties": {
-        "description": "What llama-server's ``GET /props`` reported once the deployment was healthy.\n\nRecorded as reported, not interpreted. This is not a compatibility\nrecord and not a capability claim (MOD-006 / OQ-007 stay open).",
+        "description": "What llama-server's ``GET /props`` reported once the deployment was healthy.\n\nRecorded as reported, not interpreted. This is not a compatibility\nrecord and not a capability claim.",
         "properties": {
           "bos_token": {
             "anyOf": [

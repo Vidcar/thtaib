@@ -1,4 +1,4 @@
-"""STATE-005 knowledge write policy and versions."""
+"""Knowledge write policy and versions."""
 
 from __future__ import annotations
 

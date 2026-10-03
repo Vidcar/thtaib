@@ -1,4 +1,4 @@
-"""Read-only GGUF inspection via gguf-py (MOD-002).
+"""Read-only GGUF inspection via gguf-py.
 
 Normal import and inspect paths never open a GGUF for write and never call
 GGUFWriter.

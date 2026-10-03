@@ -1,4 +1,4 @@
-"""Managed and connected deployments (MOD-004). PATH llama is never used.
+"""Managed and connected deployments. PATH llama is never used.
 
 Issue #62: per-deployment lifecycle is serialized; duplicate starts are
 idempotent for a verified-owned process; a healthy endpoint alone does

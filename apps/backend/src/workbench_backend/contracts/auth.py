@@ -1,4 +1,4 @@
-"""Desktop↔backend local-trust header contract (OQ-002 partial names only).
+"""Desktop↔backend local-trust header contract; names and envelope only.
 
 Issue #40 owns Electron injection and secret-file I/O. This module defines the
 shared header name and envelope so generated consumers use the same identifiers.

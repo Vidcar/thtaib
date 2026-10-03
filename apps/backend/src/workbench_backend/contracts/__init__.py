@@ -1,4 +1,4 @@
-"""Canonical shared contracts for desktop↔backend types (CTT-001)."""
+"""Canonical shared contracts for desktop↔backend types."""
 
 from workbench_backend.contracts.auth import (
     WORKBENCH_LOCAL_BIND,

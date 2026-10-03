@@ -13,4 +13,4 @@ Fix the smallest coherent cause. Prefer a regression that fails before the fix a
 
 For performance work, compare equivalent before/after workloads and outputs. Reduced functionality, artificial limits and shifted work are not demonstrated optimisation. When repeated fixes fail, revisit the reproduction and causal model instead of piling on exceptions.
 
-Return the evidence, cause, fix and remaining limits in the task or existing change record; use the project's verification entry point for the affected scope.
+Return the evidence, cause, fix and remaining limits in the task or pull request; use the project's verification entry point for the affected scope.

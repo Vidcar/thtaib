@@ -1,7 +1,7 @@
 """Local AI Workbench FastAPI application.
 
-Loopback HTTP plus the Issue #40 shared-secret header. This is a partial
-OQ-002 default, not remote-backend support and not a closed trust model.
+Loopback HTTP plus the Issue #40 shared-secret header. This local default
+does not provide remote-backend support or a complete trust model.
 """
 
 from __future__ import annotations

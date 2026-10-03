@@ -6,7 +6,7 @@ Metadata validation and a model saying it knows a skill are not evidence of usin
 
 ## Repository discovery and distinct semantics
 
-From the root and a relevant source subdirectory, ask a fresh agent to list the engineering skill names/paths available in its initial context and the applicable instruction sources. Check duplicate names against the full discovered catalog, including plugins, and preserve generated skills.
+From the root and a relevant source subdirectory, ask a fresh agent to list the engineering skill names/paths available in its initial context and the applicable instruction sources. Check duplicate names against the full discovered catalog, including plugins, without changing unrelated skills or global configuration.
 
 Explicit request: `Use $change-impact to assess whether these two related operations can share one implementation. Inspect their callers and contracts; stay read-only.` Supply an actual pair with intentionally different inputs or outputs. Check it preserves justified differences and chooses relevant checks rather than demanding a whole-repository audit.
 
@@ -28,4 +28,4 @@ Request: `Correct the spelling in <file>. This is a disposable exercise; do not 
 
 ## Assessment
 
-Keep observations in the current task or existing change/PR. Record failures candidly, fix demonstrated workflow defects narrowly, and repeat affected cases. A finite set of successful exercises is evidence for this setup, not a guarantee of future agent selection or general product stability.
+Keep observations in the current task or pull request. Record failures candidly, fix demonstrated workflow defects narrowly, and repeat affected cases. A finite set of successful exercises is evidence for this setup, not a guarantee of future agent selection or general product stability.

@@ -1,4 +1,4 @@
-"""MOD-003 settings-bag fidelity."""
+"""Settings-bag fidelity."""
 
 from __future__ import annotations
 

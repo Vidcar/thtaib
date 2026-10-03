@@ -52,7 +52,7 @@ ENVIRONMENT_EXCLUSIONS = (
     "OS user profile",
     "installed system packages",
     "managed inference runtime and weights (referenced by id only)",
-    "worker or container environment (OQ-003)",
+    "worker or container environment",
 )
 
 

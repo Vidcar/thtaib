@@ -45,7 +45,7 @@ REQUIRED_ENV = "WORKBENCH_REAL_MODEL_SMOKE"
 REQUIRED_VALUES = frozenset({"required", "1", "true", "yes", "on"})
 SKIP_VALUES = frozenset({"", "0", "false", "no", "off", "skip"})
 SERVER_READY_TIMEOUT = 120.0
-# Transport/wait bound for a tiny CPU model; not a product task budget (AGT-003).
+# Transport/wait bound for a tiny CPU model; not a product task budget.
 RUN_TIMEOUT = 240.0
 FILE_CONTENT = "hello from qwen"
 WRITE_TASK = (

@@ -1,4 +1,4 @@
-"""Embedded harness API: AGT-001/002/005/006 plus honour AGT-003/004."""
+"""Embedded harness API, tool policy, evidence, optional budgets and knowledge."""
 
 from __future__ import annotations
 

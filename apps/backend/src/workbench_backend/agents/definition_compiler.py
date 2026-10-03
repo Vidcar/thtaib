@@ -1,8 +1,8 @@
-"""WF-001 definition compiler: configuration links are not executable steps.
+"""Definition compiler: configuration links are not executable steps.
 
 Configuration connections resolve one validated Deep Agents setup.
 Workflow connections alone compile into sequencing and typed handovers.
-This is not Builder, not a React Flow canvas, and not WF-002.
+This module compiles definitions; it does not provide a visual workflow editor.
 """
 
 from __future__ import annotations

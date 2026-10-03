@@ -1,4 +1,4 @@
-"""STATE-001 dual SQLite + JSON migration, and STATE-002 history ≠ project."""
+"""Dual SQLite + JSON migration, and chat history ≠ project files."""
 
 from __future__ import annotations
 

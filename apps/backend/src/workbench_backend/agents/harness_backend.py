@@ -1,4 +1,4 @@
-"""Deep Agents filesystem / host-shell backend for one harness run (STATE-002).
+"""Deep Agents filesystem / host-shell backend for one harness run.
 
 Live runs attach ``CompositeBackend`` so framework internals stay out of the
 user's project. ``LocalShellBackend`` is the default only when ``execute`` is
@@ -8,7 +8,7 @@ rather than that profile. Otherwise the default is ``FilesystemBackend``
 so Deep Agents does not put a live ``execute`` tool on the node. Recorded-tool
 mode attaches no live project, host-shell, or retrieval backend; knowledge
 routes may use scratch so
-official ``memory=`` / ``skills=`` can ``download_files`` (LAB-003).
+official ``memory=`` / ``skills=`` can ``download_files``.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from workbench_backend.paths import WorkbenchPaths
 # CompositeBackend.artifacts_root is "/". See:
 # https://docs.langchain.com/oss/python/deepagents/backends
 # and deepagents/middleware/filesystem.py (_large_tool_results_prefix).
-# /memories/ and /skills/ are derived STATE-005 files for official
+# /memories/ and /skills/ are derived knowledge files for official
 # memory= / skills= (harness scratch, never the project or knowledge\).
 RESERVED_FRAMEWORK_PREFIXES = (
     "/large_tool_results/",

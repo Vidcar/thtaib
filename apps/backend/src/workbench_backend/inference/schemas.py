@@ -514,7 +514,7 @@ class ServerProperties(BaseModel):
     """What llama-server's ``GET /props`` reported once the deployment was healthy.
 
     Recorded as reported, not interpreted. This is not a compatibility
-    record and not a capability claim (MOD-006 / OQ-007 stay open).
+    record and not a capability claim.
     """
 
     fetched: str
