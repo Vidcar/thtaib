@@ -39,7 +39,7 @@ models/
 data/
 desktop_backend_shared_secret
 
-# Local scratch (UAT / temp) — never commit
+# Use one root .scratch/; also protect accidental nested scratch from commits
 .scratch/
 # Legacy UAT droppings (safety net)
 /uat-workroot*/
@@ -47,4 +47,5 @@ desktop_backend_shared_secret
 /uat-*.txt
 /uat-backend-*.txt
 apps/backend/uat_*.py
+# Legacy browser output safety net; keep future captures under root .scratch/
 /.playwright-mcp/
