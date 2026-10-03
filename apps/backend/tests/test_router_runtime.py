@@ -56,6 +56,20 @@ class RouterRuntimeTests(unittest.TestCase):
         self.assertNotIn("host =", content)
         self.assertNotIn("port =", content)
 
+    def test_default_and_explicit_parallel_reach_router_and_direct_launch(self) -> None:
+        from workbench_backend.inference.deployments import managed_argv
+        for startup, expected in (({}, 1), ({"parallel": -1}, -1), ({"parallel": 2}, 2)):
+            with self.subTest(startup=startup):
+                deployment = self.manager.create_managed(ManagedDeploymentRequest(
+                    bundle_id=self.bundle_id, startup=startup, auto_start=False))
+                section = self.router._sections(self.router._presets())[deployment.id]
+                self.assertIn(f"parallel = {expected}", section)
+                self.assertNotIn("kv-unified =", section)
+                bundle = self.manager.get_bundle(self.bundle_id)
+                argv = managed_argv("llama-server", bundle, deployment.applied_startup)
+                self.assertEqual(argv[argv.index("--parallel") + 1], str(expected))
+                self.assertEqual(deployment.requested_startup, startup)
+
     def test_default_policy_and_status_read_do_not_start_router(self) -> None:
         self._deployment()
         with patch.object(self.router.processes, "start") as start:

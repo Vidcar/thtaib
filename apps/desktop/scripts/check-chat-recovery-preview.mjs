@@ -64,6 +64,21 @@ try {
     assert.match(html, new RegExp(label), `recovery routes ${action} to the relevant action`);
     assert.match(html, /Original worker connection failed/);
   }
+  const poolFailure = { ...failedRun, failure: { category: "capacity", code: "context_pool_exhausted", message: "The engine could not allocate enough context memory.", recovery_action: "change_limit" } };
+  let poolRecoveryRun;
+  let poolRenderer;
+  try {
+    await act(async () => { poolRenderer = create(React.createElement(RunActivitySummary, { run: poolFailure, onRecover(run) { poolRecoveryRun = run; } })); });
+    const recoveryButton = poolRenderer.root.findByType("button");
+    assert.equal(recoveryButton.props.children, "Review parallel setting", "shared allocation recovery targets parallelism rather than the response allowance");
+    await act(async () => recoveryButton.props.onClick());
+    assert.equal(poolRecoveryRun, poolFailure, "the exact failed run reaches the existing Models recovery route");
+  } finally {
+    if (poolRenderer) await act(async () => poolRenderer.unmount());
+  }
+  const poolHint = renderToStaticMarkup(React.createElement(RunActivitySummary, { run: poolFailure }));
+  assert.match(poolHint, /Wait for other work to finish, or reduce Parallel/);
+  assert.doesNotMatch(poolHint, /Adjust the response or context limit/);
 
   const old = { fetch: globalThis.fetch, window: globalThis.window, setInterval: globalThis.setInterval, clearInterval: globalThis.clearInterval };
   const pending = [];

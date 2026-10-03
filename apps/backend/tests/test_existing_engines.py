@@ -258,6 +258,55 @@ class ExistingEngineTests(unittest.TestCase):
         self.assertEqual(branched.json()["code"], "branch_unavailable")
         self.assertEqual([item["id"] for item in self.client.get("/v1/chat/conversations").json()], [conversation_id])
 
+    def test_native_allocation_failure_is_actionable_without_claiming_prompt_overflow(self) -> None:
+        import httpx
+        from openai import InternalServerError
+        self._set_context(76800)
+        self._install([AIMessage(content="Recovered on a later input.")])
+        model = self.scripted
+        error = InternalServerError("Context size has been exceeded.",
+            response=httpx.Response(500, request=httpx.Request("POST", "http://native/v1/chat/completions")),
+            body={"message": "Context size has been exceeded.", "type": "server_error", "code": 500})
+        with patch.object(type(model), "_generate", side_effect=error):
+            started = self._start(task="A small request.", presented_tools=[])
+            self.assertEqual(started.status_code, 200, started.text)
+            failed = wait_for_run(self.client, started.json()["id"])
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(failed["failure"]["code"], "context_pool_exhausted")
+        self.assertEqual(failed["failure"]["category"], "capacity")
+        self.assertEqual(failed["failure"]["recovery_action"], "change_limit")
+        self.assertIn("could not allocate", failed["failure"]["message"])
+        self.assertIn("With parallel requests", failed["failure"]["message"])
+        self.assertIn("Wait for other work", failed["error"])
+        self.assertEqual(failed["context_observation"]["capacity_tokens"], 76800)
+        self.assertIsNot(failed["context_observation"]["fits"], False)
+        recovered = self._start(task="Continue after the other work ends.", presented_tools=[])
+        self.assertEqual(recovered.status_code, 200, recovered.text)
+        finished = wait_for_run(self.client, recovered.json()["id"])
+        self.assertEqual(finished["status"], "completed", finished.get("error"))
+
+    def test_allocation_classification_requires_exact_native_error(self) -> None:
+        import httpx
+        from openai import APIError
+        from workbench_backend.agents.context import ContextObservation
+        from workbench_backend.agents.harness import _failure_code
+        for body, message, expected in (
+            ({"error": {"code": 500, "message": "Context size has been exceeded."}}, "Error", "context_pool_exhausted"),
+            ({"code": 500, "message": "Compute error."}, "Compute error.", "500"),
+            ({"code": 400, "message": "Context size has been exceeded."}, "Context size has been exceeded.", "400"),
+            ({"code": 500}, "Context size has been exceeded.", "context_pool_exhausted"),
+        ):
+            with self.subTest(body=body):
+                error = APIError(message, httpx.Request("POST", "http://native"), body=body)
+                run = SimpleNamespace(error=message, context_observation=ContextObservation(
+                    capacity_tokens=76800, input_tokens=400, counting_basis="native", fits=True))
+                code = _failure_code(run, error)
+                self.assertEqual(str(code), expected)
+                self.assertTrue(run.context_observation.fits)
+                self.assertEqual(run.context_observation.capacity_tokens, 76800)
+        ordinary = RuntimeError("Context size has been exceeded.")
+        self.assertIsNone(_failure_code(SimpleNamespace(error=str(ordinary), context_observation=None), ordinary))
+
     def test_file_tools_and_library_middleware_stay_single_copies(self) -> None:
         memory = self._knowledge("memory", "MEM-ENGINES-TOKEN")
         skill = self._knowledge("skill", SKILL_BODY)

@@ -18,6 +18,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import httpx
+from openai import APIError
 from deepagents import create_deep_agent
 from deepagents.backends import StateBackend
 from deepagents.middleware.summarization import SummarizationMiddleware, SUMMARIZATION_EVENT_KEY, create_summarization_middleware
@@ -700,7 +701,7 @@ class HarnessService:
                     code=code,
                     status_code=400,
                 ) from exc
-            from workbench_backend.state.preferences import HOST_COMMAND_ACTIONS, PreferenceStore, chat_confirmation_thread
+            from workbench_backend.state.preferences import PreferenceStore, chat_confirmation_thread, is_host_command_action
             grants = PreferenceStore(self.store)
             for action, decision in zip(pending.action_requests, request.decisions, strict=True):
                 if decision.type != "approve":
@@ -711,7 +712,7 @@ class HarnessService:
                         code="interrupt_tool_unavailable",
                         status_code=409,
                     )
-                if action.name in HOST_COMMAND_ACTIONS and chat_confirmation_thread(run):
+                if is_host_command_action(action.name, action.args) and chat_confirmation_thread(run):
                     grants.confirm_host_shell(run.thread_id)
                 # An excluded file is one edit. Session and Always allow do not widen the grant.
                 if decision.scope != "once" and not grants.excluded_file_edit(run, action.name, action.args):
@@ -2180,8 +2181,8 @@ def _fallback_interrupt_id(run: AgentRun) -> str:
 
 def _with_shell_folder(run: AgentRun, pending: PendingInterrupt) -> PendingInterrupt:
     """The card shows the resolved folder. A model-supplied path is not the grant."""
-    from workbench_backend.state.preferences import HOST_COMMAND_ACTIONS, resolved_starting_folder
-    if not any(action.name in HOST_COMMAND_ACTIONS for action in pending.action_requests):
+    from workbench_backend.state.preferences import is_host_command_action, resolved_starting_folder
+    if not any(is_host_command_action(action.name, action.args) for action in pending.action_requests):
         return pending
     try:
         folder = resolved_starting_folder(run)
@@ -2189,7 +2190,7 @@ def _with_shell_folder(run: AgentRun, pending: PendingInterrupt) -> PendingInter
         return pending
     actions = []
     for action in pending.action_requests:
-        if action.name not in HOST_COMMAND_ACTIONS:
+        if not is_host_command_action(action.name, action.args):
             actions.append(action)
             continue
         args = dict(action.args)
@@ -2207,6 +2208,22 @@ def _resume_value(decisions: list[dict[str, str]]) -> dict[str, Any]:
 
 def _failure_code(run: AgentRun, error: Exception) -> str | None:
     code = getattr(error, "code", None)
+    body = getattr(error, "body", None)
+    native_error = body.get("error", body) if isinstance(body, dict) else {}
+    if isinstance(native_error, dict):
+        native_code = code if code is not None else native_error.get("code")
+        native_message = native_error.get("message", str(error))
+        if (isinstance(error, APIError) and native_code in {500, "500"}
+                and native_message == "Context size has been exceeded."):
+            run.error = (
+                "The engine could not allocate enough context memory. With parallel requests this pool is shared. "
+                "Wait for other work to finish, or reduce Parallel in the model setup before retrying."
+            )
+            if run.context_observation is not None:
+                observed = run.context_observation.model_copy(deep=True)
+                observed.notes.append("Native context memory allocation failed; each request's maximum is not a concurrent reservation.")
+                run.context_observation = observed
+            return "context_pool_exhausted"
     if isinstance(error, ContextOverflowError) or code in {"context_length_exceeded", "context_window_exceeded"}:
         if run.context_observation is not None:
             failed = run.context_observation.model_copy(deep=True)

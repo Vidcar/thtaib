@@ -128,7 +128,7 @@ def failure_for_run(run: Any, *, code: str | None = None) -> RunFailure | None:
         return None
     code = code or run.stop_reason or "run_failed"
     category, action = "runtime", "continue"
-    if code in {"context_capacity_exceeded", "tool_budget_exhausted", "response_limit_reached"}:
+    if code in {"context_capacity_exceeded", "context_pool_exhausted", "tool_budget_exhausted", "response_limit_reached"}:
         category, action = "capacity", "change_limit"
     elif code in {"interaction_persistence_failed", "checkpoint_linkage_failed"}:
         category, action = "persistence", "continue"

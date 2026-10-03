@@ -36,6 +36,7 @@ class HostActionConfirmationTests(unittest.TestCase):
             ("execute", {"command": "echo host-confirmation"}),
             ("start_command", {"command": [sys.executable, "-c", "print('job')"], "timeout_seconds": 30}),
             ("execute_skill_script", {"entry_id": "skill", "version_id": "version", "resource_path": "scripts/check.py", "arguments": ["literal"]}),
+            ("start_preview", {"command": [sys.executable, "-m", "http.server", "8082"], "port": 8082}),
         ]
         with tempfile.TemporaryDirectory() as area:
             store = ApplicationStore(WorkbenchPaths(Path(area) / "state"))
@@ -79,6 +80,87 @@ class HostActionConfirmationTests(unittest.TestCase):
             finally:
                 parked.close()
                 store.close()
+
+    def test_static_preview_does_not_confirm_computer_or_use_command_grants(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        store = ApplicationStore(WorkbenchPaths(Path(temp.name) / "state"))
+        parked = permission_fixture._Parked()
+        self.addCleanup(store.close)
+        self.addCleanup(parked.close)
+        harness = HarnessService(lambda: SimpleNamespace(paths=store.paths), app_store=store)
+        prefs = PreferenceStore(store)
+        run = permission_fixture._run(source_surface="chat", project_path=temp.name,
+            presented_tools=["start_preview"], enabled_tools=["start_preview"])
+        args = {"entry_path": "index.html"}
+        self.assertTrue(permission_fixture._pauses(run, prefs, "start_preview", args))
+        self.assertFalse(permission_fixture._pauses(run.model_copy(update={"approval_mode": "full_access"}), prefs, "start_preview", args))
+        shown = _with_shell_folder(run, PendingInterrupt(action_requests=[PendingInterruptAction(name="start_preview", args=args)]))
+        self.assertNotIn("starting_folder", shown.action_requests[0].args)
+        parked.resume(harness, run, shown.action_requests, [{"type": "approve", "scope": "always"}])
+        self.assertFalse(prefs.host_shell_confirmed(run.thread_id))
+        saved = prefs.grants()[0]
+        self.assertIsNone(saved.starting_folder)
+        self.assertTrue(prefs.matches(run, "start_preview", args))
+        self.assertFalse(prefs.matches(run, "start_preview", {"command": [sys.executable, "-m", "http.server"], "port": 8082}))
+
+
+class NativePreviewConfirmationTests(unittest.TestCase):
+    def test_native_command_preview_first_card_and_rejection_prevent_process_launch(self):
+        for mode in ("ask", "full_access"):
+            with self.subTest(mode=mode):
+                fixture = harness_fixture.HarnessApiTests(methodName="runTest")
+                fixture.setUp()
+                try:
+                    fixture.app.state.harness.preview = fixture.app.state.preview
+                    project = fixture.root / "preview-project"
+                    project.mkdir()
+                    marker = project / "must-not-launch.txt"
+                    argv = [sys._base_executable, "-c", "from pathlib import Path;Path('must-not-launch.txt').write_text('ran')"]
+                    fixture.scripted = ScriptedChatModel([
+                        AIMessage(content="", tool_calls=[{"id": "command-preview", "name": "start_preview", "args": {"command": argv, "port": 8082}}]),
+                        AIMessage(content="The request was rejected."),
+                    ])
+                    with patch("workbench_backend.preview.service.subprocess.Popen", side_effect=AssertionError("Approval must precede process launch")) as spawn:
+                        started = fixture._start(source_surface="chat", thread_id="preview-" + mode,
+                            project_path=str(project), presented_tools=["start_preview"], approval_mode=mode)
+                        paused = fixture._wait_for_pending_interrupt(started["id"])
+                        pending = paused["pending_interrupt"]
+                        self.assertEqual(pending["environment"], "windows_host_shell")
+                        self.assertEqual(pending["action_requests"][0]["args"]["command"], argv)
+                        self.assertEqual(pending["action_requests"][0]["args"]["starting_folder"], str(project.resolve()))
+                        self.assertNotIn("execute", paused["presented_tools"])
+                        rejected = fixture.client.post(f"/v1/agent-runs/{started['id']}/interrupt-decision", json={
+                            "interrupt_id": pending["interrupt_id"], "namespace": pending["namespace"], "decisions": [{"type": "reject"}]})
+                        self.assertEqual(rejected.status_code, 200, rejected.text)
+                        finished = wait_for_run(fixture.client, started["id"])
+                        self.assertEqual(finished["status"], "completed", finished.get("error"))
+                        spawn.assert_not_called()
+                    self.assertFalse(marker.exists())
+                    self.assertFalse(PreferenceStore(fixture.app.state.harness.store).host_shell_confirmed("preview-" + mode))
+                finally:
+                    fixture.tearDown()
+
+    def test_native_static_preview_in_full_access_has_no_computer_card(self):
+        fixture = harness_fixture.HarnessApiTests(methodName="runTest")
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        self.addCleanup(fixture.app.state.preview.shutdown)
+        fixture.app.state.harness.preview = fixture.app.state.preview
+        project = fixture.root / "static-project"
+        project.mkdir()
+        (project / "index.html").write_text("<h1>Static</h1>", encoding="utf-8")
+        fixture.scripted = ScriptedChatModel([
+            AIMessage(content="", tool_calls=[{"id": "static-preview", "name": "start_preview", "args": {"entry_path": "index.html"}}]),
+            AIMessage(content="Preview ready."),
+        ])
+        started = fixture._start(source_surface="chat", thread_id="static-no-confirm", project_path=str(project),
+            presented_tools=["start_preview"], approval_mode="full_access")
+        finished = wait_for_run(fixture.client, started["id"])
+        self.assertEqual(finished["status"], "completed", finished.get("error"))
+        self.assertFalse(any(event["kind"] == "interrupt" for event in finished["events"]))
+        self.assertEqual(fixture.app.state.preview.status("static-no-confirm")["kind"], "static")
+        self.assertFalse(PreferenceStore(fixture.app.state.harness.store).host_shell_confirmed("static-no-confirm"))
 
 
 class ManagedJobRecoveryTests(unittest.TestCase):

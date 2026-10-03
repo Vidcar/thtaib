@@ -143,7 +143,7 @@ class MemoryEstimateTests(unittest.TestCase):
         startup = {"ctx_size":4096, "n_gpu_layers":4, "kv_offload":False}
         with patch.object(self.manager.runtime, "current", return_value=manifest), \
              patch("workbench_backend.inference.memory_estimates.require_planner", return_value=Path(manifest.memory_planner_path)), \
-             patch("workbench_backend.inference.memory_estimates._bounded_native", return_value=native_result()) as native:
+             patch("workbench_backend.inference.memory_estimates._bounded_native", return_value=native_result(parallel=1, unified=False)) as native:
             with patch("workbench_backend.inference.memory_estimates.utc_now", return_value="2026-09-27T12:00:00Z"):
                 first = self.manager.memory_estimator.estimate(ModelEstimateRequest(bundle_id=bundle_id, startup=startup, method="native"))
             with patch("workbench_backend.inference.memory_estimates.utc_now", return_value="2026-09-27T12:00:10Z"):
@@ -154,10 +154,12 @@ class MemoryEstimateTests(unittest.TestCase):
         self.assertEqual(first.gpu_bytes, 3 * 1024**2)
         self.assertEqual(native.call_count, 1)
         self.assertIn("--no-kv-offload", native.call_args.args[0])
-        self.assertEqual(first.evaluated_startup["parallel"], 4)
-        self.assertTrue(first.kv_unified)
+        self.assertEqual(first.evaluated_startup["parallel"], 1)
+        self.assertFalse(first.kv_unified)
+        native_args = native.call_args.args[0]
+        self.assertEqual(native_args[native_args.index("--parallel") + 1], "1")
         self.assertEqual(first.completeness, "complete")
-        self.assertIn("Simultaneous requests share", " ".join(first.assumptions))
+        self.assertNotIn("Simultaneous requests share", " ".join(first.assumptions))
         self.assertIn("Dynamic driver", " ".join(first.unknown_reasons))
         self.assertEqual(second.devices, first.devices)
         self.assertEqual(second.estimated_at, first.estimated_at, "A cached prediction must retain its original time")
@@ -174,14 +176,24 @@ class MemoryEstimateTests(unittest.TestCase):
             explicit = self.manager.memory_estimator.estimate(ModelEstimateRequest(bundle_id=bundle_id, method="native",
                 startup={"parallel": 2, "kv_unified": False, "ctx_size": "auto"}))
             automatic = self.manager.memory_estimator.estimate(ModelEstimateRequest(bundle_id=bundle_id, method="native",
-                startup={"ctx_size": "auto"}))
+                startup={"ctx_size": "auto", "parallel": -1}))
         self.assertEqual(explicit.evaluated_startup["parallel"], 2)
         self.assertEqual(explicit.effective_context, 16384)
         self.assertEqual(explicit.context_marker, 8192)
         self.assertEqual(automatic.evaluated_startup["parallel"], 4)
         self.assertEqual(automatic.context_marker, 16384)
-        self.assertEqual(automatic.selected_startup, {"ctx_size": "auto"})
+        self.assertEqual(automatic.selected_startup, {"ctx_size": "auto", "parallel": -1})
         self.assertIn("--parallel", native.call_args_list[0].args[0])
+
+    def test_default_metadata_preview_preserves_full_context_in_one_native_slot(self):
+        bundle_id = self.manager.import_local(LocalImportRequest(source_path=str(self.model()))).bundle_id
+        result = self.manager.memory_estimator.estimate(ModelEstimateRequest(
+            bundle_id=bundle_id, startup={"ctx_size": 7680}))
+        self.assertEqual(result.selected_startup, {"ctx_size": 7680})
+        self.assertEqual(result.effective_parallel, 1)
+        self.assertEqual(result.effective_context, 7680)
+        self.assertEqual(result.effective_context_per_slot, 7680)
+        self.assertFalse(result.kv_unified)
 
     def test_remote_ranges_are_bounded_and_ignored_range_aborts_before_body(self):
         client = Mock()

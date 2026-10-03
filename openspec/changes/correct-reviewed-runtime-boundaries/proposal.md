@@ -8,17 +8,18 @@ The current code review found seven defects that can lose an edited request, rep
 
 - Reset native summarization state when rewinding before a chat's first turn.
 - Keep Queue input identity stable across a lost acknowledgement and reconcile the accepted item before retrying.
-- Apply the same first-use confirmation to native commands, managed commands, and skill scripts.
+- Apply the same first-use confirmation to native commands, managed commands, skill scripts and custom-command previews; static HTML keeps its existing preview policy.
 - Block continued dispatch after a managed command times out or is cancelled with uncertain partial effects until inspection and acknowledgement.
 - Keep preview ownership and chat records until process-tree shutdown is confirmed, with a retryable Stop control.
 - Send smoke requests to the actual selected model, without implicitly loading another router model.
 - Report per-model RAM as unavailable when only the shared router's memory is observed.
 - Preserve the native helper identities and roles in compact tool descriptions, so discovery can select a capable helper without guessing.
+- Default managed inference to one active native request, preserving explicit parallel settings and using llama.cpp's own queue. A live four-slot shared-context exhaustion failed three unrelated requests together.
 - Exercise game creation, an interactive website, browser validation, research and helpers through the installed Qwen model using outcome-based prompts.
 
 ## Capabilities
 
-No new or changed product requirements. This change restores the accepted contracts in architecture, agents-workflows, environments-tools, state-recovery, models and backend-desktop, including the completed align-reviewed-behavior deltas. `skip_specs: true` avoids inventing a new requirement for existing obligations. Historical main-spec snapshot/backup language remains owned by its existing pending reconciliation.
+Most fixes restore the accepted contracts in architecture, agents-workflows, environments-tools, state-recovery, models and backend-desktop, including the completed align-reviewed-behavior deltas. The models delta changes MOD-007 to define the managed single-slot default and retain explicit native parallel choices. Historical main-spec snapshot/backup language remains owned by its existing pending reconciliation.
 
 ## Impact
 

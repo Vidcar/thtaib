@@ -396,6 +396,8 @@ class ModelManager:
             deployment=descriptor_deployment,
             huggingface_configuration=verified.huggingface_configuration,
             selected_template_source=template_source,
+            selected_startup=(deployment.applied_startup
+                if deployment is not None and configuration_id is None and startup is None else selected_startup),
         )
         result.context_size.applied = selected_startup.get("ctx_size")
         if deployment is not None and descriptor_deployment is None:
