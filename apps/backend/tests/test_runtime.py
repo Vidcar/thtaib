@@ -211,7 +211,7 @@ class RuntimePinTests(unittest.TestCase):
         self.assertTrue((install / "cudart64_134.dll").is_file())
         self.assertTrue((install / exe.name).is_file())
 
-    def test_managed_create_uses_stock_context_and_native_auto_modes(self) -> None:
+    def test_managed_create_uses_native_defaults_except_single_request_slot(self) -> None:
         manager = self._manager(nvidia_present=lambda: False)
         job = manager.import_local(LocalImportRequest(source_path=str(self.gguf)))
         manager.pin_runtime(
@@ -220,13 +220,32 @@ class RuntimePinTests(unittest.TestCase):
         deployment = manager.create_managed(
             ManagedDeploymentRequest(bundle_id=job.bundle_id or "", auto_start=False)
         )
-        for key in ("ctx_size", "n_gpu_layers", "flash_attn", "parallel", "kv_unified"):
+        for key in ("ctx_size", "n_gpu_layers", "flash_attn", "kv_unified"):
             self.assertNotIn(key, deployment.applied_startup)
         self.assertEqual(deployment.applied_startup["host"], "127.0.0.1")
+        self.assertEqual(deployment.applied_startup["parallel"], 1)
         args = startup_cli_args(deployment.applied_startup)
-        for flag in ("--ctx-size", "--n-gpu-layers", "--parallel", "--flash-attn"):
+        for flag in ("--ctx-size", "--n-gpu-layers", "--flash-attn"):
             self.assertNotIn(flag, args)
+        self.assertEqual(args[args.index("--parallel") + 1], "1")
         self.assertNotIn("ctx_size", deployment.requested_startup)
+        self.assertNotIn("parallel", deployment.requested_startup)
+
+    def test_managed_create_preserves_explicit_native_parallel_choices(self) -> None:
+        manager = self._manager(nvidia_present=lambda: False)
+        job = manager.import_local(LocalImportRequest(source_path=str(self.gguf)))
+        manager.pin_runtime(
+            PinRuntimeRequest(local_executable=str(self._fake_server(self.root / "rt")))
+        )
+        for parallel in (-1, 2):
+            with self.subTest(parallel=parallel):
+                deployment = manager.create_managed(ManagedDeploymentRequest(
+                    bundle_id=job.bundle_id or "", startup={"parallel": parallel}, auto_start=False,
+                ))
+                self.assertEqual(deployment.requested_startup["parallel"], parallel)
+                self.assertEqual(deployment.applied_startup["parallel"], parallel)
+                args = startup_cli_args(deployment.applied_startup)
+                self.assertEqual(args[args.index("--parallel") + 1], str(parallel))
 
     def test_pin_while_running_is_rejected_without_half_pin(self) -> None:
         manager = self._manager(nvidia_present=lambda: True)
