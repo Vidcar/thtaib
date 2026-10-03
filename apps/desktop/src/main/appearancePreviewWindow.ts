@@ -14,6 +14,8 @@ export interface AppearancePreviewState {
 interface PreviewHost {
   preloadPath: string;
   appUrl: string;
+  backendOrigin?: string;
+  additionalArguments?: string[];
   load: (window: BrowserWindow) => void;
   mainWindow: () => BrowserWindow | undefined;
   createWindow: (options: BrowserWindowConstructorOptions) => BrowserWindow;
@@ -65,10 +67,11 @@ export function openAppearancePreview(host: PreviewHost): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      additionalArguments: host.additionalArguments,
     },
   });
   preview = window;
-  installTrustedAppWindow(window, { appUrl: host.appUrl });
+  installTrustedAppWindow(window, { appUrl: host.appUrl, backendOrigin: host.backendOrigin });
   window.once("ready-to-show", () => window.show());
   window.on("move", () => remember(window));
   window.on("resize", () => remember(window));

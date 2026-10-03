@@ -33,6 +33,8 @@ class Check:
     cwd: Path
     reason: str
     env: dict[str, str] = field(default_factory=dict)
+    required_cases: tuple[str, ...] = ()
+    minimum_tests: int = 0
 
 
 def arguments(argv: list[str] | None = None) -> argparse.Namespace:
@@ -101,13 +103,26 @@ def select_checks(args: argparse.Namespace, root: Path = ROOT) -> list[Check]:
         else:
             checks.append(Check("desktop-build", ("pnpm", "run", "build"), desktop,
                                 "desktop acceptance: established typecheck, component regressions and build"))
+            checks.append(Check("desktop-ui", ("pnpm", "run", "test:ui"), desktop,
+                                "desktop acceptance: actual rendered UI and isolated backend safety journeys",
+                                required_cases=(
+                                    "restored history and unsent draft survive reopening",
+                                    "accepted lost acknowledgement and reconnect execute once",
+                                    "scoped approval and Stop govern actual owned effects",
+                                    "model load reload and failure remain truthful",
+                                    "retained output reopens after restart and source change",
+                                )))
+            if args.tier == "delivery":
+                checks.append(Check("desktop-electron", ("pnpm", "run", "test:electron"), desktop,
+                                    "desktop delivery: actual isolated built Electron application and native bridge",
+                                    required_cases=("actual Windows desktop uses isolated authenticated backend and native bridge",)))
     if "shared" in args.scopes:
         checks.append(Check("shared-contracts", ("uv", "run", "python", "../../scripts/generate_shared_contracts.py", "--check"),
                             backend, "shared scope: generated contract freshness, alongside both consumer suites"))
     if args.real_model:
         checks.append(Check("real-model-smoke", ("uv", "run", "python", "-m", "unittest", "tests_integration.test_real_model_smoke"),
                             backend, "explicit delivery request: isolated real runtime plumbing, not model capability or the open desktop",
-                            {"WORKBENCH_REAL_MODEL_SMOKE": "required"}))
+                            {"WORKBENCH_REAL_MODEL_SMOKE": "required"}, minimum_tests=4))
     return checks
 
 
@@ -157,11 +172,21 @@ def execute_check(check: Check, output: Path) -> dict:
         log_path.write_text(result["detail"] + "\n", encoding="utf-8")
     else:
         result["resolved_executable"] = executable
+        report_path = output / f"{check.name}-cases.json"
+        child_environment = {**os.environ, **check.env}
+        if check.required_cases:
+            child_environment["PLAYWRIGHT_JSON_OUTPUT_NAME"] = str(report_path)
         try:
             with log_path.open("wb") as log:
                 completed = subprocess.run([executable, *check.command[1:]], cwd=check.cwd,
-                                           env={**os.environ, **check.env}, stdout=log, stderr=subprocess.STDOUT)
+                                           env=child_environment, stdout=log, stderr=subprocess.STDOUT)
             result.update(status="passed" if completed.returncode == 0 else "failed", returncode=completed.returncode)
+            if completed.returncode == 0 and check.required_cases:
+                try:
+                    cases = required_playwright_results(report_path, check.required_cases)
+                    result.update(case_report=str(report_path), executed_cases=cases)
+                except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+                    result.update(status="incomplete", detail=f"Required rendered cases not established: {exc}")
         except OSError as exc:
             result.update(status="unavailable", returncode=None, detail=str(exc))
             with log_path.open("a", encoding="utf-8") as log:
@@ -171,12 +196,59 @@ def execute_check(check: Check, output: Path) -> dict:
     result["seconds"] = round(time.monotonic() - started, 3)
     lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
     result["suite_skip_observations"] = [line for line in lines if re.search(r"\bskipped\b|\bSKIP\b", line)]
+    if result["status"] == "passed" and check.minimum_tests:
+        counts = [int(match.group(1)) for line in lines
+                  if (match := re.fullmatch(r"Ran (\d+) tests? in .+", line.strip()))]
+        skipped = any(re.search(r"\bskipped=\d+", line) for line in lines)
+        if not counts or counts[-1] < check.minimum_tests or skipped:
+            result.update(status="incomplete", detail="Required real-model cases did not all execute without skips")
+        else:
+            result["executed_tests"] = counts[-1]
     return result
+
+
+def required_playwright_results(report_path: Path, required: tuple[str, ...]) -> list[str]:
+    """An exit-zero launcher is insufficient evidence that mandatory cases ran."""
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    observed: dict[str, list[dict]] = {}
+
+    def visit(suites: list[dict]) -> None:
+        for suite in suites:
+            for spec in suite.get("specs", []):
+                cases = spec.get("tests", [])
+                if not cases:
+                    raise ValueError(f"discovered case has no executed tests: {spec['title']}")
+                observed.setdefault(spec["title"], []).extend(cases)
+            visit(suite.get("suites", []))
+
+    visit(report["suites"])
+    if report.get("errors"):
+        raise ValueError("suite reported setup or teardown errors")
+    for name in required:
+        cases = observed.get(name, [])
+        if len(cases) != 1 or cases[0].get("expectedStatus") != "passed":
+            raise ValueError(f"required case missing, duplicated or disabled: {name}")
+        results = cases[0].get("results", [])
+        if len(results) != 1 or results[0].get("status") != "passed":
+            raise ValueError(f"required case did not pass once without skips/retries: {name}")
+    # Additional discovered cases must also execute successfully. Honest required
+    # counts cannot conceal a skipped or failed companion case.
+    for cases in observed.values():
+        for case in cases:
+            if case.get("expectedStatus") != "passed" or len(case.get("results", [])) != 1 \
+                    or case["results"][0].get("status") != "passed":
+                raise ValueError("suite contains an unexecuted, skipped, retried or failed case")
+    return list(required)
 
 
 def run_checks(root: Path, checks: list[Check], args: argparse.Namespace) -> tuple[int, Path]:
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
-    output = root / ".scratch/verification" / run_id
+    scratch = root.resolve() / ".scratch"
+    if scratch.resolve() != scratch:
+        raise OSError("Checkout scratch evidence directory must not redirect outside its expected path")
+    output = scratch / "verification" / run_id
+    if scratch not in output.resolve().parents:
+        raise OSError("Verification evidence must remain beneath checkout root scratch")
     output.mkdir(parents=True)
     report = {"tier": args.tier, "scopes": sorted(args.scopes), "started_utc": datetime.now(timezone.utc).isoformat(),
               "checks": [], "independent_review": "not certified by this command",
@@ -230,7 +302,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.plan:
         print("Plan only: nothing executed; no acceptance, review, live or build evidence produced.")
         return 0
-    return run_checks(ROOT, checks, args)[0]
+    try:
+        return run_checks(ROOT, checks, args)[0]
+    except OSError as exc:
+        print(f"Cannot create safe checkout evidence: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

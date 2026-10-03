@@ -23,10 +23,20 @@ const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     if (req.method === "GET" && url.pathname === "/v1/agent-interaction/threads/react_owner/state") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ values: { messages: [], workbench: { run: null } }, next: [], tasks: [] }));
+      res.end(JSON.stringify({ values: { messages: [], workbench: { run: { id: "run_1", status: "running" } } }, next: ["running"], tasks: [], interaction_cursor: 0 }));
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/v1/agent-interaction/threads/react_owner/history") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("[]");
       return;
     }
     if (req.method === "POST" && url.pathname === "/v1/agent-interaction/threads/react_owner/stream/events") {
+      if (process.env.WORKBENCH_TEST_DISABLE_STREAM === "1") {
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "deliberately broken observation fixture" }));
+        return;
+      }
       streamRequests += 1;
       res.writeHead(200, { "content-type": "text/event-stream" });
       res.write(`data: ${JSON.stringify({
@@ -60,31 +70,44 @@ const address = server.address();
 const port = typeof address === "object" && address ? address.port : 0;
 globalThis.window = { workbench: { backendUrl: `http://127.0.0.1:${port}` } };
 
-const vite = await createViteServer({ root: desktopRoot, appType: "custom", server: { middlewareMode: true, hmr: false }, logLevel: "error" });
+const vite = await createViteServer({ configFile: false, root: desktopRoot, appType: "custom", server: { middlewareMode: true, hmr: false }, logLevel: "error" });
+let renderer;
 try {
-  const { InteractionStream } = await vite.ssrLoadModule("/src/renderer/InteractionStream.tsx");
+  const { InteractionStream, useWorkbenchProjection } = await vite.ssrLoadModule("/src/renderer/InteractionStream.tsx");
   let renderCount = 0;
+  const observedMessages = new Map();
+  function Observation({ stream }) {
+    const { messages } = useWorkbenchProjection(stream);
+    for (const message of messages) observedMessages.set(message.id, message.content);
+    return React.createElement("span", null, messages.map(message => message.content).join(" "));
+  }
   function Probe() {
     return React.createElement(InteractionStream, { threadId: "react_owner" }, (stream) => {
       renderCount += 1;
-      return React.createElement("span", null, stream.values.messages?.length ?? 0);
+      return React.createElement(Observation, { stream });
     });
   }
-  let renderer;
   await act(async () => {
     renderer = create(React.createElement(StrictMode, null, React.createElement(Probe)));
-    await new Promise((resolve) => setTimeout(resolve, 80));
   });
+  const deadline = Date.now() + 4000;
+  while (!observedMessages.has("m2") && Date.now() < deadline) {
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+  }
   await act(async () => {
     renderer.update(React.createElement(StrictMode, null, React.createElement(Probe)));
     await new Promise((resolve) => setTimeout(resolve, 40));
   });
   assert.ok(renderCount > 0, "InteractionStream should render through React");
   assert.equal(commandRequests, 0, "mounting/render updates must not send SDK commands");
+  assert.ok(streamRequests > 0, "observation must actually open a stream");
   assert.ok(streamRequests <= 2, `StrictMode ownership should avoid per-token duplicate stream effects; saw ${streamRequests}`);
-  await act(async () => renderer.unmount());
+  assert.equal(observedMessages.get("m1"), "first", "the native selector must receive the first streamed message");
+  assert.equal(observedMessages.get("m2"), "second", "the native selector must receive the later streamed message");
 } finally {
+  if (renderer) await act(async () => renderer.unmount());
   await vite.close();
+  server.closeAllConnections();
   await new Promise((resolve) => server.close(resolve));
 }
 
