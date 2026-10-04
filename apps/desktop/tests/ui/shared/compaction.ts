@@ -17,7 +17,7 @@ interface CompactionRow {
   archive: Message[]; canonical: Message[]; cutoff_index: number; native_summary_count: number;
   offload_readable: boolean; read_count: number; write_count: number;
   write_content: string; original_tool_results: Message[];
-  model_calls: Array<{ purpose: string; input_tokens?: number; message_ids?: string[]; phase?: string }>;
+  model_calls: Array<{ purpose: string; input_tokens?: number; message_ids?: string[]; phase?: string; run_id?: string; request_id?: string }>;
   native_input_counts: Array<{ ordinal: number; run_id: string; purpose: string; input_tokens: number | null; tools_sha256: string | null; basis: "native" | "estimated" | "unavailable" }>;
   native_input_capture_errors: unknown[];
 }
@@ -127,21 +127,43 @@ async function enableCompletionNotice(page: Page, backend: BackendHandle): Promi
 function assertNativeReduction(row: CompactionRow, real: boolean) {
   expect(row.native_input_capture_errors, "Counter observation must retain complete evidence").toEqual([]);
   const counts = [...row.native_input_counts].sort((left, right) => left.ordinal - right.ordinal);
-  const reductions: Array<{ before: number; after: number; before_ordinal: number; after_ordinal: number; basis: string; tools_sha256: string }> = [];
-  let previousWork: typeof counts[number] | undefined, summarized = false;
+  const reductions: Array<{ before: number; after: number; before_ordinal: number; summary_ordinal: number; after_ordinal: number;
+    basis: string; tools_sha256: string; intermediate_full_counts: Array<{ ordinal: number; input_tokens: number }>;
+    actual_work_input_tokens?: number; actual_work_request_id?: string }> = [];
+  let previousWork: typeof counts[number] | undefined, inSummaryBlock = false;
+  let anchor: { before: typeof counts[number]; summaryOrdinal: number; intermediate: Array<{ ordinal: number; input_tokens: number }> } | undefined;
   for (const count of counts) {
-    if (count.purpose === "summary") { summarized = true; continue; }
+    if (count.purpose === "summary") {
+      if (!inSummaryBlock) anchor = previousWork?.input_tokens != null && previousWork.run_id === count.run_id
+        ? { before: previousWork, summaryOrdinal: count.ordinal, intermediate: [] } : undefined;
+      inSummaryBlock = true;
+      continue;
+    }
+    inSummaryBlock = false;
     // Partial retention slices omit tools; only complete schema-bearing work
     // projections/counters can establish before/after active request pressure.
-    if (count.purpose !== "work" || !count.tools_sha256 || count.input_tokens === null) continue;
-    if (summarized && previousWork?.input_tokens != null && count.input_tokens < previousWork.input_tokens
-      && count.tools_sha256 === previousWork.tools_sha256 && count.basis === previousWork.basis) {
-      reductions.push({ before: previousWork.input_tokens, after: count.input_tokens,
-        before_ordinal: previousWork.ordinal, after_ordinal: count.ordinal, basis: count.basis, tools_sha256: count.tools_sha256 });
+    if (count.purpose !== "work" || !count.tools_sha256) continue;
+    if (anchor && (count.run_id !== anchor.before.run_id || count.tools_sha256 !== anchor.before.tools_sha256
+      || count.basis !== anchor.before.basis)) anchor = undefined;
+    if (anchor && count.input_tokens !== null) {
+      const actualWork = row.model_calls.find((call, index) => call.purpose === "work" && call.phase === "completed" && call.run_id === count.run_id
+        && call.input_tokens === count.input_tokens && row.model_calls.slice(0, index)
+          .some(earlier => earlier.purpose === "summary" && earlier.phase === "completed" && earlier.run_id === count.run_id));
+      if (count.input_tokens < anchor.before.input_tokens! && (!real || actualWork)) {
+        reductions.push({ before: anchor.before.input_tokens!, after: count.input_tokens,
+          before_ordinal: anchor.before.ordinal, summary_ordinal: anchor.summaryOrdinal, after_ordinal: count.ordinal,
+          basis: count.basis, tools_sha256: count.tools_sha256, intermediate_full_counts: anchor.intermediate,
+          ...(real ? { actual_work_input_tokens: actualWork!.input_tokens, actual_work_request_id: actualWork!.request_id } : {}) });
+        anchor = undefined;
+      } else {
+        // A stock summary can leave the recent tool tail oversized. Preserve
+        // the pre-summary anchor until native budget recovery clips that tail.
+        anchor.intermediate.push({ ordinal: count.ordinal, input_tokens: count.input_tokens });
+      }
     }
-    previousWork = count; summarized = false;
+    previousWork = count;
   }
-  expect(reductions.length, "Observed prospective work context must shrink across a native summary boundary").toBeGreaterThan(0);
+  expect(reductions.length, "Observed work context must shrink through native summary and tail budget recovery").toBeGreaterThan(0);
   if (real) expect(reductions.some(reduction => reduction.basis === "native"), "Actual work uses the runtime's existing native counter").toBe(true);
   return reductions;
 }
