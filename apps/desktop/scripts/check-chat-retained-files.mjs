@@ -54,8 +54,12 @@ async function checkInlineRunFilteringAndReuse(ChatRetainedFiles) {
   const reused = [];
   let opened = [];
   let renderer;
+  const reads = [];
   const restore = mockFetch(async (url) => {
-    assert.match(String(url), /\/v1\/assets\/asset_output\/preview\?session_id=chat_1/);
+    const address = new URL(String(url));
+    assert.equal(address.searchParams.get("session_id"), "chat_1");
+    assert.ok(["/v1/assets/asset_output/preview", "/v1/assets/asset_output/content"].includes(address.pathname), "only scoped preview and original-content reads are allowed");
+    reads.push(address.pathname);
     return preview("asset_output", "Source changed; retained text", "changed");
   });
   try {
@@ -92,8 +96,10 @@ async function checkInlineRunFilteringAndReuse(ChatRetainedFiles) {
       button(renderer, "Open text").props.onClick();
     });
     assert.deepEqual(opened, ["asset_output"], "open action should report opened asset ids to the parent");
+    assert.deepEqual(reads, ["/v1/assets/asset_output/preview", "/v1/assets/asset_output/content"], "Open text must fetch the retained original after its preview");
   } finally {
     restore();
+    if (renderer) await act(async () => renderer.unmount());
   }
 }
 
