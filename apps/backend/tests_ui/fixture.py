@@ -447,7 +447,8 @@ class ApplicationFixture:
             marker = "COMPACTION-FACT-JUPITER-7391"
             data = {"marker": marker, "internal_summary_marker": "INTERNAL-COMPACTION-SUMMARY",
                 "read_path": "/compaction-source.txt", "write_path": "/compaction-effect.txt",
-                "write_content": "one compaction history effect", "expected_read_count": 3,
+                "write_content": "one compaction history effect",
+                "expected_read_count": 1 if self.inference == "real" else 3,
                 "tool_start_marker": "ORIGINAL-COMPACTION-RANGE-0-START",
                 "tool_end_marker": "ORIGINAL-COMPACTION-RANGE-0-END",
                 "tools": ["read_file", "write_file"],
@@ -455,13 +456,19 @@ class ApplicationFixture:
             deployment = self.app.state.manager.get_deployment(self.seed_data["deployment_id"])
             if self.inference == "real" and deployment.server_props and deployment.server_props.chat_template_caps.get("supports_thinking"):
                 data["request_settings"]["reasoning"] = "off"
+            reads = (f"Then call read_file exactly once with file_path {data['read_path']}, offset 0, and limit 500. "
+                if self.inference == "real" else
+                f"Then call read_file three times with file_path {data['read_path']}, limit 500, and offsets 0, then 500, then 1000. ")
+            read_guidance = ("Read only this one range. If the result is clipped, proceed to your final answer. "
+                if self.inference == "real" else
+                "Read only these three ranges. If a result is clipped, keep going to the next requested range. ")
+            finish = "After this single read" if self.inference == "real" else "After all three reads"
             data["task"] = (f"Remember this exact fact: {marker}. First call write_file exactly once with file_path "
-                f"{data['write_path']} and content exactly {data['write_content']}. Then call read_file three times "
-                f"with file_path {data['read_path']}, limit 500, and offsets 0, then 500, then 1000. "
+                f"{data['write_path']} and content exactly {data['write_content']}. " + reads +
                 "Call only one tool in each assistant response and wait for its result before the next call. "
-                "Read only these three ranges. If a result is clipped, keep going to the next requested range. "
+                + read_guidance +
                 "Do not reread a range, do not repeat the write, and do not read conversation_history files. "
-                f"After all three reads, reply briefly with {marker}.")
+                f"{finish}, reply briefly with {marker}.")
             data["followup_task"] = "Reply with only the exact COMPACTION-FACT code I originally asked you to remember. Do not call any tools."
             # Complete modest lines create native context pressure. The archive
             # must preserve the emitted result including its final marker when

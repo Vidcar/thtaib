@@ -380,12 +380,35 @@ class UIFixtureTests(unittest.TestCase):
             finally:
                 restarted.close()
 
+    def test_real_compaction_input_authors_one_large_read_without_dispatching_a_model(self):
+        seed = self.seed()
+        model_runs = list(self.fixture.model_run_ids)
+        model_count = len(self.fixture.model_process_evidence())
+        with patch.object(self.fixture, "inference", "real"):
+            self.fixture.prepare_compaction_history()
+        data = self.fixture.seed_data["compaction"]
+        self.assertEqual(data["expected_read_count"], 1)
+        self.assertIn("write_file exactly once", data["task"])
+        self.assertIn(f"content exactly {data['write_content']}", data["task"])
+        self.assertIn(f"read_file exactly once with file_path {data['read_path']}, offset 0, and limit 500", data["task"])
+        self.assertIn(f"After this single read, reply briefly with {data['marker']}", data["task"])
+        self.assertNotIn("offsets 0, then 500, then 1000", data["task"])
+        self.assertEqual(data["request_settings"], {"temperature": 0.0, "seed": 7, "max_tokens": 512})
+        source = (self.root / "project" / data["read_path"].lstrip("/")).read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(source), 1500)
+        self.assertIn(data["tool_start_marker"], source[0])
+        self.assertIn(data["tool_end_marker"], source[499])
+        self.assertEqual(self.fixture.model_run_ids, model_runs)
+        self.assertEqual(len(self.fixture.model_process_evidence()), model_count)
+        self.assertEqual(self.fixture.seed_data["conversation_id"], seed["conversation_id"])
+
     def test_compaction_fixture_retains_emitted_tool_results_through_repeated_summary_and_restart(self):
         seed = self.seed("compaction_history")
         binding = self.post("/v1/agent-interaction/threads", {
             "source_surface": "chat", "conversation_id": seed["conversation_id"],
         })
         data = seed["compaction"]
+        self.assertEqual(data["expected_read_count"], 3)
         self.post(f"/v1/chat/conversations/{seed['conversation_id']}/start", {
             "task": data["task"], "presented_tools": data["tools"], "approval_mode": "full_access",
             "per_request_overrides": data["request_settings"],
