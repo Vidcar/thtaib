@@ -86,13 +86,17 @@ class VerificationSelectionTests(unittest.TestCase):
         self.assertEqual(smoke.command[-1], "tests_integration.test_real_model_smoke")
         self.assertEqual(smoke.minimum_tests, 4)
         ui = self.checks("--scope", "desktop")["desktop-ui"]
-        self.assertEqual(len(ui.required_cases), 12)
+        self.assertEqual(len(ui.required_cases), 14)
+        for surface in ("Chat", "Agent run"):
+            self.assertIn(f"{surface} parallel helper approvals preserve scoped effects through navigation and reconnect", ui.required_cases)
         self.assertNotIn("desktop-electron", self.checks("--scope", "desktop"))
         native = self.checks("--tier", "delivery", "--scope", "desktop")["desktop-electron"]
-        self.assertEqual(len(native.required_cases), 2)
+        self.assertEqual(len(native.required_cases), 3)
+        self.assertIn("actual Windows parallel helper approvals preserve both screens and scoped effects", native.required_cases)
         real = self.checks("--tier", "delivery", "--scope", "shared", "--real-model")["desktop-real-model"]
         self.assertEqual(real.env, {"WORKBENCH_NATIVE_REAL_MODEL": "required"})
-        self.assertEqual(real.required_cases, ("actual Windows real model sending survives lost responses and writes one file",))
+        self.assertEqual(real.required_cases, ("actual Windows real model sending survives lost responses and writes one file",
+                                              "actual Windows real model parallel helpers approve one write and reject the other"))
         self.assertNotIn("desktop-real-model", self.checks("--tier", "delivery", "--scope", "backend", "--real-model"))
         self.assertNotIn("desktop-real-model", self.checks("--tier", "delivery", "--scope", "desktop"))
 

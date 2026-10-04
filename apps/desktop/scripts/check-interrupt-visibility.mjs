@@ -12,6 +12,8 @@ const desktopRoot = path.join(repoRoot, "apps/desktop");
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const pending = {
+  interrupt_id: "sdk-int",
+  namespace: ["n"],
   kind: "deepagents_interrupt_on",
   environment: "windows_host_shell",
   isolation: "none",
@@ -32,8 +34,17 @@ function stream(run, interruptRunId = run?.id, interrupts = [{ id: "sdk-int", na
 
 const vite = await createViteServer({ root: desktopRoot, appType: "custom", server: { middlewareMode: true, hmr: false }, logLevel: "error" });
 try {
-  const { visibleApprovalInterrupt } = await vite.ssrLoadModule("/src/renderer/InteractionStream.tsx");
+  const { visibleApprovalInterrupt: realVisibleApprovalInterrupt } = await vite.ssrLoadModule("/src/renderer/InteractionStream.tsx");
+  // This deliberately broken control recreates the former first-SDK-card join.
+  // It must fail the same target/body assertions as the shipped projection.
+  const visibleApprovalInterrupt = process.env.WORKBENCH_APPROVAL_CONTROL === "wrong-card"
+    ? (stream, run) => {
+      const correct = realVisibleApprovalInterrupt(stream, run);
+      return correct ? { ...correct, id: stream.interrupts[0]?.id, namespace: stream.interrupts[0]?.namespace ?? [] } : null;
+    }
+    : realVisibleApprovalInterrupt;
   const { InterruptApproval } = await vite.ssrLoadModule("/src/renderer/InterruptApproval.tsx");
+  const { helperApprovalOwner } = await vite.ssrLoadModule("/src/renderer/RunActivitySummary.tsx");
 
   assert.equal(
     visibleApprovalInterrupt(stream({ id: "run-cancelled", status: "cancelled", pending_interrupt: null }), { id: "run-cancelled", status: "cancelled", pending_interrupt: null }),
@@ -45,6 +56,9 @@ try {
     null,
     "live authoritative run with cleared pending_interrupt must hide stale SDK interrupts",
   );
+  const cancelling = { id: "run-cancelling", status: "cancel_requested", pending_interrupt: pending };
+  assert.equal(visibleApprovalInterrupt(stream(cancelling), cancelling), null,
+    "requested cancellation must hide actionable cards even while the SDK retains its old requests");
   assert.equal(
     visibleApprovalInterrupt(stream({ id: "run-current", status: "running", pending_interrupt: pending }, "run-other"), { id: "run-current", status: "running", pending_interrupt: pending }),
     null,
@@ -52,9 +66,7 @@ try {
   );
 
   const initial = visibleApprovalInterrupt(stream(null, "run-later"), null);
-  assert.equal(initial?.id, "sdk-int", "initial raw interrupt before authoritative run projection should remain visible");
-  assert.deepEqual(initial?.namespace, ["n"]);
-  assert.equal(initial?.pending.action_requests[0].name, "execute");
+  assert.equal(initial, null, "raw interrupts wait for an authoritative selected run before offering decisions");
 
   const visible = visibleApprovalInterrupt(
     stream({ id: "run-current", status: "running", pending_interrupt: pending }, "run-current"),
@@ -63,6 +75,74 @@ try {
   assert.equal(visible?.id, "sdk-int", "authoritative pending interrupt should preserve actual SDK interrupt id");
   assert.deepEqual(visible?.namespace, ["n"], "authoritative pending interrupt should preserve actual SDK namespace");
   assert.equal(visible?.pending, pending, "presentation should use authoritative app pending_interrupt");
+  assert.equal(visible?.waitingCount, 1);
+
+  const alpha = { ...pending, interrupt_id: "alpha-native", namespace: ["tools:alpha", "task:write"], identity: "alpha-native", action_requests: [{ name: "write_file", args: { path: "alpha.txt", content: "Alpha only", tool_call_id: "same-call" }, allowed_decisions: ["approve", "reject"] }] };
+  const beta = { ...alpha, interrupt_id: "beta-native", namespace: ["tools:beta", "task:write"], identity: "beta-native", action_requests: [{ ...alpha.action_requests[0], args: { path: "beta.txt", content: "Beta only", tool_call_id: "same-call" } }] };
+  const alphaSDK = { id: alpha.interrupt_id, namespace: alpha.namespace, value: alpha };
+  const betaSDK = { id: beta.interrupt_id, namespace: beta.namespace, value: beta };
+  const parallelRun = { id: "parallel-run", status: "running", pending_interrupt: alpha, child_runs: [
+    { name: "Alpha", namespace: ["tools:alpha"] }, { name: "Beta", namespace: ["tools:beta"] },
+  ] };
+  for (const selectedPending of [alpha, beta]) for (const order of [[betaSDK, alphaSDK], [alphaSDK, betaSDK]]) {
+    const selectedRun = { ...parallelRun, pending_interrupt: selectedPending };
+    const selected = visibleApprovalInterrupt(stream(selectedRun, selectedRun.id, order), selectedRun);
+    assert.equal(selected?.id, selectedPending.interrupt_id, "wrong-card control: SDK order must never choose a different helper target");
+    assert.deepEqual(selected?.namespace, selectedPending.namespace);
+    assert.equal(selected?.pending.action_requests[0].args.path, selectedPending.action_requests[0].args.path, "body belongs to the exact selected native target");
+    assert.equal(selected?.waitingCount, 2, "all actionable pending helpers count, independent of SDK order");
+    assert.equal(helperApprovalOwner(selectedRun, selected.namespace), selectedPending === alpha ? "Alpha" : "Beta", "selected card names its exact helper");
+  }
+  assert.equal(visibleApprovalInterrupt(stream(parallelRun, parallelRun.id, [{ ...alphaSDK, namespace: undefined, ns: alpha.namespace }, betaSDK]), parallelRun)?.id, alpha.interrupt_id, "legacy native ns tuple is matched exactly too");
+  for (const [label, sdk] of [
+    ["wrong namespace", { ...alphaSDK, namespace: beta.namespace }],
+    ["namespace prefix", { ...alphaSDK, namespace: ["tools:alpha"] }],
+    ["namespace suffix", { ...alphaSDK, namespace: [...alpha.namespace, "deeper"] }],
+    ["stale identity", { ...alphaSDK, id: "stale-alpha" }],
+  ]) assert.equal(visibleApprovalInterrupt(stream(parallelRun, parallelRun.id, [sdk, betaSDK]), parallelRun), null, `${label} cannot display or target another request`);
+  assert.equal(visibleApprovalInterrupt(stream(parallelRun, parallelRun.id, [alphaSDK, alphaSDK]), parallelRun), null, "ambiguous duplicate native identities cannot display an actionable card");
+  assert.equal(visibleApprovalInterrupt(stream(parallelRun, parallelRun.id, [alphaSDK]), { ...parallelRun, pending_interrupt: { ...alpha, interrupt_id: undefined } }), null, "an unidentified selected record cannot borrow an SDK target");
+  assert.equal(visibleApprovalInterrupt(stream({ ...parallelRun, id: "earlier-run" }, parallelRun.id, [alphaSDK]), parallelRun), null, "projected run ownership must agree with selected run ownership");
+  const browserPending = { ...pending, kind: "browser_control" };
+  assert.equal(visibleApprovalInterrupt(stream(parallelRun, parallelRun.id, [{ id: "browser", namespace: [], value: browserPending }, alphaSDK, betaSDK]), parallelRun)?.waitingCount, 2, "browser takeover remains with its existing owner and does not inflate action counts");
+
+  const helperResponses = [];
+  let helperRenderer;
+  const renderHelperCard = (selectedRun, sdkInterrupts, busy = false) => {
+    const selected = visibleApprovalInterrupt(stream(selectedRun, selectedRun.id, sdkInterrupts), selectedRun);
+    return selected ? React.createElement(InterruptApproval, {
+      key: JSON.stringify([selectedRun.id, selected.id, selected.namespace]), pending: selected.pending,
+      ownerLabel: helperApprovalOwner(selectedRun, selected.namespace), waitingCount: selected.waitingCount, busy,
+      onRespond: payload => helperResponses.push({ interrupt_id: selected.id, namespace: selected.namespace, response: payload }),
+    }) : null;
+  };
+  await act(async () => { helperRenderer = create(renderHelperCard(parallelRun, [betaSDK, alphaSDK])); });
+  assert.match(textOf(helperRenderer.root), /Review requested actions · Alpha/);
+  assert.match(textOf(helperRenderer.root), /2 requests waiting/);
+  assert.match(textOf(helperRenderer.root), /alpha.txt/);
+  assert.doesNotMatch(textOf(helperRenderer.root), /beta.txt/);
+  await act(async () => button(helperRenderer, "Send decisions").props.onClick());
+  assert.deepEqual(helperResponses.at(-1), { interrupt_id: alpha.interrupt_id, namespace: alpha.namespace, response: { decisions: [{ type: "approve", scope: "once" }] } });
+  // A pending command keeps the other helper's decision unavailable. Only a
+  // confirmed run selection advances to the remaining card, including after remount.
+  await act(async () => helperRenderer.update(renderHelperCard(parallelRun, [alphaSDK, betaSDK], true)));
+  assert.equal(button(helperRenderer, "Send decisions").props.disabled, true);
+  assert.match(textOf(helperRenderer.root), /Review requested actions · Alpha/);
+  const betaRun = { ...parallelRun, pending_interrupt: beta };
+  await act(async () => helperRenderer.update(renderHelperCard(betaRun, [betaSDK])));
+  assert.match(textOf(helperRenderer.root), /Review requested actions · Beta/);
+  assert.match(textOf(helperRenderer.root), /1 request waiting/);
+  assert.doesNotMatch(textOf(helperRenderer.root), /alpha.txt/);
+  await act(async () => helperRenderer.unmount());
+  await act(async () => { helperRenderer = create(renderHelperCard(betaRun, [betaSDK])); });
+  assert.equal(helperResponses.length, 1, "reconnect remount observes the selected card without submitting");
+  const rejectBeta = helperRenderer.root.findAll(node => node.type === "input").find(node => textOf(node.parent).includes("Reject"));
+  await act(async () => rejectBeta.props.onChange());
+  await act(async () => button(helperRenderer, "Send decisions").props.onClick());
+  assert.deepEqual(helperResponses.at(-1), { interrupt_id: beta.interrupt_id, namespace: beta.namespace, response: { decisions: [{ type: "reject", scope: "once" }] } });
+  await act(async () => helperRenderer.update(renderHelperCard({ ...betaRun, status: "completed", pending_interrupt: null }, [alphaSDK, betaSDK])));
+  assert.equal(helperRenderer.toJSON(), null, "completed runs never reopen replayed pending cards");
+  await act(async () => helperRenderer.unmount());
 
   const mixedPending = {
     ...pending,
@@ -123,9 +203,9 @@ try {
     renderer.update(React.createElement(InterruptApproval, { pending: choicePending, onRespond: (payload) => responses.push(payload) }));
   });
   assert.equal(button(renderer, "Send decisions").props.disabled, true, "a question needs a typed answer before the mixed batch can resume");
-  const beta = renderer.root.findAll((node) => node.type === "input").find((node) => textOf(node.parent).includes("beta"));
+  const betaChoice = renderer.root.findAll((node) => node.type === "input").find((node) => textOf(node.parent).includes("beta"));
   await act(async () => {
-    beta.props.onChange();
+    betaChoice.props.onChange();
   });
   await act(async () => {
     button(renderer, "Send decisions").props.onClick();
@@ -161,7 +241,7 @@ try {
   assert.deepEqual(responses.at(-1), { decisions: [{ type: "reject", scope: "once", message: "The user cancelled this question. Do not repeat it unless asked." }] }, "cancel question should reject its action explicitly");
 
   const setup = { version: 1, capability: "browser", id: "browser-install", tool_names: ["browser_navigate"], code: "browser_worker_missing", message: "Install the Browser worker in Settings.", action: "Set up Browser", target: "settings", target_id: null, requires_new_input: false };
-  const setupPending = { ...pending, kind: "capability_setup", environment: "capability_setup", identity: "saved-setup-checkpoint", action_requests: [{ name: "capability_setup", args: {}, allowed_decisions: ["respond", "reject"], setup }] };
+  const setupPending = { ...pending, kind: "capability_setup", environment: "capability_setup", identity: "saved-setup-checkpoint", interrupt_id: "native-setup-id", namespace: ["helper", "tools"], action_requests: [{ name: "capability_setup", args: {}, allowed_decisions: ["respond", "reject"], setup }] };
   const setupRun = { id: "setup-run", status: "running", pending_interrupt: setupPending };
   const setupVisible = visibleApprovalInterrupt(stream(setupRun, setupRun.id, [{ id: "native-setup-id", namespace: ["helper", "tools"], value: setupPending }]), setupRun);
   assert.equal(setupVisible.id, "native-setup-id");

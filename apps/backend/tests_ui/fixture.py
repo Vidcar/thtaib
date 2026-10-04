@@ -99,6 +99,7 @@ class ApplicationFixture:
         self.negative_control = None
         self.faults = {"lost_acknowledgements": 0, "stream_disconnects": 0, "draft_losses": 0, "state_lookup_failures": 0}
         self.model_run_ids: list[str] = []
+        self.helper_models: dict[str, FixtureModel] = {}
         self.model_process_identities: list[Any] = []
         self.lock = threading.RLock()
         self.seed_path = self.root / "ui-seed.json"
@@ -132,6 +133,22 @@ class ApplicationFixture:
             self.model_run_ids.append(run.id)
         if self.inference == "real":
             return self.native_model_factory(run, sink)
+        if self.scenario == "parallel_helpers":
+            if run.id in self.helper_models:
+                return self.helper_models[run.id]
+            if run.parent_run_id:
+                helper = next(item for item in self.seed_data["parallel_helpers"] if item["id"] == run.agent_setup_id)
+                script = [AIMessage(content=f"{helper['name']} requests its own write", tool_calls=[{
+                    "name": "write_file", "args": {"file_path": helper["file_path"], "content": helper["content"]},
+                    "id": "shared-helper-write"}]), AIMessage(content=f"{helper['name']} settled")]
+            else:
+                script = [AIMessage(content="Delegating two independent writes", tool_calls=[{
+                    "name": "task", "args": {"subagent_type": item["id"], "description": item["task"]},
+                    "id": f"delegate-{index}"} for index, item in enumerate(self.seed_data["parallel_helpers"])]),
+                    AIMessage(content="Parallel helper decisions settled")]
+            model = FixtureModel(self, run, script)
+            self.helper_models[run.id] = model
+            return model
         if run.task == "Saved baseline question":
             script = [AIMessage(content="Saved baseline answer")]
         elif self.scenario in {"approval", "retained"}:
@@ -256,9 +273,11 @@ class ApplicationFixture:
 
     def configure(self, body):
         scenario = body.get("scenario", self.scenario)
-        if scenario not in {"baseline", "lost_ack", "approval", "command", "retained", "model", "partial_effect"}:
+        if scenario not in {"baseline", "lost_ack", "approval", "command", "retained", "model", "partial_effect", "parallel_helpers"}:
             raise HTTPException(400, "Unknown UI fixture scenario")
         self.scenario = scenario
+        if scenario == "parallel_helpers" and self.seed_data:
+            self.prepare_parallel_helpers()
         if "hold_model" in body:
             self.hold_model = bool(body["hold_model"])
             self.release.clear() if self.hold_model else self.release.set()
@@ -286,6 +305,40 @@ class ApplicationFixture:
         if body.get("change_source"):
             (self.root / "project" / "baseline-output.txt").write_text("Changed source after retention", encoding="utf-8")
         return self.state()
+
+    def prepare_parallel_helpers(self):
+        """Author disposable selections; actual admission/graphs own every request."""
+        from workbench_backend.agents.setup_schemas import AgentSetupCreateRequest
+
+        if "parallel_helpers" not in self.seed_data:
+            helpers = []
+            request_settings = {"temperature": 0.0, "seed": 7, "max_tokens": 128}
+            deployment = self.app.state.manager.get_deployment(self.seed_data["deployment_id"])
+            if self.inference == "real" and deployment.server_props and deployment.server_props.chat_template_caps.get("supports_thinking"):
+                request_settings["reasoning"] = "off"
+            for name, stem in (("Alpha helper", "alpha"), ("Beta helper", "beta")):
+                file_path, content = f"/helper-{stem}.txt", f"{stem} helper output"
+                task = f"Call write_file exactly once with file_path {file_path} and content exactly {content}. If denied, do not retry. Return one short final answer."
+                helper = self.app.state.setups.create_setup(AgentSetupCreateRequest(name=name,
+                    role=task, configuration={"deployment_id": self.seed_data["deployment_id"],
+                        "presented_tools": ["write_file"], "approval_mode": "ask",
+                        "input_policy": {"tool_loading": "always"},
+                        "per_request_overrides": request_settings}))
+                helpers.append({"id": helper.id, "name": name, "file_path": file_path, "content": content, "task": task})
+            self.seed_data["parallel_helpers"] = helpers
+            self.seed_data["parallel_helper_task"] = (
+                "Call task twice in one assistant response, using exactly these two separate argument objects: "
+                + json.dumps([{"subagent_type": item["id"], "description": item["task"]} for item in helpers])
+                + " Each helper's description contains only its own task. Do not call write_file yourself. After the helpers settle, reply briefly and do not delegate again.")
+            self.seed_data["parallel_request_settings"] = {**request_settings, "max_tokens": 512}
+            conversation = self.app.state.chat.store.get(self.seed_data["conversation_id"])
+            from workbench_backend.agents.setup_schemas import AgentInputPolicy
+            selection = {"helper_agent_ids": [item["id"] for item in helpers], "approval_mode": "ask",
+                "presented_tools": ["write_file"], "input_policy": AgentInputPolicy(tool_loading="always"),
+                "per_request_overrides": self.seed_data["parallel_request_settings"]}
+            self.app.state.chat.store.put(conversation.model_copy(update={**selection,
+                "setup_overrides": conversation.setup_overrides.model_copy(update=selection)}))
+            self.seed_path.write_text(json.dumps(self.seed_data), encoding="utf-8")
 
     def seed_real(self, project, project_path):
         from tests_integration.assets import resolve_assets
@@ -425,14 +478,29 @@ class ApplicationFixture:
     def state(self):
         runs = self.app.state.app_store.list_runs()
         seed_ids = set(self.seed_data.get("seed_run_ids", []))
-        tested_runs = [run for run in runs if run.id not in seed_ids]
+        tested_runs = [run for run in runs if run.id not in seed_ids and not run.parent_run_id]
+        helper_runs = [run for run in runs if run.parent_run_id in {item.id for item in tested_runs}]
+        pending_interrupts = []
+        for run in tested_runs:
+            interaction_id = self.app.state.app_store.interaction_id_for_graph(run.thread_id or run.id)
+            if interaction_id:
+                projected = self.app.state.interaction.state(interaction_id)["values"].get("__interrupt__", [])
+                pending_interrupts.extend({"run_id": run.id, **item["value"]} for item in projected)
+            else:
+                # Direct Agent admission has no UI binding until Attention opens
+                # it. Once bound, only the product's actual projection is used.
+                pending = self.app.state.harness.saved_pending_interrupts(run)
+                pending_interrupts.extend({"run_id": run.id, **item.model_dump(mode="json")} for item in pending)
+        helper_evidence = {"helper_runs": [run.model_dump(mode="json", include={"id", "parent_run_id", "agent_setup_id", "task", "status", "tool_invocations", "tool_outcomes", "pending_interrupt", "events"}) for run in helper_runs],
+            "pending_interrupts": pending_interrupts,
+            "helper_files": {item["file_path"]: (self.root / "project" / item["file_path"].lstrip("/")).read_text(encoding="utf-8") if (self.root / "project" / item["file_path"].lstrip("/")).exists() else None for item in self.seed_data.get("parallel_helpers", [])}}
         commands = []
         with self.app.state.managed_commands._lock:
             for command in self.app.state.managed_commands._commands.values():
                 commands.append({"command_id": command.id, "run_id": command.run.id, "pid": command.process.pid, "alive": command.process.poll() is None, "state": command.state, "exit_code": command.exit_code})
         deployments = self.app.state.manager.list_deployments()
         effects = self.app.state.effects.list_effects()
-        return {"pid": os.getpid(), "data_root": str(self.root), "seed": self.seed_data, "scenario": self.scenario, "submissions": list(self.submissions), "failed_lookup_paths": list(self.failed_lookup_paths), "real_model_identity": self.real_identity, "model_factory_run_ids": list(self.model_run_ids), "model_processes": self.model_process_evidence(), "cleanup_errors": list(self.cleanup_errors), "run_ids": [run.id for run in tested_runs], "input_ids": [run.input_message_id for run in tested_runs], "run_count": len(tested_runs), "runs": [{"id": run.id, "status": run.status.value, "input_message_id": run.input_message_id, "tool_invocations": run.tool_invocations, "stop_reason": run.stop_reason} for run in tested_runs], "commands": commands, "effects": [effect.model_dump(mode="json") for effect in effects], "deployments": [{"id": deployment.id, "status": deployment.status.value, "pid": deployment.pid, "process_alive": bool(deployment.pid and psutil.pid_exists(deployment.pid)), "error": deployment.error} for deployment in deployments], "faults": dict(self.faults), "approved_file_exists": (self.root / "project" / "approved.txt").exists()}
+        return {**helper_evidence, "pid": os.getpid(), "data_root": str(self.root), "seed": self.seed_data, "scenario": self.scenario, "submissions": list(self.submissions), "failed_lookup_paths": list(self.failed_lookup_paths), "real_model_identity": self.real_identity, "model_factory_run_ids": list(self.model_run_ids), "model_processes": self.model_process_evidence(), "cleanup_errors": list(self.cleanup_errors), "run_ids": [run.id for run in tested_runs], "input_ids": [run.input_message_id for run in tested_runs], "run_count": len(tested_runs), "runs": [{"id": run.id, "status": run.status.value, "input_message_id": run.input_message_id, "tool_invocations": run.tool_invocations, "stop_reason": run.stop_reason} for run in tested_runs], "commands": commands, "effects": [effect.model_dump(mode="json") for effect in effects], "deployments": [{"id": deployment.id, "status": deployment.status.value, "pid": deployment.pid, "process_alive": bool(deployment.pid and psutil.pid_exists(deployment.pid)), "error": deployment.error} for deployment in deployments], "faults": dict(self.faults), "approved_file_exists": (self.root / "project" / "approved.txt").exists()}
 
     def model_process_evidence(self):
         from workbench_backend.inference.process import classify_identity

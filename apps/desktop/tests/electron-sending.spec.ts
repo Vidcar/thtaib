@@ -1,6 +1,7 @@
 import { test } from "@playwright/test";
 import { withNativeWorkbench } from "./ui/shared/native";
 import { acceptedLostResponse, reconnectAcceptedWork, stopOwnedCommand } from "./ui/shared/sending";
+import { parallelHelperApprovals, prepareParallelHelpers } from "./ui/shared/helperApprovals";
 
 test("actual Windows sending recovers both screens and cleans owned commands", async ({}, testInfo) => {
   for (const surface of ["Chat", "Agent run"] as const) {
@@ -10,6 +11,15 @@ test("actual Windows sending recovers both screens and cleans owned commands", a
       await acceptedLostResponse(page, backend, surface);
       await reconnectAcceptedWork(page, backend, surface);
       await stopOwnedCommand(page, backend, surface);
+    });
+  }
+});
+
+test("actual Windows parallel helper approvals preserve both screens and scoped effects", async ({}, testInfo) => {
+  for (const surface of ["Chat", "Agent run"] as const) {
+    await withNativeWorkbench(testInfo, "deterministic", async (page, backend) => {
+      await prepareParallelHelpers(backend);
+      await parallelHelperApprovals(page, backend, surface);
     });
   }
 });

@@ -201,6 +201,9 @@ class HarnessService:
         self._terminal_retries: dict[str, tuple[AgentRunStatus, str]] = {}
         self._decision_ready: dict[str, threading.Event] = {}
         self._pending_decisions: dict[str, list[dict[str, str]] | None] = {}
+        # Disposable projection of the native checkpoint's current interrupts.
+        # The checkpoint remains authoritative; this is never a decision inbox.
+        self._native_pending_interrupts: dict[str, tuple[PendingInterrupt, ...]] = {}
         self._model_clients: dict[str, httpx.Client] = {}
         self._adapter_models: dict[str, Any] = {}
         self._start_cancel_guards: dict[tuple[str | None, str | None], threading.Event] = {}
@@ -246,6 +249,21 @@ class HarnessService:
         if stored is None:
             raise HarnessError("Unknown agent run", code="run_missing", status_code=404)
         return stored
+
+    def saved_pending_interrupts(self, run: AgentRun | AgentRunOperational) -> list[PendingInterrupt]:
+        """Read the already observed checkpoint projection without checkpoint I/O.
+
+        Publication calls this under the run/projection locks. Clearing the
+        selected request hides the cards while its decision is being applied;
+        the siblings remain in the projection until the next native pause.
+        """
+        # Telemetry also calls this with the projection lock already held.
+        # Replace tuples atomically at the run owner; never acquire its lock here.
+        if (not is_run_lifecycle_live(run.status) or run.status is AgentRunStatus.cancel_requested
+                or run.pending_interrupt is None):
+            return []
+        pending = self._native_pending_interrupts.get(run.id)
+        return list(pending) if pending is not None else [run.pending_interrupt]
 
     def list_runs_operational(self) -> list[AgentRunOperational]:
         self._reconcile_startup_once()
@@ -311,6 +329,7 @@ class HarnessService:
                 self._cancels.pop(run_id, None)
                 self._decision_ready.pop(run_id, None)
                 self._pending_decisions.pop(run_id, None)
+                self._native_pending_interrupts.pop(run_id, None)
                 self._terminal_retries.pop(run_id, None)
                 self._interaction_failure_runs.discard(run_id)
 
@@ -830,7 +849,7 @@ class HarnessService:
             )
             run_checkpoint_task(self.manager.paths.checkpoints_db,
                 self._run_owned_graph(run, http_sink, fixture_bank, cancel,
-                    Command(resume=_resume_value(decisions)), decisions=decisions))
+                    _resume_command(run.pending_interrupt, decisions), decisions=decisions))
         except ReplayError as exc:
             self._collect_related_files(run)
             if cancel.is_set():
@@ -1039,7 +1058,7 @@ class HarnessService:
                 await self._aresume_reject_then_stop(agent, run, pending, config, message_nodes)
                 return
             await asyncio.to_thread(self._clear_pending_interrupt, run, decisions)
-            current = Command(resume=_resume_value(decisions))
+            current = _resume_command(pending, decisions)
 
     async def _browser_resume_command(self, agent: Any, run: AgentRun) -> Command:
         """Address every native browser boundary while retaining other approvals."""
@@ -1098,18 +1117,70 @@ class HarnessService:
                 getattr(exc, "interrupts", None)
             )
             if found is not None:
-                return self._owned_child_interrupt(run, found)
-            raise
+                pending = self._owned_child_interrupt(run, found)
+            else:
+                raise
         finally:
             self._native_streams.pop(run.id, None)
             await self._close_native_stream(stream)
-        if pending is not None:
-            return self._owned_child_interrupt(run, pending)
         try:
             state = await agent.aget_state(config)
-        except Exception:  # noqa: BLE001 - missing state is a completed or failed stream
-            return None
-        return pending_interrupt_from_raw(getattr(state, "interrupts", None))
+        except Exception as exc:  # noqa: BLE001 - never advertise an unknown approval set
+            if pending is None:
+                return None
+            raise HarnessError("The saved approval requests could not be read. No pending action was approved; inspect the retained run before continuing.",
+                code="interrupt_checkpoint_unavailable", status_code=500) from exc
+        requests = self._pending_interrupts_from_state(run, state)
+        with self._lock:
+            self._native_pending_interrupts[run.id] = tuple(requests)
+        return self._selected_pending_interrupt(requests)
+
+    def _pending_interrupts_from_state(self, run: AgentRun, state: Any) -> list[PendingInterrupt]:
+        """Normalize every native interrupt, enriching owned helper namespaces."""
+        requests: list[PendingInterrupt] = []
+        seen: set[str] = set()
+        tasks = getattr(state, "tasks", None)
+        # A partially completed parallel superstep retains its old interrupt
+        # writes until every sibling finishes. Public task results distinguish
+        # those completed branches from requests that are still waiting.
+        raw_requests = (getattr(state, "interrupts", ()) if tasks is None else
+            [raw for task in tasks if getattr(task, "result", None) is None
+             for raw in getattr(task, "interrupts", ())])
+        for raw in raw_requests:
+            pending = _pending_from_native_event({"params": {"interrupts": [raw], "namespace": []}})
+            if pending is None or not pending.interrupt_id or pending.interrupt_id in seen:
+                continue
+            pending = self._owned_child_interrupt(run, pending)
+            # Older records may already have the correct root/helper namespace.
+            if not pending.namespace and run.pending_interrupt is not None and run.pending_interrupt.interrupt_id == pending.interrupt_id:
+                pending = pending.model_copy(update={"namespace": list(run.pending_interrupt.namespace)})
+            requests.append(_with_shell_folder(run, pending))
+            seen.add(pending.interrupt_id)
+        return requests
+
+    @staticmethod
+    def _selected_pending_interrupt(requests: list[PendingInterrupt]) -> PendingInterrupt | None:
+        # Browser ownership applies to the entire graph. Return control before
+        # presenting the ordinary approval that is still retained beside it.
+        return next((item for item in requests if item.kind == "browser_control"), requests[0] if requests else None)
+
+    def _restore_native_pending_interrupts(self, run: AgentRun) -> bool:
+        """Hydrate a paused projection through the existing inspection compiler."""
+        inspection = _copy_execution_run(run)
+        try:
+            graph = self._create_compiled_agent(inspection, [], None, inspection_only=True,
+                execution_control=ExecutionControl(inspection, lambda: None))
+            state = run_checkpoint_task(self.manager.paths.checkpoints_db, graph.aget_state(_invoke_config(run)))
+            requests = self._pending_interrupts_from_state(run, state)
+        except Exception:  # noqa: BLE001 - unreadable native state is not resumable
+            log.exception("Could not restore native interruption for %s", run.id)
+            return False
+        self._native_pending_interrupts[run.id] = tuple(requests)
+        selected = self._selected_pending_interrupt(requests)
+        if selected is None:
+            return False
+        run.pending_interrupt = selected
+        return True
 
     def _owned_child_interrupt(self, run: AgentRun, pending: PendingInterrupt) -> PendingInterrupt:
         """Use the child's saved checkpoint namespace for an inline approval."""
@@ -1200,14 +1271,20 @@ class HarnessService:
         config: dict[str, Any],
         message_nodes: dict[str, str] | None = None,
     ) -> None:
+        state = await agent.aget_state(config)
+        requests = self._pending_interrupts_from_state(run, state)
+        if not requests and isinstance(pending, PendingInterrupt):
+            requests = [pending]
         payloads = reject_decisions_for(pending)
+        resume = {item.interrupt_id: _resume_value(reject_decisions_for(item))
+            for item in requests if item.interrupt_id and item.kind != "browser_control"}
         await asyncio.to_thread(self._clear_pending_interrupt, run, payloads)
         seen_messages = await self._seed_native_audit_seen(agent, config)
         message_nodes = message_nodes if message_nodes is not None else {}
         stream = None
         try:
             stream = await agent.astream_events(
-                Command(resume=_resume_value(payloads)),
+                Command(resume=resume),
                 config=config,
                 version="v3",
             )
@@ -1372,6 +1449,7 @@ class HarnessService:
         run.settled_status = None
         run.settled_stop_reason = None
         run.status = status
+        self._native_pending_interrupts.pop(run.id, None)
         run.stop_reason = stop_reason
         reconcile_effects(run)
         run.failure = failure_for_run(run, code=run.failure.code if run.failure else None)
@@ -1866,6 +1944,15 @@ class HarnessService:
                 run = self.store.get_execution_run(lifecycle.id)
                 if run is None:
                     continue
+                if run.parent_run_id:
+                    parent = self._runs.get(run.parent_run_id) or self.store.get_execution_run(run.parent_run_id)
+                    if (parent is not None and is_run_lifecycle_live(parent.status)
+                            and parent.pending_interrupt is not None and self._has_resume_checkpoint(parent)
+                            and any(item.run_id == run.id for item in parent.child_runs)):
+                        # Inline children pause in their parent's checkpoint;
+                        # they never own a detached worker to restore or orphan.
+                        self._runs.setdefault(run.id, run)
+                        continue
                 if not is_run_lifecycle_live(run.status):
                     if run.id in self._terminal_retries:
                         # A failed follow-up read may have hidden a successful
@@ -1898,6 +1985,9 @@ class HarnessService:
                 )
                 if resumable_interrupt and not lost_running_job:
                     live = self._runs.setdefault(run.id, run)
+                    if not self._restore_native_pending_interrupts(live):
+                        self._mark_orphaned_run(live, missing_checkpoint=True)
+                        continue
                     self._cancels.setdefault(run.id, threading.Event())
                     self._decision_ready.setdefault(run.id, threading.Event())
                     self._pending_decisions.setdefault(run.id, None)
@@ -2204,6 +2294,13 @@ def _with_shell_folder(run: AgentRun, pending: PendingInterrupt) -> PendingInter
 
 def _resume_value(decisions: list[dict[str, str]]) -> dict[str, Any]:
     return {"decisions": decisions}
+
+
+def _resume_command(pending: PendingInterrupt | None, decisions: list[dict[str, str]]) -> Command:
+    if pending is None or not pending.interrupt_id:
+        raise HarnessError("This interruption has no saved graph identity; no action was repeated.",
+            code="interrupt_identity_missing", status_code=409)
+    return Command(resume={pending.interrupt_id: _resume_value(decisions)})
 
 
 def _failure_code(run: AgentRun, error: Exception) -> str | None:

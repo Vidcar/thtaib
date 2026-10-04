@@ -2,8 +2,15 @@ import { test, expect } from "./shared/fixtures";
 import { acceptedLostResponse, assertOneExecution, editor, navigateModels, openSurface, reconnectAcceptedWork, send, sendButton, stopOwnedCommand, type SendingState, type SendingSurface } from "./shared/sending";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { parallelHelperApprovals, prepareParallelHelpers } from "./shared/helperApprovals";
 
 for (const surface of ["Chat", "Agent run"] as SendingSurface[]) {
+  test(`${surface} parallel helper approvals preserve scoped effects through navigation and reconnect`, async ({ page, backend, openWorkbench }) => {
+    await prepareParallelHelpers(backend);
+    await openWorkbench();
+    await parallelHelperApprovals(page, backend, surface);
+  });
+
   test(`${surface} rejected and uncertain original submissions preserve drafts`, async ({ page, backend, openWorkbench }) => {
     await openWorkbench();
     await openSurface(page, backend, surface);

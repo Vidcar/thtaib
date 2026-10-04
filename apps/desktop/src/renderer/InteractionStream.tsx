@@ -74,43 +74,35 @@ function runIsLive(run: AgentRun): boolean {
   return run.status === "queued" || run.status === "running" || run.status === "cancel_requested";
 }
 
-function sdkInterruptTarget(stream: WorkbenchStream): {
-  id: string | undefined;
-  namespace: string[];
-  pending: PendingInterrupt;
-} | null {
-  const interrupt = stream.interrupts.find((item) => interruptValue(item));
-  const pending = interruptValue(interrupt);
-  if (!pending) {
-    return null;
-  }
-  return {
-    id: interrupt?.id,
-    namespace: interrupt?.namespace ?? interrupt?.ns ?? [],
-    pending,
-  };
-}
-
 export function visibleApprovalInterrupt(stream: WorkbenchStream, authoritativeRun: AgentRun | null | undefined): {
-  id: string | undefined;
+  id: string;
   namespace: string[];
   pending: PendingInterrupt;
+  waitingCount: number;
 } | null {
-  const sdk = sdkInterruptTarget(stream);
-  if (!authoritativeRun) {
-    return sdk;
-  }
-  if (!runIsLive(authoritativeRun) || !authoritativeRun.pending_interrupt || authoritativeRun.pending_interrupt.kind === "browser_control") {
+  if (!authoritativeRun || !runIsLive(authoritativeRun) || authoritativeRun.status === "cancel_requested" || !authoritativeRun.pending_interrupt
+    || authoritativeRun.pending_interrupt.kind === "browser_control") {
     return null;
   }
+  const pending = authoritativeRun.pending_interrupt;
+  if (!pending.interrupt_id) return null;
   const interruptRunId = stream.values.workbench?.interrupt_run_id;
-  if (interruptRunId && interruptRunId !== authoritativeRun.id) {
+  const projectedRunId = stream.values.workbench?.run?.id;
+  if (interruptRunId && interruptRunId !== authoritativeRun.id
+    || projectedRunId && projectedRunId !== authoritativeRun.id) {
     return null;
   }
-  if (!sdk) {
-    return null;
-  }
-  return { ...sdk, pending: authoritativeRun.pending_interrupt };
+  const namespace = pending.namespace ?? [];
+  const actionable = stream.interrupts.filter(item => item.id && interruptValue(item));
+  const matches = actionable.filter(item => {
+    const sdkNamespace = item.namespace ?? item.ns ?? [];
+    return item.id === pending.interrupt_id && sdkNamespace.length === namespace.length
+      && namespace.every((part, index) => sdkNamespace[index] === part);
+  });
+  // SDK arrival order is unrelated to the request selected by the checkpoint.
+  // Never join one helper's request body to another helper's native target.
+  if (matches.length !== 1) return null;
+  return { id: pending.interrupt_id, namespace, pending, waitingCount: actionable.length };
 }
 
 export function useWorkbenchProjection(stream: WorkbenchStream): {

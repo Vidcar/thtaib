@@ -421,8 +421,10 @@ function ChatInteractionStreamContent(props: {
       {projectionRunOwned ? <RunActivitySummary run={run} showHelpers={false} onRecover={props.onRecoverRun} /> : null}
       {projectionRunOwned && visibleInterrupt ? (
         <InterruptApproval
-          ownerLabel={helperApprovalOwner(run, visibleInterrupt.namespace)}
+          key={JSON.stringify([currentParentRun?.id, visibleInterrupt.id, visibleInterrupt.namespace])}
+          ownerLabel={helperApprovalOwner(currentParentRun, visibleInterrupt.namespace)}
           pending={visibleInterrupt.pending}
+          waitingCount={visibleInterrupt.waitingCount}
           onConfigureSetup={props.onConfigureSetup}
           busy={stream.isLoading}
           onRespond={(payload) => {
