@@ -909,7 +909,7 @@ const MessageBubble = memo(function MessageBubble(props: {
   }
   const settled = props.type === "ai" && !props.incomplete;
   return (
-    <article className={`bubble bubble-${props.type === "human" ? "user" : props.type === "ai" ? "assistant" : "system"}${settled ? " bubble-settled" : ""}${props.continuation ? " bubble-continuation" : ""}`}>
+    <article data-message-id={props.message.id} className={`bubble bubble-${props.type === "human" ? "user" : props.type === "ai" ? "assistant" : "system"}${settled ? " bubble-settled" : ""}${props.continuation ? " bubble-continuation" : ""}`}>
       <header>
         <strong>{roleLabel(props.type)}</strong>
         {props.incomplete && (props.showLiveMessageStatus !== false || (!props.toolsLive && !props.waiting)) ? <span className="message-state" aria-label={props.waiting ? "Waiting for your response" : props.writing ? "Response in progress" : "Incomplete response"}>{props.waiting ? "Waiting" : props.writing ? props.activityLabel ?? "Writing" : "Partial"}</span> : null}

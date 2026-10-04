@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -50,7 +51,36 @@ class FixtureModel(BaseChatModel):
     def bind_tools(self, tools, **kwargs):
         return self
 
+    def project_context_payload(self, messages, **kwargs):
+        from workbench_backend.inference.request_projection import project_context_payload
+        payload = project_context_payload(messages, **kwargs)
+        if self._fixture.scenario == "compaction_history":
+            from workbench_backend.agents.context import estimate_payload
+            # This is the same projection and estimated fallback the stock
+            # token-counter closure already uses; it is never a native count.
+            self._fixture.record_input_count(self._run, payload, estimate_payload(payload), basis="estimated")
+        return payload
+
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        if self._fixture.scenario == "compaction_history":
+            from workbench_backend.agents.context import count_context_tokens
+            from workbench_backend.inference.telemetry import current_request_purpose
+            purpose = current_request_purpose()
+            with self._fixture.lock:
+                self._fixture.compaction_model_calls.append({"run_id": self._run.id,
+                    "purpose": purpose, "input_tokens": count_context_tokens(messages),
+                    "message_ids": [message.id for message in messages],
+                    "input_sha256": hashlib.sha256(json.dumps([message.model_dump(mode="json")
+                        for message in messages], sort_keys=True).encode()).hexdigest(),
+                    "basis": "deterministic fixture; approximate count"})
+                self._fixture.compaction_calls_path.write_text(
+                    json.dumps(self._fixture.compaction_model_calls), encoding="utf-8")
+            if purpose == "summary":
+                data = self._fixture.seed_data["compaction"]
+                return ChatResult(generations=[ChatGeneration(message=AIMessage(content=
+                    data["internal_summary_marker"] + ". Remember " + data["marker"]
+                    + ". The requested file write has already completed; never repeat it. "
+                    "Earlier clipped read results remain in the saved history. Continue the requested remaining reads."))])
         if self._fixture.hold_model and (self._fixture.scenario != "command" or self._index > 0):
             deadline = time.monotonic() + 45
             while not self._fixture.release.wait(.02):
@@ -100,14 +130,46 @@ class ApplicationFixture:
         self.faults = {"lost_acknowledgements": 0, "stream_disconnects": 0, "draft_losses": 0, "state_lookup_failures": 0}
         self.model_run_ids: list[str] = []
         self.helper_models: dict[str, FixtureModel] = {}
+        self.compaction_calls_path = self.root / "compaction-calls.json"
+        self.compaction_model_calls: list[dict[str, Any]] = (json.loads(self.compaction_calls_path.read_text(encoding="utf-8"))
+            if self.compaction_calls_path.exists() else [])
+        self.compaction_counts_path = self.root / "compaction-input-counts.json"
+        self.compaction_input_counts: list[dict[str, Any]] = (json.loads(self.compaction_counts_path.read_text(encoding="utf-8"))
+            if self.compaction_counts_path.exists() else [])
+        self.compaction_count_capture_errors: list[dict[str, Any]] = []
         self.model_process_identities: list[Any] = []
         self.lock = threading.RLock()
         self.seed_path = self.root / "ui-seed.json"
         self.seed_data = json.loads(self.seed_path.read_text(encoding="utf-8")) if self.seed_path.exists() else {}
+        self.compaction_native_path = self.root / "compaction-native.json"
+        self.compaction_native = (json.loads(self.compaction_native_path.read_text(encoding="utf-8"))
+            if self.compaction_native_path.exists() else {"tool_results": {}, "cutoffs": []})
         self._closed = False
         self.cleanup_errors: list[str] = []
         self.native_model_factory = self.app.state.harness._model_factory
         self.app.state.harness._model_factory = self.model_factory
+        native_observer = self.app.state.harness._interaction_observer
+        def observe_native(run, event, **kwargs):
+            if self.scenario == "compaction_history" and event and event.get("method") == "values":
+                params = event.get("params", {})
+                if not params.get("namespace"):
+                    data = params.get("data", {})
+                    with self.lock:
+                        captured = self.compaction_native["tool_results"].setdefault(run.id, {})
+                        for message in data.get("messages", []):
+                            value = message.model_dump(mode="json") if hasattr(message, "model_dump") else message
+                            if value.get("type") == "tool" and value.get("id") and value["id"] not in captured:
+                                captured[value["id"]] = {key: value[key] for key in (
+                                    "id", "type", "content", "name", "tool_call_id", "status") if key in value}
+                        summary = data.get("_summarization_event")
+                        if summary and type(summary.get("cutoff_index")) is int:
+                            observed = {"run_id": run.id, "cutoff_index": summary["cutoff_index"]}
+                            if observed not in self.compaction_native["cutoffs"]:
+                                self.compaction_native["cutoffs"].append(observed)
+                        self.compaction_native_path.write_text(json.dumps(self.compaction_native), encoding="utf-8")
+            if native_observer is not None:
+                return native_observer(run, event, **kwargs)
+        self.app.state.harness._interaction_observer = observe_native
         fixture = self
 
         class BoundarySupervisor(ProcessSupervisor):
@@ -132,7 +194,23 @@ class ApplicationFixture:
         with self.lock:
             self.model_run_ids.append(run.id)
         if self.inference == "real":
-            return self.native_model_factory(run, sink)
+            model = self.native_model_factory(run, sink)
+            if self.scenario == "compaction_history":
+                self.observe_existing_native_counts(model, run)
+            return model
+        if self.scenario == "compaction_history" and run.task != "Saved baseline question":
+            data = self.seed_data["compaction"]
+            if run.task == data["followup_task"]:
+                script = [AIMessage(content=data["marker"])]
+            else:
+                script = [AIMessage(content="Creating the compaction history marker", tool_calls=[{
+                    "name": "write_file", "args": {"file_path": data["write_path"], "content": data["write_content"]},
+                    "id": run.id + "-compaction-write"}])]
+                script.extend(AIMessage(content=f"Reading original range {offset}", tool_calls=[{
+                    "name": "read_file", "args": {"file_path": data["read_path"], "offset": offset, "limit": 500},
+                    "id": run.id + f"-compaction-read-{offset}"}]) for offset in (0, 500, 1000))
+                script.append(AIMessage(content="Compaction history completed. " + data["marker"]))
+            return FixtureModel(self, run, script)
         if self.scenario == "parallel_helpers":
             if run.id in self.helper_models:
                 return self.helper_models[run.id]
@@ -165,6 +243,35 @@ class ApplicationFixture:
         else:
             script = [AIMessage(content="Baseline response completed")]
         return FixtureModel(self, run, script)
+
+    def observe_existing_native_counts(self, model, run):
+        """Observe existing counter calls without adding a call or changing it."""
+        original = model.count_input_tokens
+        def count(payload):
+            # Deliberately outside the capture try: the original counter's
+            # return and exception remain its own, including unavailable None.
+            result = original(payload)
+            self.record_input_count(run, payload, result, basis="native" if type(result) is int else "unavailable")
+            return result
+        object.__setattr__(model, "count_input_tokens", count)
+
+    def record_input_count(self, run, payload, count, *, basis):
+        try:
+            from workbench_backend.inference.telemetry import current_request_purpose
+            tools = payload.get("tools")
+            with self.lock:
+                self.compaction_input_counts.append({"ordinal": len(self.compaction_input_counts) + 1,
+                    "run_id": run.id, "purpose": current_request_purpose(), "input_tokens": count, "basis": basis,
+                    "payload_sha256": hashlib.sha256(json.dumps(payload, sort_keys=True,
+                        ensure_ascii=False, default=str).encode()).hexdigest(),
+                    "tools_sha256": hashlib.sha256(json.dumps(tools, sort_keys=True,
+                        ensure_ascii=False, default=str).encode()).hexdigest() if tools else None})
+                self.compaction_counts_path.write_text(json.dumps(self.compaction_input_counts), encoding="utf-8")
+        except Exception as exc:
+            # An evidence write failure must not alter inference. The gate
+            # rejects incomplete capture through this separate diagnostic.
+            with self.lock:
+                self.compaction_count_capture_errors.append({"run_id": run.id, "error_kind": type(exc).__name__})
 
     def _install_controls(self):
         @self.app.post("/__test__/seed")
@@ -236,7 +343,7 @@ class ApplicationFixture:
                     self.faults["draft_losses"] += 1
             response = await call_next(request)
             path = request.url.path
-            if command and body.get("method") == "run.start" and response.status_code < 300 and self.negative_control == "duplicate_execution":
+            if command and body.get("method") == "run.start" and response.status_code < 300 and self.negative_control in {"duplicate_execution", "compaction_duplicate_execution"}:
                 # Deliberately violate one-execution acceptance through the real
                 # graph owner. This test-only control never changes production.
                 from workbench_backend.agents.schemas import AgentStartRequest
@@ -245,6 +352,18 @@ class ApplicationFixture:
                 setup.update(task=message["content"], input_message_id=f"negative-{uuid4()}", thread_id=f"negative-{uuid4()}", source_surface="agent-run")
                 self.negative_control = None
                 self.app.state.harness.start(AgentStartRequest.model_validate(setup))
+            if authenticated and request.method == "GET" and path.startswith("/v1/agent-interaction/threads/") and path.endswith("/state") and response.status_code < 300 and self.negative_control in {"compaction_overwritten_history", "compaction_visible_summary"}:
+                # Corrupt only observation; the evidence oracle reads unchanged
+                # actual durable records. No production hook knows this switch.
+                payload = json.loads(b"".join([chunk async for chunk in response.body_iterator]))
+                messages = payload["values"]["messages"]
+                if self.negative_control == "compaction_overwritten_history":
+                    payload["values"]["messages"] = messages[1:]
+                else:
+                    messages.append({"id": "negative-visible-summary", "type": "ai",
+                        "content": self.seed_data["compaction"]["internal_summary_marker"]})
+                headers = {key: value for key, value in response.headers.items() if key.lower() != "content-length"}
+                return JSONResponse(payload, headers=headers, background=response.background)
             if self.lose_next_ack and request.method == "POST" and response.status_code < 300 and (path.endswith("/commands") or path.endswith("/start") or path.endswith("/queue")):
                 self.lose_next_ack = False
                 self.faults["lost_acknowledgements"] += 1
@@ -273,11 +392,13 @@ class ApplicationFixture:
 
     def configure(self, body):
         scenario = body.get("scenario", self.scenario)
-        if scenario not in {"baseline", "lost_ack", "approval", "command", "retained", "model", "partial_effect", "parallel_helpers"}:
+        if scenario not in {"baseline", "lost_ack", "approval", "command", "retained", "model", "partial_effect", "parallel_helpers", "compaction_history"}:
             raise HTTPException(400, "Unknown UI fixture scenario")
         self.scenario = scenario
         if scenario == "parallel_helpers" and self.seed_data:
             self.prepare_parallel_helpers()
+        if scenario == "compaction_history" and self.seed_data:
+            self.prepare_compaction_history()
         if "hold_model" in body:
             self.hold_model = bool(body["hold_model"])
             self.release.clear() if self.hold_model else self.release.set()
@@ -299,12 +420,56 @@ class ApplicationFixture:
                 setattr(self, field, bool(body[field]))
         if "negative_control" in body:
             value = body["negative_control"]
-            if value not in {None, "lose_draft", "duplicate_execution"}:
+            if value not in {None, "lose_draft", "duplicate_execution", "compaction_overwritten_history", "compaction_visible_summary", "compaction_duplicate_execution"}:
                 raise HTTPException(400, "Unknown negative control")
             self.negative_control = value
         if body.get("change_source"):
             (self.root / "project" / "baseline-output.txt").write_text("Changed source after retention", encoding="utf-8")
         return self.state()
+
+    def prepare_compaction_history(self):
+        """Only author isolated inputs; stock middleware owns all reduction."""
+        if "compaction" not in self.seed_data:
+            marker = "COMPACTION-FACT-JUPITER-7391"
+            data = {"marker": marker, "internal_summary_marker": "INTERNAL-COMPACTION-SUMMARY",
+                "read_path": "/compaction-source.txt", "write_path": "/compaction-effect.txt",
+                "write_content": "one compaction history effect", "expected_read_count": 3,
+                "tool_start_marker": "ORIGINAL-COMPACTION-RANGE-0-START",
+                "tool_end_marker": "ORIGINAL-COMPACTION-RANGE-0-END",
+                "tools": ["read_file", "write_file"],
+                "request_settings": {"temperature": 0.0, "seed": 7, "max_tokens": 512}}
+            deployment = self.app.state.manager.get_deployment(self.seed_data["deployment_id"])
+            if self.inference == "real" and deployment.server_props and deployment.server_props.chat_template_caps.get("supports_thinking"):
+                data["request_settings"]["reasoning"] = "off"
+            data["task"] = (f"Remember this exact fact: {marker}. First call write_file exactly once with file_path "
+                f"{data['write_path']} and content exactly {data['write_content']}. Then call read_file three times "
+                f"with file_path {data['read_path']}, limit 500, and offsets 0, then 500, then 1000. "
+                "Call only one tool in each assistant response and wait for its result before the next call. "
+                "Read only these three ranges. If a result is clipped, keep going to the next requested range. "
+                "Do not reread a range, do not repeat the write, and do not read conversation_history files. "
+                f"After all three reads, reply briefly with {marker}.")
+            data["followup_task"] = "Reply with only the exact COMPACTION-FACT code I originally asked you to remember. Do not call any tools."
+            # Complete modest lines create native context pressure. The archive
+            # must preserve the emitted result including its final marker when
+            # native overflow recovery replaces the checkpoint's same-ID tail.
+            lines = [f"line {index:04d}: a b c d e f g h i j k l" for index in range(1500)]
+            for offset in (0, 500, 1000):
+                lines[offset] = f"ORIGINAL-COMPACTION-RANGE-{offset // 500}-START {marker}"
+                lines[offset + 499] = f"ORIGINAL-COMPACTION-RANGE-{offset // 500}-END"
+            source = "\n".join(lines) + "\n"
+            (self.root / "project" / data["read_path"].lstrip("/")).write_text(source, encoding="utf-8")
+            data["source_sha256"] = hashlib.sha256(source.encode()).hexdigest()
+            self.seed_data["compaction"] = data
+            self.seed_data.update(compaction_task=data["task"], compaction_followup_task=data["followup_task"],
+                compaction_marker=marker, compaction_tool_output=data["tool_start_marker"])
+            self.seed_path.write_text(json.dumps(self.seed_data), encoding="utf-8")
+        from workbench_backend.agents.setup_schemas import AgentInputPolicy
+        conversation = self.app.state.chat.store.get(self.seed_data["conversation_id"])
+        data = self.seed_data["compaction"]
+        selection = {"presented_tools": data["tools"], "approval_mode": "full_access",
+            "input_policy": AgentInputPolicy(tool_loading="always"), "per_request_overrides": data["request_settings"]}
+        self.app.state.chat.store.put(conversation.model_copy(update={**selection,
+            "setup_overrides": conversation.setup_overrides.model_copy(update=selection)}))
 
     def prepare_parallel_helpers(self):
         """Author disposable selections; actual admission/graphs own every request."""
@@ -370,6 +535,8 @@ class ApplicationFixture:
         self.seed_data = {"project_id": project.id, "conversation_id": conversation.id, "deployment_id": deployment.id, "profile_id": None,
             "fixture_root": str(self.root), "project_path": str(project_path), "seed_run_ids": [], "retained_asset_ids": [], "real_model_identity": self.real_identity}
         self.seed_path.write_text(json.dumps(self.seed_data), encoding="utf-8")
+        if self.scenario == "compaction_history":
+            self.prepare_compaction_history()
         return {**self.seed_data, "scenario": self.scenario}
 
     def seed(self, scenario="baseline"):
@@ -433,6 +600,8 @@ class ApplicationFixture:
         self.seed_data = {"project_id": project.id, "conversation_id": conversation.id, "other_conversation_id": other.id, "deployment_id": deployment.id, "profile_id": profile.id, "bundle_id": bundle.id, "fixture_root": str(self.root), "project_path": str(project_path), "owned_effect_path": str(project_path / "approved.txt"), "retained_asset_ids": [], "seed_run_ids": [run.id for run in self.app.state.app_store.list_runs()]}
         if scenario == "retained":
             self._retain_seed_output()
+        if scenario == "compaction_history":
+            self.prepare_compaction_history()
         self.seed_path.write_text(json.dumps(self.seed_data), encoding="utf-8")
         return {**self.seed_data, "scenario": self.scenario}
 
@@ -475,6 +644,76 @@ class ApplicationFixture:
             time.sleep(.02)
         raise TimeoutError("Baseline history seed did not finish")
 
+    def compaction_evidence(self, tested_runs):
+        """Read native checkpoints and display records; never execute a graph."""
+        if "compaction" not in self.seed_data:
+            return {"rows": []}
+        from workbench_backend.agents.harness_backend import build_run_backend
+        from workbench_backend.state.checkpointer import conversation_state
+        fields = ("id", "type", "content", "name", "tool_calls", "tool_call_id", "status")
+        def public_message(message):
+            value = message.model_dump(mode="json") if hasattr(message, "model_dump") else message
+            return {key: value[key] for key in fields if key in value and value[key] is not None}
+        rows = []
+        threads = dict.fromkeys(run.thread_id or run.id for run in tested_runs if not run.parent_run_id)
+        for graph_id in threads:
+            related = [run for run in tested_runs if (run.thread_id or run.id) == graph_id]
+            run = related[-1]
+            interaction_id = self.app.state.app_store.interaction_id_for_graph(graph_id)
+            if interaction_id is None:
+                continue
+            display = self.app.state.interaction.state(interaction_id)
+            current_id = (display["values"].get("workbench", {}).get("run") or {}).get("id")
+            run = next((item for item in related if item.id == current_id), run)
+            checkpoint = conversation_state(self.app.state.manager.paths.checkpoints_db, graph_id)
+            canonical = [public_message(message) for message in checkpoint.get("messages", [])]
+            archive = [public_message(message) for message in display["values"].get("messages", [])]
+            compacted = [{"run_id": item.id, **event.model_dump(mode="json")}
+                for item in related for event in item.events if event.kind == "context_compacted"]
+            summary = checkpoint.get("_summarization_event") or {}
+            paths = list(dict.fromkeys(event["detail"].get("history_preserved_at")
+                for event in compacted if event["detail"].get("history_preserved_at")))
+            offloads = []
+            backend = build_run_backend(run, self.app.state.manager.paths, prepare_storage=False)
+            for path in paths:
+                result = backend.download_files([path])[0]
+                raw = result.content or b""
+                offloads.append({"path": path, "readable": result.error is None,
+                    "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest(),
+                    "has_marker": self.seed_data["compaction"]["marker"].encode() in raw,
+                    "has_read_results": b"ORIGINAL-COMPACTION-RANGE-" in raw})
+            related_ids = {item.id for item in related}
+            model_calls = ([{**sample.model_dump(mode="json"), "run_id": item.id}
+                for item in related for sample in item.generation_history] if self.inference == "real" else
+                [dict(call) for call in self.compaction_model_calls if call["run_id"] in related_ids])
+            outcomes = [outcome.model_dump(mode="json") for item in related for outcome in item.tool_outcomes.values()]
+            writes = [call for item in related for call in item.tool_invocations if call["name"] == "write_file"]
+            reads = [call for item in related for call in item.tool_invocations if call["name"] == "read_file"]
+            effect = self.root / "project" / self.seed_data["compaction"]["write_path"].lstrip("/")
+            data = self.seed_data["compaction"]
+            with self.lock:
+                original_tool_results = [dict(message) for item in related
+                    for message in self.compaction_native["tool_results"].get(item.id, {}).values()]
+                observed_cutoffs = [dict(item) for item in self.compaction_native["cutoffs"] if item["run_id"] in related_ids]
+                input_counts = [dict(item) for item in self.compaction_input_counts if item["run_id"] in related_ids]
+                capture_errors = [dict(item) for item in self.compaction_count_capture_errors if item["run_id"] in related_ids]
+            rows.append({"thread_id": interaction_id, "graph_thread_id": graph_id, "source_surface": run.source_surface,
+                "run_id": run.id, "run_ids": [item.id for item in related], "status": run.status.value,
+                "archive": archive, "canonical": canonical, "interaction_cursor": display["interaction_cursor"],
+                "native_summary_count": sum(call["purpose"] == "summary" for call in model_calls),
+                "cutoff_index": summary.get("cutoff_index", 0), "observed_cutoffs": observed_cutoffs,
+                "summary_marker": data["internal_summary_marker"], "compacted_events": compacted,
+                "model_calls": model_calls, "write_count": len(writes), "read_count": len(reads),
+                "native_input_counts": input_counts, "native_input_capture_errors": capture_errors,
+                "tool_outcomes": outcomes, "original_tool_results": original_tool_results,
+                "write_content": effect.read_text(encoding="utf-8") if effect.exists() else None,
+                "offload_readable": bool(offloads) and all(item["readable"] for item in offloads), "offloads": offloads,
+                "context_observation": run.context_observation.model_dump(mode="json") if run.context_observation else None,
+                "housekeeping_context": {key: value.model_dump(mode="json") for key, value in run.housekeeping_context.items()},
+                "archive_sha256": hashlib.sha256(json.dumps(archive, sort_keys=True).encode()).hexdigest(),
+                "canonical_sha256": hashlib.sha256(json.dumps(canonical, sort_keys=True).encode()).hexdigest()})
+        return {"rows": rows}
+
     def state(self):
         runs = self.app.state.app_store.list_runs()
         seed_ids = set(self.seed_data.get("seed_run_ids", []))
@@ -500,7 +739,7 @@ class ApplicationFixture:
                 commands.append({"command_id": command.id, "run_id": command.run.id, "pid": command.process.pid, "alive": command.process.poll() is None, "state": command.state, "exit_code": command.exit_code})
         deployments = self.app.state.manager.list_deployments()
         effects = self.app.state.effects.list_effects()
-        return {**helper_evidence, "pid": os.getpid(), "data_root": str(self.root), "seed": self.seed_data, "scenario": self.scenario, "submissions": list(self.submissions), "failed_lookup_paths": list(self.failed_lookup_paths), "real_model_identity": self.real_identity, "model_factory_run_ids": list(self.model_run_ids), "model_processes": self.model_process_evidence(), "cleanup_errors": list(self.cleanup_errors), "run_ids": [run.id for run in tested_runs], "input_ids": [run.input_message_id for run in tested_runs], "run_count": len(tested_runs), "runs": [{"id": run.id, "status": run.status.value, "input_message_id": run.input_message_id, "tool_invocations": run.tool_invocations, "stop_reason": run.stop_reason} for run in tested_runs], "commands": commands, "effects": [effect.model_dump(mode="json") for effect in effects], "deployments": [{"id": deployment.id, "status": deployment.status.value, "pid": deployment.pid, "process_alive": bool(deployment.pid and psutil.pid_exists(deployment.pid)), "error": deployment.error} for deployment in deployments], "faults": dict(self.faults), "approved_file_exists": (self.root / "project" / "approved.txt").exists()}
+        return {**helper_evidence, "compaction": self.compaction_evidence(tested_runs), "pid": os.getpid(), "data_root": str(self.root), "seed": self.seed_data, "scenario": self.scenario, "submissions": list(self.submissions), "failed_lookup_paths": list(self.failed_lookup_paths), "real_model_identity": self.real_identity, "model_factory_run_ids": list(self.model_run_ids), "model_processes": self.model_process_evidence(), "cleanup_errors": list(self.cleanup_errors), "run_ids": [run.id for run in tested_runs], "input_ids": [run.input_message_id for run in tested_runs], "run_count": len(tested_runs), "runs": [{"id": run.id, "status": run.status.value, "input_message_id": run.input_message_id, "tool_invocations": run.tool_invocations, "stop_reason": run.stop_reason} for run in tested_runs], "commands": commands, "effects": [effect.model_dump(mode="json") for effect in effects], "deployments": [{"id": deployment.id, "status": deployment.status.value, "pid": deployment.pid, "process_alive": bool(deployment.pid and psutil.pid_exists(deployment.pid)), "error": deployment.error} for deployment in deployments], "faults": dict(self.faults), "approved_file_exists": (self.root / "project" / "approved.txt").exists()}
 
     def model_process_evidence(self):
         from workbench_backend.inference.process import classify_identity

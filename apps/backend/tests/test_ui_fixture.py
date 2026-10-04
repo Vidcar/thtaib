@@ -7,7 +7,8 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 
@@ -378,6 +379,137 @@ class UIFixtureTests(unittest.TestCase):
                 self.assertEqual(restarted.state()["run_count"], 0)
             finally:
                 restarted.close()
+
+    def test_compaction_fixture_retains_emitted_tool_results_through_repeated_summary_and_restart(self):
+        seed = self.seed("compaction_history")
+        binding = self.post("/v1/agent-interaction/threads", {
+            "source_surface": "chat", "conversation_id": seed["conversation_id"],
+        })
+        data = seed["compaction"]
+        self.post(f"/v1/chat/conversations/{seed['conversation_id']}/start", {
+            "task": data["task"], "presented_tools": data["tools"], "approval_mode": "full_access",
+            "per_request_overrides": data["request_settings"],
+        })
+        self.wait(lambda: self.view(seed)["current_run"]["status"] in {"completed", "failed"}, "compaction terminal result")
+        self.assertEqual(self.view(seed)["current_run"]["status"], "completed", self.view(seed)["current_run"].get("error"))
+        row, = self.fixture.state()["compaction"]["rows"]
+        self.assertEqual(row["thread_id"], binding["thread_id"])
+        self.assertGreaterEqual(row["native_summary_count"], 2, {
+            "events": row["compacted_events"], "calls": row["model_calls"],
+            "canonical_lengths": [(message.get("type"), len(str(message.get("content")))) for message in row["canonical"]]})
+        self.assertGreater(row["cutoff_index"], 0)
+        self.assertTrue(row["offload_readable"])
+        self.assertEqual(row["write_count"], 1)
+        self.assertEqual(row["read_count"], data["expected_read_count"])
+        self.assertEqual(row["write_content"], data["write_content"])
+        self.assertTrue(all(event["detail"]["owner"] == "deepagents-upstream" for event in row["compacted_events"]))
+        self.assertEqual({call["purpose"] for call in row["model_calls"]}, {"summary", "work"})
+        self.assertEqual(row["native_input_capture_errors"], [])
+        counts = row["native_input_counts"]
+        self.assertTrue(counts)
+        self.assertEqual({count["basis"] for count in counts}, {"estimated"})
+        self.assertTrue(any(count["purpose"] == "summary" for count in counts))
+        self.assertGreater(max(count["input_tokens"] for count in counts if count["tools_sha256"]), 4096)
+        first_result = next(message for message in row["archive"]
+            if message["type"] == "tool" and data["tool_start_marker"] in str(message["content"]))
+        original_by_id = {message["id"]: message for message in row["original_tool_results"]}
+        for archived in (message for message in row["archive"] if message["type"] == "tool"):
+            emitted = original_by_id[archived["id"]]
+            self.assertEqual(archived["content"], emitted["content"])
+            self.assertEqual(archived["tool_call_id"], emitted["tool_call_id"])
+        self.assertIn(data["tool_end_marker"], first_result["content"])
+        reduced = next(message for message in row["canonical"] if message["id"] == first_result["id"])
+        self.assertLess(len(reduced["content"]), len(first_result["content"]))
+        self.assertNotIn(data["internal_summary_marker"], str(row["archive"]))
+        self.assertEqual(len({message["id"] for message in row["archive"]}), len(row["archive"]))
+        original = row["archive"]
+        self.fixture.close()
+        self.client.__exit__(None, None, None)
+        restarted = ApplicationFixture(self.root)
+        with TestClient(restarted.app) as client:
+            try:
+                headers = {"X-Workbench-Local-Token": restarted.app.state.local_trust_token}
+                reopened = client.post("/__test__/seed", json={"scenario": "compaction_history"}, headers=headers)
+                self.assertEqual(reopened.status_code, 200, reopened.text)
+                self.assertEqual(reopened.json()["conversation_id"], seed["conversation_id"])
+                saved, = restarted.state()["compaction"]["rows"]
+                self.assertEqual(saved["archive"], original)
+                self.assertEqual(saved["model_calls"], row["model_calls"])
+                self.assertEqual(saved["original_tool_results"], row["original_tool_results"])
+                self.assertEqual(saved["native_input_counts"], row["native_input_counts"])
+                self.assertEqual(saved["write_count"], 1)
+                self.assertEqual(saved["read_count"], data["expected_read_count"])
+                self.assertTrue(saved["offload_readable"])
+            finally:
+                restarted.close()
+
+    def test_compaction_observation_negative_controls_keep_the_durable_oracle(self):
+        seed = self.seed("compaction_history")
+        binding = self.post("/v1/agent-interaction/threads", {
+            "source_surface": "chat", "conversation_id": seed["conversation_id"],
+        })
+        original = self.client.get(f"/v1/agent-interaction/threads/{binding['thread_id']}/state", headers=self.headers).json()
+        for control in ("compaction_overwritten_history", "compaction_visible_summary"):
+            self.post("/__test__/scenario", {"negative_control": control})
+            changed = self.client.get(f"/v1/agent-interaction/threads/{binding['thread_id']}/state", headers=self.headers).json()
+            self.assertNotEqual(changed["values"]["messages"], original["values"]["messages"])
+            self.assertEqual(self.fixture.app.state.interaction.state(binding["thread_id"])["values"]["messages"], original["values"]["messages"])
+        self.post("/__test__/scenario", {"negative_control": None})
+
+    def test_native_count_observer_preserves_one_call_returns_exceptions_and_capture_privacy(self):
+        from workbench_backend.inference.telemetry import request_purpose
+        original = Mock(return_value=8123)
+        model = SimpleNamespace(count_input_tokens=original)
+        run = SimpleNamespace(id="observed-native-run")
+        self.fixture.observe_existing_native_counts(model, run)
+        payload = {"messages": [{"role": "user", "content": "PRIVATE-COUNT-PAYLOAD"}],
+            "tools": [{"type": "function", "function": {"name": "read_file"}}]}
+        self.assertEqual(model.count_input_tokens(payload), 8123)
+        original.assert_called_once_with(payload)
+        original.return_value = None
+        with request_purpose("summary"):
+            self.assertIsNone(model.count_input_tokens({"messages": []}))
+        self.assertEqual(original.call_count, 2)
+        records = self.fixture.compaction_input_counts
+        self.assertEqual([record["ordinal"] for record in records], [1, 2])
+        self.assertEqual([record["purpose"] for record in records], ["work", "summary"])
+        self.assertEqual([record["input_tokens"] for record in records], [8123, None])
+        self.assertIsNotNone(records[0]["tools_sha256"])
+        self.assertIsNone(records[1]["tools_sha256"])
+        for record in records:
+            self.assertEqual(set(record), {"ordinal", "run_id", "purpose", "input_tokens", "basis", "payload_sha256", "tools_sha256"})
+            self.assertRegex(record["payload_sha256"], r"^[a-f0-9]{64}$")
+        self.assertEqual([record["basis"] for record in records], ["native", "unavailable"])
+        self.assertNotIn("PRIVATE-COUNT-PAYLOAD", self.fixture.compaction_counts_path.read_text(encoding="utf-8"))
+        failure = RuntimeError("counter failure")
+        original.side_effect = failure
+        with self.assertRaises(RuntimeError) as caught:
+            model.count_input_tokens(payload)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(original.call_count, 3)
+        self.assertEqual(len(records), 2)
+        original.side_effect = None
+        original.return_value = 731
+        with patch.object(Path, "write_text", side_effect=OSError("capture cannot save")):
+            self.assertEqual(model.count_input_tokens(payload), 731)
+        self.assertEqual(original.call_count, 4)
+        self.assertEqual(self.fixture.compaction_count_capture_errors, [{"run_id": run.id, "error_kind": "OSError"}])
+
+    def test_deterministic_projection_observer_keeps_default_payload_and_estimated_basis(self):
+        from langchain_core.messages import HumanMessage
+        from tests_ui.fixture import FixtureModel
+        from workbench_backend.agents.context import estimate_payload
+        from workbench_backend.inference.request_projection import project_context_payload
+        self.fixture.scenario = "compaction_history"
+        run = SimpleNamespace(id="observed-estimated-run")
+        model = FixtureModel(self.fixture, run, [])
+        self.assertFalse(callable(getattr(model, "count_input_tokens", None)))
+        messages = [HumanMessage(content="Only an estimated fixture payload")]
+        payload = model.project_context_payload(messages)
+        self.assertEqual(payload, project_context_payload(messages))
+        record, = self.fixture.compaction_input_counts
+        self.assertEqual(record["basis"], "estimated")
+        self.assertEqual(record["input_tokens"], estimate_payload(payload))
 
 
 if __name__ == "__main__":

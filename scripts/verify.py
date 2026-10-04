@@ -120,13 +120,16 @@ def select_checks(args: argparse.Namespace, root: Path = ROOT) -> list[Check]:
                                     "uncertain native effects pause continuation across observation",
                                     "Chat parallel helper approvals preserve scoped effects through navigation and reconnect",
                                     "Agent run parallel helper approvals preserve scoped effects through navigation and reconnect",
+                                    "Chat native compaction preserves complete history through reconnect and restart",
+                                    "Agent run native compaction preserves complete history through reconnect and restart",
                                 )))
             if args.tier == "delivery":
                 checks.append(Check("desktop-electron", ("pnpm", "run", "test:electron"), desktop,
                                     "desktop delivery: actual isolated built Electron application and native bridge",
                                     required_cases=("actual Windows desktop uses isolated authenticated backend and native bridge",
                                                     "actual Windows sending recovers both screens and cleans owned commands",
-                                                    "actual Windows parallel helper approvals preserve both screens and scoped effects")))
+                                                    "actual Windows parallel helper approvals preserve both screens and scoped effects",
+                                                    "actual Windows native compaction preserves both screens and complete history after restart")))
     if "shared" in args.scopes:
         checks.append(Check("shared-contracts", ("uv", "run", "python", "../../scripts/generate_shared_contracts.py", "--check"),
                             backend, "shared scope: generated contract freshness, alongside both consumer suites"))
@@ -139,7 +142,8 @@ def select_checks(args: argparse.Namespace, root: Path = ROOT) -> list[Check]:
                                 "explicit delivery request: actual built Windows screens and existing local model sending/recovery",
                                 {"WORKBENCH_NATIVE_REAL_MODEL": "required"},
                                 required_cases=("actual Windows real model sending survives lost responses and writes one file",
-                                                "actual Windows real model parallel helpers approve one write and reject the other")))
+                                                "actual Windows real model parallel helpers approve one write and reject the other",
+                                                "actual Windows real model compaction retains facts and complete original history")))
     return checks
 
 
