@@ -118,12 +118,15 @@ def select_checks(args: argparse.Namespace, root: Path = ROOT) -> list[Check]:
                                     "Chat navigation preserves drafts and cancellation cleans owned work",
                                     "Agent run navigation preserves drafts and cancellation cleans owned work",
                                     "uncertain native effects pause continuation across observation",
+                                    "Chat parallel helper approvals preserve scoped effects through navigation and reconnect",
+                                    "Agent run parallel helper approvals preserve scoped effects through navigation and reconnect",
                                 )))
             if args.tier == "delivery":
                 checks.append(Check("desktop-electron", ("pnpm", "run", "test:electron"), desktop,
                                     "desktop delivery: actual isolated built Electron application and native bridge",
                                     required_cases=("actual Windows desktop uses isolated authenticated backend and native bridge",
-                                                    "actual Windows sending recovers both screens and cleans owned commands")))
+                                                    "actual Windows sending recovers both screens and cleans owned commands",
+                                                    "actual Windows parallel helper approvals preserve both screens and scoped effects")))
     if "shared" in args.scopes:
         checks.append(Check("shared-contracts", ("uv", "run", "python", "../../scripts/generate_shared_contracts.py", "--check"),
                             backend, "shared scope: generated contract freshness, alongside both consumer suites"))
@@ -135,7 +138,8 @@ def select_checks(args: argparse.Namespace, root: Path = ROOT) -> list[Check]:
             checks.append(Check("desktop-real-model", ("pnpm", "run", "test:electron"), desktop,
                                 "explicit delivery request: actual built Windows screens and existing local model sending/recovery",
                                 {"WORKBENCH_NATIVE_REAL_MODEL": "required"},
-                                required_cases=("actual Windows real model sending survives lost responses and writes one file",)))
+                                required_cases=("actual Windows real model sending survives lost responses and writes one file",
+                                                "actual Windows real model parallel helpers approve one write and reject the other")))
     return checks
 
 

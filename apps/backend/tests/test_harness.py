@@ -20,9 +20,9 @@ from unittest.mock import patch
 
 import httpx
 from langgraph.checkpoint.base import empty_checkpoint
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from workbench_backend.agents.harness import HarnessService
+from workbench_backend.agents.harness import HarnessService, _invoke_config
 from workbench_backend.agents.harness_compile import graph_checkpoint_snapshot as _graph_checkpoint_snapshot
 from workbench_backend.agents.schemas import (
     AgentEvent,
@@ -41,7 +41,7 @@ from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.lab.schemas import WorkspaceCreateRequest
 from workbench_backend.lab.snapshot import capture_project_snapshot
 from workbench_backend.inference.schemas import ServerProperties
-from workbench_backend.state.checkpointer import open_sqlite_checkpointer
+from workbench_backend.state.checkpointer import open_sqlite_checkpointer, run_checkpoint_task
 from workbench_backend.state.checkpointer import conversation_state
 
 from tests.scripted_model import ScriptedChatModel, set_generate_hold, wait_for_generate_hold
@@ -148,22 +148,30 @@ class HarnessApiTests(unittest.TestCase):
         self.assertIsInstance(checkpoint_id, str)
         return checkpoint_id
 
-    def _put_pending_interrupt_checkpoint(self, thread_id: str) -> str:
-        saver = open_sqlite_checkpointer(self.manager.paths.checkpoints_db)
-        saved = saver.put(
-            {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}},
-            empty_checkpoint(),
-            {"source": "test", "step": 0, "writes": {}, "parents": {}},
-            {},
-        )
-        saver.put_writes(
-            saved,
-            [("__interrupt__", [{"id": f"{thread_id}:interrupt", "value": {"action_requests": [{"name": "execute", "args": {}}]}}])],
-            "test_interrupt_task",
-        )
-        checkpoint_id = saved["configurable"]["checkpoint_id"]
-        self.assertIsInstance(checkpoint_id, str)
-        return checkpoint_id
+    def _put_pending_interrupt_checkpoint(self, run: AgentRun) -> str:
+        """Create an actual scheduled native approval without a detached worker."""
+        self.scripted = ScriptedChatModel([AIMessage(content="", tool_calls=[{
+            "name": "execute", "args": {"command": "Remove-Item disposable.txt"}, "id": "pending-execute"}]),
+            AIMessage(content="Decision applied.")])
+        run.project_path = str(self.root)
+        harness = self.app.state.harness
+        graph = harness._create_compiled_agent(run, [], None)
+        async def pause():
+            stream = await graph.astream_events({"messages": [HumanMessage(content=run.task)]},
+                config=_invoke_config(run), version="v3")
+            try:
+                async for _event in stream:
+                    pass
+            finally:
+                await harness._close_native_stream(stream)
+            return await graph.aget_state(_invoke_config(run))
+        snapshot = run_checkpoint_task(self.manager.paths.checkpoints_db, pause())
+        requests = harness._pending_interrupts_from_state(run, snapshot)
+        self.assertEqual(len(requests), 1)
+        run.pending_interrupt = requests[0]
+        self.assertEqual(run.pending_interrupt.action_requests[0].name, "execute")
+        self.assertFalse((self.root / "disposable.txt").exists())
+        return snapshot.config["configurable"]["checkpoint_id"]
 
     def _start(self, **extra: Any) -> dict[str, Any]:
         payload = {
@@ -1252,8 +1260,9 @@ class HarnessApiTests(unittest.TestCase):
             updated_at=now,
             pending_interrupt=pending,
             thread_id="thread_pending_interrupt",
-            checkpoint_ids=[self._put_pending_interrupt_checkpoint("thread_pending_interrupt")],
+            checkpoint_ids=[],
         )
+        run.checkpoint_ids = [self._put_pending_interrupt_checkpoint(run)]
         self.app.state.harness.store.put_run(run)
 
         restarted = self._restart_harness()
@@ -1262,6 +1271,8 @@ class HarnessApiTests(unittest.TestCase):
         self.assertEqual(observed.status, AgentRunStatus.running)
         self.assertIsNotNone(observed.pending_interrupt)
         self.assertEqual(observed.pending_interrupt.action_requests[0].name, "execute")
+        self.assertEqual(observed.pending_interrupt.interrupt_id, run.pending_interrupt.interrupt_id)
+        self.assertEqual(restarted.saved_pending_interrupts(observed), [observed.pending_interrupt])
 
     def test_checkpoint_reader_matches_execution_graph_for_pending_interrupt_without_runtime_effects(self) -> None:
         self._record_capability("tools")
@@ -1515,6 +1526,28 @@ class HarnessApiTests(unittest.TestCase):
             "pending_interrupt_checkpoint_missing",
         )
 
+    def test_restart_rejects_unscheduled_interrupt_write_as_missing_native_boundary(self) -> None:
+        """A raw interrupt row cannot manufacture a resumable native task."""
+        now = utc_now()
+        thread_id = "thread_unscheduled_interrupt"
+        checkpoint_id = self._put_checkpoint(thread_id)
+        pending = PendingInterrupt(interrupt_id="unscheduled:interrupt", action_requests=[
+            PendingInterruptAction(name="execute", args={"command": "echo fixture"}, allowed_decisions=["approve", "reject"])])
+        saver = open_sqlite_checkpointer(self.manager.paths.checkpoints_db)
+        saver.put_writes({"configurable": {"thread_id": thread_id, "checkpoint_ns": "", "checkpoint_id": checkpoint_id}},
+            [("__interrupt__", [{"id": pending.interrupt_id, "value": {"action_requests": [{"name": "execute", "args": {"command": "echo fixture"}}]}}])],
+            "unscheduled_task")
+        run = AgentRun(id="agent_unscheduled_interrupt", status=AgentRunStatus.running,
+            deployment_id=self.deployment_id, task="invalid boundary", enabled_tools=["execute"], presented_tools=["execute"],
+            created_at=now, updated_at=now, thread_id=thread_id, pending_interrupt=pending, checkpoint_ids=[checkpoint_id])
+        self.app.state.harness.store.put_run(run)
+        restarted = self._restart_harness()
+        observed = restarted.get_run(run.id)
+        self.assertEqual(observed.status, AgentRunStatus.failed)
+        self.assertEqual(observed.events[-1].detail["code"], "pending_interrupt_checkpoint_missing")
+        self.assertEqual(restarted.saved_pending_interrupts(observed), [])
+        self.assertEqual(restarted._threads, {})
+
     def test_restart_marks_cancel_requested_orphan_terminal(self) -> None:
         now = utc_now()
         run = AgentRun(
@@ -1613,10 +1646,17 @@ class HarnessApiTests(unittest.TestCase):
             updated_at=now,
             pending_interrupt=pending,
             thread_id="thread_resume_reserved",
-            checkpoint_ids=[self._put_pending_interrupt_checkpoint("thread_resume_reserved")],
+            checkpoint_ids=[],
         )
         harness = self.app.state.harness
+        run.checkpoint_ids = [self._put_pending_interrupt_checkpoint(run)]
         harness.store.put_run(run)
+        # Startup checkpoint inspection is separate from the worker compilation
+        # failure controlled below; retain the exact native request beforehand.
+        harness._reconcile_startup_once()
+        pending = harness.get_run_operational(run.id).pending_interrupt
+        self.assertIsNotNone(pending)
+        assert pending is not None
 
         request = {"interrupt_id": pending.interrupt_id, "namespace": [], "decisions": [{"type": "reject"}]}
         entered = threading.Event()

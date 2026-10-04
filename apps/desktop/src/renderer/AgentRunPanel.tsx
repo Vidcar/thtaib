@@ -142,8 +142,10 @@ function AgentRunStreamContent(props: {
     <>
       {visibleInterrupt && displayRun ? (
         <InterruptApproval
+          key={JSON.stringify([displayRun.id, visibleInterrupt.id, visibleInterrupt.namespace])}
           ownerLabel={helperApprovalOwner(displayRun, visibleInterrupt.namespace)}
           pending={visibleInterrupt.pending}
+          waitingCount={visibleInterrupt.waitingCount}
           busy={stream.isLoading}
           onConfigureSetup={props.onConfigureSetup}
           onRespond={(payload) => {

@@ -8,10 +8,19 @@ import { createServer as createViteServer } from "vite";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const namespace = ["tools:d0a6a3c8-820a-d669-ef45-b9842dd22f92"];
+const betaNamespace = ["tools:beta-native-helper"];
 const request = "Review each requirement against the actual project files.\n".repeat(45);
-const run = { id: "parent", status: "running", child_runs: [{ run_id: "child", tool_call_id: "delegation-call", agent_id: "research", version_id: "v1", name: "Research", namespace, status: "working" }],
-  helper_snapshots: [], events: [{ kind: "tool_call", detail: { id: "delegation-call", name: "task", args: { description: request } } }],
-  tool_outcomes: { "child:read": { call_id: "read", name: "read_file", outcome: "succeeded" } } };
+const betaRequest = "Review Beta's separate file and report its findings.";
+const run = { id: "parent", status: "running", child_runs: [
+  { run_id: "child", tool_call_id: "delegation-call", agent_id: "research", version_id: "v1", name: "Research", namespace, status: "working" },
+  { run_id: "child-beta", tool_call_id: "delegation-beta", agent_id: "beta", version_id: "v1", name: "Beta", namespace: betaNamespace, status: "working" },
+], helper_snapshots: [], events: [
+  { kind: "tool_call", detail: { id: "delegation-call", name: "task", args: { description: request } } },
+  { kind: "tool_call", detail: { id: "delegation-beta", name: "task", args: { description: betaRequest } } },
+], tool_outcomes: {
+  "child:read": { call_id: "read", name: "read_file", outcome: "succeeded" },
+  "child-beta:read": { call_id: "read", name: "read_file", outcome: "succeeded" },
+} };
 const earlierRun = { id: "earlier-parent", status: "completed", child_runs: [{ run_id: "earlier-child", tool_call_id: "earlier-delegation", name: "Earlier reviewer", namespace: ["tools:earlier-child"], status: "completed" }] };
 const human = { id: "delegated-input", type: "human", content: request };
 const tool = { id: "read", name: "read_file", args: { file_path: "/index.html" } };
@@ -24,11 +33,21 @@ const events = [
   event("tools", [], { event: "tool-started", tool_call_id: "earlier-delegation", tool_name: "task", input: { subagent_type: "earlier-reviewer", description: "Earlier delegated work" } }),
   event("tools", [], { event: "tool-finished", tool_call_id: "earlier-delegation", output: "Earlier result" }),
   event("tools", [], { event: "tool-started", tool_call_id: "delegation-call", tool_name: "task", input: { subagent_type: "research", description: request } }),
+  event("tools", [], { event: "tool-started", tool_call_id: "delegation-beta", tool_name: "task", input: { subagent_type: "beta", description: betaRequest } }),
   event("values", ["tools:unrelated"], { messages: [{ id: "other", type: "ai", content: "UNRELATED HELPER OUTPUT" }] }),
   event("values", namespace, { messages: [human] }),
   event("tools", namespace, { event: "tool-started", tool_call_id: "read", tool_name: "read_file", input: tool.args }),
   event("tools", namespace, { event: "tool-finished", tool_call_id: "read", output: { type: "tool", name: "read_file", tool_call_id: "read", content: "Project file content", status: "success" } }),
   event("values", namespace, { messages: [human, { id: "read-message", type: "ai", content: "", tool_calls: [tool] }, { id: "read-result", type: "tool", tool_call_id: "read", name: "read_file", content: "Project file content", status: "success" }] }),
+  // Parallel helpers intentionally reuse local message and tool IDs. Their
+  // namespace remains the sole owner of replayed transcript/tool contents.
+  event("tools", betaNamespace, { event: "tool-started", tool_call_id: "read", tool_name: "read_file", input: { file_path: "/beta-only.txt" } }),
+  event("tools", betaNamespace, { event: "tool-finished", tool_call_id: "read", output: { type: "tool", name: "read_file", tool_call_id: "read", content: "BETA PRIVATE RESULT", status: "success" } }),
+  event("values", betaNamespace, { messages: [
+    { id: "delegated-input", type: "human", content: betaRequest },
+    { id: "read-message", type: "ai", content: "", tool_calls: [{ ...tool, args: { file_path: "/beta-only.txt" } }] },
+    { id: "read-result", type: "tool", tool_call_id: "read", name: "read_file", content: "BETA PRIVATE RESULT", status: "success" },
+  ] }),
   event("messages", namespace, { event: "message-start", role: "ai", id: "helper-thinking" }),
   event("messages", namespace, { event: "content-block-start", index: 0, content: { type: "reasoning", reasoning: "" } }),
   event("messages", namespace, { event: "content-block-delta", index: 0, delta: { type: "reasoning-delta", reasoning: "Checking the actual track geometry" } }),
@@ -88,9 +107,9 @@ try {
     for (const live of streams) for (const item of events) if (item.seq > (live.filter.since ?? 0) && matches(item, live.filter)) send(live.res, item);
   });
   await until(() => view().includes("Checking the actual track geometry") && view().includes("index.html"), "replayed native tools and live reasoning");
-  assert.doesNotMatch(view(), /UNRELATED HELPER OUTPUT|Loading helper activity/);
+  assert.doesNotMatch(view(), /UNRELATED HELPER OUTPUT|BETA PRIVATE RESULT|beta-only.txt|Loading helper activity/);
   assert.equal(renderer.root.findAll(node => node.props?.className?.includes?.("bubble user")).length, 0, "the large delegation is not duplicated in a human bubble");
-  const liveReasoning = { ...event("messages", namespace, { event: "content-block-delta", index: 0, delta: { type: "reasoning-delta", reasoning: " and finish geometry" } }), seq: 21, event_id: "21" };
+  const liveReasoning = event("messages", namespace, { event: "content-block-delta", index: 0, delta: { type: "reasoning-delta", reasoning: " and finish geometry" } });
   await act(async () => { for (const live of streams) if (matches(liveReasoning, live.filter)) send(live.res, liveReasoning); });
   await until(() => view().includes("and finish geometry"), "new scoped reasoning after replay");
   const rootProjection = JSON.parse(renderer.root.findByProps({ "data-root-tools": true }).children.join(""));
@@ -102,12 +121,19 @@ try {
   await act(async () => renderer.root.findByProps({ className: "quiet-button helper-rail-back" }).props.onClick());
   const activeGroup = renderer.root.findByProps({ "aria-label": "Active helpers" });
   const doneGroup = renderer.root.findByProps({ "aria-label": "Done helpers" });
-  assert.equal(activeGroup.findAllByType("button").length, 1, "only the current owned helper is active");
+  assert.equal(activeGroup.findAllByType("button").length, 2, "only the current owned parallel helpers are active");
   assert.equal(doneGroup.findAllByType("button").length, 1, "replaying older task discovery does not duplicate the durable earlier helper");
   assert.equal(commands, 0, "opening helper output never starts a second run");
+  const betaButton = activeGroup.findAllByType("button").find(node => node.findAllByType("strong")[0]?.children.join("") === "Beta");
+  assert.ok(betaButton, "named Beta helper is selectable");
+  await act(async () => betaButton.props.onClick());
+  await until(() => view().includes("BETA PRIVATE RESULT") && view().includes("beta-only.txt"), "late second-helper replay with reused local IDs");
+  assert.doesNotMatch(view(), /Checking the actual track geometry|Project file content|index.html/);
+  assert.equal(renderer.root.findByProps({ className: "helper-rail-request" }).children.join(""), betaRequest);
+  assert.equal(commands, 0, "switching scoped helpers observes without submitting work");
   await act(async () => renderer.unmount()); renderer = undefined;
   // Completed helpers use the durable request and replayed scoped transcript too.
-  run.status = "completed"; run.child_runs[0].status = "completed";
+  run.status = "completed"; for (const child of run.child_runs) child.status = "completed";
   await act(async () => { renderer = create(render()); });
   await until(() => view().includes("index.html"), "completed helper reopen");
   assert.equal(renderer.root.findByProps({ className: "helper-rail-request" }).children.join(""), request);

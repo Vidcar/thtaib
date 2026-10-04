@@ -511,7 +511,17 @@ class InteractionService:
             if item["method"] == "input.requested":
                 current = editable()
                 requested = item["params"]
-                current["__interrupt__"] = [{"id": requested["data"]["interrupt_id"], "value": requested["data"]["payload"], "namespace": requested["namespace"]}]
+                request = {"id": requested["data"]["interrupt_id"],
+                           "value": requested["data"]["payload"], "namespace": requested["namespace"]}
+                # A single native step can pause several helper tasks. Keep
+                # their streamed identities until the checkpoint-owned set
+                # replaces this provisional projection at the completed pause.
+                pending = (current.get("__interrupt__", [])
+                           if current.get("workbench", {}).get("interrupt_run_id") == run.id else [])
+                current["__interrupt__"] = [
+                    item for item in pending
+                    if (item.get("id"), item.get("namespace", [])) != (request["id"], request["namespace"])
+                ] + [request]
                 current["workbench"]["interrupt_run_id"] = run.id
         outgoing.extend(projected)
         if raw.get("method") == "values" and not namespace:
@@ -667,13 +677,25 @@ class InteractionService:
             return "completed"
         return "running"
 
-    @staticmethod
-    def _saved_interrupts(run: AgentRun) -> list[dict[str, Any]]:
+    def _saved_interrupts(self, run: AgentRun) -> list[dict[str, Any]]:
         pending = run.pending_interrupt
         if not pending or not pending.interrupt_id or not is_run_lifecycle_live(run.status) or run.status.value == "cancel_requested":
             return []
-        return [{"id": pending.interrupt_id, "namespace": pending.namespace,
-                 "value": pending.model_dump(mode="json", exclude_none=True)}]
+        provider = getattr(self.harness, "saved_pending_interrupts", None)
+        # The harness refreshes this projection from the native checkpoint at
+        # a pause/recovery. Do no checkpoint I/O while holding projection locks.
+        # Older/custom owners retain their established singleton representation.
+        requests = provider(run) if callable(provider) else [pending]
+        result = []
+        seen = set()
+        for request in requests:
+            identity = (request.interrupt_id, tuple(request.namespace))
+            if not request.interrupt_id or identity in seen:
+                continue
+            seen.add(identity)
+            result.append({"id": request.interrupt_id, "namespace": request.namespace,
+                           "value": request.model_dump(mode="json", exclude_none=True)})
+        return result
 
     def state(self, thread_id: str) -> dict[str, Any]:
         binding = self.binding(thread_id)

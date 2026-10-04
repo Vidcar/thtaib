@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { withNativeWorkbench } from "./ui/shared/native";
 import { acceptedLostResponse, assertRealFile, openSurface, reconnectAcceptedWork, send, type SendingState } from "./ui/shared/sending";
+import { parallelHelperApprovals, prepareParallelHelpers } from "./ui/shared/helperApprovals";
 
 test("actual Windows real model sending survives lost responses and writes one file", async ({}, testInfo) => {
   expect(process.env.WORKBENCH_NATIVE_REAL_MODEL).toBe("required");
@@ -33,4 +34,23 @@ test("actual Windows real model sending survives lost responses and writes one f
     expect(identity.runtime_sha256).toMatch(/^[a-f0-9]{64}$/i); expect(identity.model_sha256).toMatch(/^[a-f0-9]{64}$/i);
     expect(identity.inference).toContain("no scripted model");
   });
+});
+
+test("actual Windows real model parallel helpers approve one write and reject the other", async ({}, testInfo) => {
+  expect(process.env.WORKBENCH_NATIVE_REAL_MODEL).toBe("required");
+  const previousModel = process.env.WORKBENCH_SMOKE_MODEL_PATH;
+  expect(process.env.WORKBENCH_HELPER_MODEL_PATH, "The helper capability case requires an existing explicitly selected local model").toBeTruthy();
+  process.env.WORKBENCH_SMOKE_MODEL_PATH = process.env.WORKBENCH_HELPER_MODEL_PATH;
+  try { await withNativeWorkbench(testInfo, "real", async (page, backend) => {
+    await prepareParallelHelpers(backend);
+    await parallelHelperApprovals(page, backend, "Chat", true);
+    const identity = backend.seed.real_model_identity as { pid: number; runtime_sha256: string; model_sha256: string; inference: string };
+    expect(identity.pid).toBeGreaterThan(0);
+    expect(identity.runtime_sha256).toMatch(/^[a-f0-9]{64}$/i);
+    expect(identity.model_sha256).toMatch(/^[a-f0-9]{64}$/i);
+    expect(identity.inference).toContain("no scripted model");
+  }); } finally {
+    if (previousModel === undefined) delete process.env.WORKBENCH_SMOKE_MODEL_PATH;
+    else process.env.WORKBENCH_SMOKE_MODEL_PATH = previousModel;
+  }
 });

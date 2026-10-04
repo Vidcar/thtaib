@@ -48,6 +48,7 @@ function NativePathSelector(props: {
 export function InterruptApproval(props: {
   pending: PendingInterrupt;
   ownerLabel?: string;
+  waitingCount?: number;
   busy?: boolean;
   onRespond: (payload: InterruptResponsePayload) => void;
   onConfigureSetup?: (setup: CapabilitySetupRequest) => void;
@@ -77,6 +78,7 @@ export function InterruptApproval(props: {
   return (
     <div className="approval-card" role="alertdialog" aria-labelledby="approval-title">
       <h3 id="approval-title">{setupOnly ? "Setup needed" : "Review requested actions"}{props.ownerLabel ? ` · ${props.ownerLabel}` : ""}</h3>
+      {props.waitingCount ? <p className="hint" role="status">{props.waitingCount} {props.waitingCount === 1 ? "request" : "requests"} waiting.{props.waitingCount > 1 ? " Review this request first; the others remain paused." : ""}</p> : null}
       <p className="notice notice-warn">{setupOnly ? "This step is paused. Complete the setup, then continue the saved work." : "Choose a decision for each action. Saved permissions apply only to matching future actions with the same recorded scope."}</p>
       <ol className="plain-list">
         {pending.action_requests.map((action, index) => {
