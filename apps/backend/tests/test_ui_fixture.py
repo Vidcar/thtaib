@@ -448,12 +448,37 @@ class UIFixtureTests(unittest.TestCase):
         binding = self.post("/v1/agent-interaction/threads", {
             "source_surface": "chat", "conversation_id": seed["conversation_id"],
         })
+        data = seed["compaction"]
+        self.post(f"/v1/chat/conversations/{seed['conversation_id']}/start", {
+            "task": data["task"], "presented_tools": data["tools"], "approval_mode": "full_access",
+            "per_request_overrides": data["request_settings"],
+        })
+        self.wait(lambda: self.view(seed)["current_run"]["status"] in {"completed", "failed"}, "negative-control compaction terminal result")
+        self.assertEqual(self.view(seed)["current_run"]["status"], "completed", self.view(seed)["current_run"].get("error"))
         original = self.client.get(f"/v1/agent-interaction/threads/{binding['thread_id']}/state", headers=self.headers).json()
+        evidence, = self.fixture.state()["compaction"]["rows"]
+        canonical = {message["id"]: message for message in evidence["canonical"]}
         for control in ("compaction_overwritten_history", "compaction_visible_summary"):
             self.post("/__test__/scenario", {"negative_control": control})
             changed = self.client.get(f"/v1/agent-interaction/threads/{binding['thread_id']}/state", headers=self.headers).json()
             self.assertNotEqual(changed["values"]["messages"], original["values"]["messages"])
+            if control == "compaction_overwritten_history":
+                before, after = original["values"]["messages"], changed["values"]["messages"]
+                self.assertEqual([message["id"] for message in after], [message["id"] for message in before])
+                replacements = [(old, new) for old, new in zip(before, after) if old != new]
+                self.assertEqual(len(replacements), 1)
+                old, new = replacements[0]
+                self.assertEqual(old["type"], "tool")
+                self.assertEqual(new, {**old, "content": canonical[old["id"]]["content"]})
+                self.assertLess(len(new["content"]), len(old["content"]))
+                self.assertIn(data["tool_end_marker"], old["content"])
+            else:
+                self.assertEqual(changed["values"]["messages"][:-1], original["values"]["messages"])
+                self.assertEqual(changed["values"]["messages"][-1]["content"], data["internal_summary_marker"])
             self.assertEqual(self.fixture.app.state.interaction.state(binding["thread_id"])["values"]["messages"], original["values"]["messages"])
+            saved, = self.fixture.state()["compaction"]["rows"]
+            self.assertEqual(saved["archive"], evidence["archive"])
+            self.assertEqual(saved["original_tool_results"], evidence["original_tool_results"])
         self.post("/__test__/scenario", {"negative_control": None})
 
     def test_native_count_observer_preserves_one_call_returns_exceptions_and_capture_privacy(self):

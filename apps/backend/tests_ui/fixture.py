@@ -358,7 +358,21 @@ class ApplicationFixture:
                 payload = json.loads(b"".join([chunk async for chunk in response.body_iterator]))
                 messages = payload["values"]["messages"]
                 if self.negative_control == "compaction_overwritten_history":
-                    payload["values"]["messages"] = messages[1:]
+                    from workbench_backend.state.checkpointer import conversation_state
+                    binding = self.app.state.interaction.binding(path.split("/")[-2])
+                    checkpoint = conversation_state(self.app.state.manager.paths.checkpoints_db,
+                        binding["graph_thread_id"])
+                    canonical = {message.id: message for message in checkpoint.get("messages", [])
+                        if message.type == "tool" and message.id}
+                    for message in messages:
+                        reduced = canonical.get(message.get("id"))
+                        if (message.get("type") == "tool" and reduced is not None
+                                and len(str(reduced.content)) < len(str(message.get("content")))):
+                            # Mirror the defect: native clipping replaces the
+                            # same-ID visible tool result, without changing its
+                            # identity, position or the durable display archive.
+                            message["content"] = reduced.model_dump(mode="json")["content"]
+                            break
                 else:
                     messages.append({"id": "negative-visible-summary", "type": "ai",
                         "content": self.seed_data["compaction"]["internal_summary_marker"]})

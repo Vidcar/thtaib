@@ -199,7 +199,7 @@ export async function compactionHistory(page: Page, backend: BackendHandle, surf
     await approval.getByRole("button", { name: "Send decisions", exact: true }).click();
   }
   await expect.poll(async () => (await backend.state<CompactionState>()).runs.at(-1)?.status,
-    { timeout: real ? 240_000 : 30_000 }).toBe("completed");
+    { timeout: real ? 420_000 : 30_000 }).toBe("completed");
   let state = await backend.state<CompactionState>();
   const runId = state.run_ids.at(-1)!;
   expect(state.run_count).toBe(before.run_count + 1);

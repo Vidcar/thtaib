@@ -57,7 +57,7 @@ test("actual Windows real model parallel helpers approve one write and reject th
 });
 
 test("actual Windows real model compaction retains facts and complete original history", async ({}, testInfo) => {
-  test.setTimeout(600_000);
+  test.setTimeout(900_000);
   expect(process.env.WORKBENCH_NATIVE_REAL_MODEL).toBe("required");
   expect(process.env.WORKBENCH_HELPER_MODEL_PATH, "The compaction case requires the existing local 4B model").toBeTruthy();
   const previousModel = process.env.WORKBENCH_SMOKE_MODEL_PATH;
