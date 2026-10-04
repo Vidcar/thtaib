@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { withNativeWorkbench } from "./ui/shared/native";
 import { acceptedLostResponse, assertRealFile, openSurface, reconnectAcceptedWork, send, type SendingState } from "./ui/shared/sending";
 import { parallelHelperApprovals, prepareParallelHelpers } from "./ui/shared/helperApprovals";
+import { compactionHistory } from "./ui/shared/compaction";
 
 test("actual Windows real model sending survives lost responses and writes one file", async ({}, testInfo) => {
   expect(process.env.WORKBENCH_NATIVE_REAL_MODEL).toBe("required");
@@ -50,6 +51,30 @@ test("actual Windows real model parallel helpers approve one write and reject th
     expect(identity.model_sha256).toMatch(/^[a-f0-9]{64}$/i);
     expect(identity.inference).toContain("no scripted model");
   }); } finally {
+    if (previousModel === undefined) delete process.env.WORKBENCH_SMOKE_MODEL_PATH;
+    else process.env.WORKBENCH_SMOKE_MODEL_PATH = previousModel;
+  }
+});
+
+test("actual Windows real model compaction retains facts and complete original history", async ({}, testInfo) => {
+  test.setTimeout(900_000);
+  expect(process.env.WORKBENCH_NATIVE_REAL_MODEL).toBe("required");
+  expect(process.env.WORKBENCH_HELPER_MODEL_PATH, "The compaction case requires the existing local 4B model").toBeTruthy();
+  const previousModel = process.env.WORKBENCH_SMOKE_MODEL_PATH;
+  process.env.WORKBENCH_SMOKE_MODEL_PATH = process.env.WORKBENCH_HELPER_MODEL_PATH;
+  try {
+    for (const surface of ["Chat", "Agent run"] as const) {
+      await withNativeWorkbench(testInfo, "real", async (page, backend) => {
+        const identity = backend.seed.real_model_identity as { pid: number; runtime_sha256: string; model_sha256: string; model_name: string; inference: string };
+        expect(identity.pid).toBeGreaterThan(0);
+        expect(identity.runtime_sha256).toMatch(/^[a-f0-9]{64}$/i);
+        expect(identity.model_sha256).toMatch(/^[a-f0-9]{64}$/i);
+        expect(identity.model_name).toMatch(/qwen3\.5.*4b/i);
+        expect(identity.inference).toContain("no scripted model");
+        await compactionHistory(page, backend, surface, testInfo, true);
+      }, { scenario: "compaction_history" });
+    }
+  } finally {
     if (previousModel === undefined) delete process.env.WORKBENCH_SMOKE_MODEL_PATH;
     else process.env.WORKBENCH_SMOKE_MODEL_PATH = previousModel;
   }

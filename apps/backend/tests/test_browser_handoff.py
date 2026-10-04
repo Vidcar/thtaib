@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 import threading
 import time
 import unittest
@@ -12,7 +13,9 @@ from unittest.mock import patch
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import ExtendedModelResponse, ModelRequest, ModelResponse
-from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
+from deepagents.backends import FilesystemBackend
+from deepagents.middleware.summarization import SUMMARIZATION_EVENT_KEY, SummarizationMiddleware
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.errors import GraphInterrupt
@@ -249,7 +252,13 @@ class BrowserObservationTests(unittest.TestCase):
         echo = StructuredTool.from_function(name="echo", description="Echo text", func=lambda text: text)
         saver, config = InMemorySaver(), {"configurable": {"thread_id": "observation-checkpoint"}}
         workbench = WorkbenchHarnessMiddleware(root, execution_control=control)
-        graph = create_agent(value, tools=[snapshot, echo], middleware=[workbench], checkpointer=saver)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        history_backend = FilesystemBackend(root_dir=temporary.name, virtual_mode=True)
+        def summarizer():
+            return SummarizationMiddleware(model=ScriptedChatModel([AIMessage(content="Retained browser summary")]),
+                backend=history_backend, trigger=("messages", 6), keep=("messages", 1))
+        graph = create_agent(value, tools=[snapshot, echo], middleware=[summarizer(), workbench], checkpointer=saver)
         graph.invoke({"messages": [HumanMessage(content="Accepted task", id="task")]}, config)
         state = graph.get_state(config).values
         observations = [item for item in state["messages"] if item.additional_kwargs.get("workbench_browser_observation")]
@@ -259,32 +268,46 @@ class BrowserObservationTests(unittest.TestCase):
         self.assertIn("historical snapshot", first.content)
         self.assertIn("read-b", first.content)
         self.assertEqual([sum(bool(item.additional_kwargs.get("workbench_browser_observation"))
-            for item in frame) for frame in received], [0, 1, 1])
+            for item in frame) for frame in received], [0, 1, 0])
         self.assertEqual(received[1][-1].model_dump(), first.model_dump())
         self.assertLess(state["messages"].index(first), next(index for index, item in enumerate(state["messages"])
             if isinstance(item, AIMessage) and any(call["id"] == "echo" for call in item.tool_calls)))
-        # Native removal models a compacted historical message. The durable
-        # receipt, rather than an ephemeral middleware cache, prevents replay.
-        graph.update_state(config, {"messages": [RemoveMessage(id=first.id)]})
-        rebuilt = create_agent(ScriptedChatModel([AIMessage(content="Continued")]), tools=[snapshot, echo],
-            middleware=[WorkbenchHarnessMiddleware(root, execution_control=control)], checkpointer=saver)
+        # Actual upstream compaction covers the delivered observation in raw
+        # canonical history. Its native receipt prevents reinjection even
+        # though the effective model context no longer includes that message.
+        self.assertGreater(state[SUMMARIZATION_EVENT_KEY]["cutoff_index"], state["messages"].index(first))
+        self.assertIsNotNone(state[SUMMARIZATION_EVENT_KEY]["file_path"])
+        history = history_backend.download_files([state[SUMMARIZATION_EVENT_KEY]["file_path"]])[0]
+        self.assertIsNone(history.error)
+        self.assertIn("PAGE-A", history.content.decode("utf-8"))
+        effective = SummarizationMiddleware._apply_event_to_messages(state["messages"], state[SUMMARIZATION_EVENT_KEY])
+        self.assertFalse(any(item.additional_kwargs.get("workbench_browser_observation") for item in effective))
+        continued = []
+        class ContinuedModel(ScriptedChatModel):
+            def _generate(self, messages, *args, **kwargs):
+                continued.append(list(messages))
+                return super()._generate(messages, *args, **kwargs)
+        rebuilt = create_agent(ContinuedModel([AIMessage(content="Continued"), AIMessage(content="Again")]), tools=[snapshot, echo],
+            middleware=[summarizer(), WorkbenchHarnessMiddleware(root, execution_control=control)], checkpointer=saver)
         rebuilt.invoke({"messages": [HumanMessage(content="Continue", id="continue")]}, config)
-        self.assertFalse(any(item.additional_kwargs.get("workbench_browser_observation")
-            for item in rebuilt.get_state(config).values["messages"]))
+        self.assertFalse(any(item.additional_kwargs.get("workbench_browser_observation") for item in continued[0]))
+        self.assertEqual(rebuilt.get_state(config).values["_browser_observation_seen"], state["_browser_observation_seen"])
+        self.assertEqual(sum(bool(item.additional_kwargs.get("workbench_browser_observation"))
+            for item in rebuilt.get_state(config).values["messages"]), 1)
         control.take_browser_control()
         control.wait_for_browser_settle()
         control.return_browser_control("PAGE-A")
         rebuilt.invoke({"messages": [HumanMessage(content="Continue again", id="again")]}, config)
-        second = next(item for item in rebuilt.get_state(config).values["messages"]
+        second = next(item for item in reversed(rebuilt.get_state(config).values["messages"])
             if item.additional_kwargs.get("workbench_browser_observation"))
         self.assertNotEqual(second.id, first.id)
         # A fresh accepted run on the same native thread owns its own receipt.
         fresh_root = root.model_copy(deep=True, update={"id": "fresh-run"})
         fresh = create_agent(ScriptedChatModel([AIMessage(content="New run")]), tools=[snapshot, echo],
-            middleware=[WorkbenchHarnessMiddleware(fresh_root)], checkpointer=saver)
+            middleware=[summarizer(), WorkbenchHarnessMiddleware(fresh_root)], checkpointer=saver)
         fresh.invoke({"messages": [HumanMessage(content="New task", id="new-task")]}, config)
         self.assertEqual(sum(bool(item.additional_kwargs.get("workbench_browser_observation"))
-            for item in fresh.get_state(config).values["messages"]), 2)
+            for item in fresh.get_state(config).values["messages"]), 3)
 
 
 class BrowserNativeHandoffTests(unittest.TestCase):

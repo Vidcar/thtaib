@@ -21,7 +21,7 @@ async function treeHashes(root: string, relative = ""): Promise<Record<string, s
 }
 
 /** Actual built main/preload/renderer; the copied document changes only loopback CSP. */
-export async function withNativeWorkbench(testInfo: TestInfo, inference: "deterministic" | "real", operation: (page: Page, backend: BackendHandle) => Promise<void>): Promise<void> {
+export async function withNativeWorkbench(testInfo: TestInfo, inference: "deterministic" | "real", operation: (page: Page, backend: BackendHandle) => Promise<void>, options: { scenario?: string; restartingBackend?: boolean } = {}): Promise<void> {
   expect(process.platform).toBe("win32");
   const desktopRoot = path.join(repositoryRoot, "apps", "desktop");
   const electronExecutable = createRequire(import.meta.url)("electron") as string;
@@ -55,17 +55,20 @@ export async function withNativeWorkbench(testInfo: TestInfo, inference: "determ
     }
   }
   try {
-    backend = await startBackend({ dataRoot: safePath("data"), inference });
+    backend = await startBackend({ dataRoot: safePath("data"), inference, scenario: options.scenario });
+    // The fixture-owned proxy preserves one loopback address across an actual
+    // backend restart. It forwards each request unchanged to the current owner.
+    const rendererOrigin = options.restartingBackend ? backend.browserOrigin : backend.origin;
     await cp(source, renderer, { recursive: true, errorOnExist: true, force: false });
     const productionCsp = "connect-src 'self' http://127.0.0.1:8000 http://localhost:8000;";
     const original = await readFile(document, "utf8");
     expect(original.split(productionCsp)).toHaveLength(2);
-    await writeFile(document, original.replace(productionCsp, `connect-src 'self' ${backend.origin};`));
+    await writeFile(document, original.replace(productionCsp, `connect-src 'self' ${rendererOrigin};`));
     const copied = await treeHashes(renderer);
     for (const [file, digest] of Object.entries(before.renderer)) if (file !== "index.html") expect(copied[file]).toBe(digest);
-    expect((await readFile(document, "utf8")).replace(`connect-src 'self' ${backend.origin};`, productionCsp)).toBe(original);
+    expect((await readFile(document, "utf8")).replace(`connect-src 'self' ${rendererOrigin};`, productionCsp)).toBe(original);
     const environment = Object.fromEntries(Object.entries({ ...process.env, ELECTRON_RUN_AS_NODE: undefined, VITE_DEV_SERVER_URL: undefined,
-      WORKBENCH_DESKTOP_TEST_MODE: "isolated", WORKBENCH_TEST_BACKEND_ORIGIN: backend.origin, WORKBENCH_TEST_PROFILE_ROOT: profile,
+      WORKBENCH_DESKTOP_TEST_MODE: "isolated", WORKBENCH_TEST_BACKEND_ORIGIN: rendererOrigin, WORKBENCH_TEST_PROFILE_ROOT: profile,
       WORKBENCH_TEST_RENDERER_DOCUMENT: document, WORKBENCH_DATA_ROOT: backend.dataRoot, APPDATA: appData, LOCALAPPDATA: localAppData, TEMP: temp, TMP: temp,
     }).filter((entry): entry is [string, string] => entry[1] !== undefined));
     desktop = await _electron.launch({ executablePath: electronExecutable, args: [desktopRoot], cwd: desktopRoot, env: environment, timeout: 30_000 });
@@ -89,7 +92,7 @@ export async function withNativeWorkbench(testInfo: TestInfo, inference: "determ
       const workbench = Reflect.get(window, "workbench");
       return { origin: workbench.backendUrl, authenticatedStatus: (await fetch(`${workbench.backendUrl}/v1/projects`)).status, secretVisible: Object.keys(workbench).some(name => /secret|token|credential/i.test(name)) };
     });
-    expect(bridge.origin).toBe(backend.origin); expect(bridge.authenticatedStatus).toBe(200); expect(bridge.secretVisible).toBe(false);
+    expect(bridge.origin).toBe(rendererOrigin); expect(bridge.authenticatedStatus).toBe(200); expect(bridge.secretVisible).toBe(false);
     const launcherPid = desktop.process().pid;
     expect(launcherPid).toBeGreaterThan(0);
     const command = `$ids=@(${identity.pid},${launcherPid}); @($ids | ForEach-Object { $p=Get-CimInstance Win32_Process -Filter ('ProcessId='+$_); if (!$p) { throw 'Owned process exited' }; [pscustomobject]@{pid=[int]$p.ProcessId; parentPid=[int]$p.ParentProcessId; executable=$p.ExecutablePath; createdUtc=$p.CreationDate.ToUniversalTime().ToString('o')} }) | ConvertTo-Json -Compress`;

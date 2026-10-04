@@ -8,7 +8,7 @@ const results = path.join(repositoryRoot, ".scratch", "ui-baseline", realModel ?
 
 export default defineConfig({
   testDir: "./tests",
-  testMatch: realModel ? "electron-real-model.spec.ts" : ["electron.spec.ts", "electron-sending.spec.ts"],
+  testMatch: realModel ? "electron-real-model.spec.ts" : ["electron.spec.ts", "electron-sending.spec.ts", "electron-compaction.spec.ts"],
   fullyParallel: false,
   workers: 1,
   retries: 0,

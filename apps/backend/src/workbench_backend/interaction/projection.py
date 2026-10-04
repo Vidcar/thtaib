@@ -52,7 +52,13 @@ def message_dict(value: Any) -> dict[str, Any] | None:
 
 
 def archive_messages(existing: list[dict[str, Any]], values: list[Any]) -> list[dict[str, Any]]:
-    """Index complete upstream messages; never assemble text/tool deltas here."""
+    """Index complete upstream messages; retain published tool-result evidence.
+
+    Native compaction may replace a completed ToolMessage with a shorter
+    same-ID model-context representation. The visible archive owns the result
+    already published, independently of those checkpoint replacements. Human
+    edits and assistant completion still update their existing message rows.
+    """
     result = [dict(item) for item in existing]
     positions = {item["id"]: index for index, item in enumerate(result) if item.get("id")}
     for value in values:
@@ -63,7 +69,7 @@ def archive_messages(existing: list[dict[str, Any]], values: list[Any]) -> list[
         if index is None:
             positions[item["id"]] = len(result)
             result.append(item)
-        else:
+        elif item["type"] != "tool" or result[index].get("type") != "tool":
             result[index] = item
     return result
 

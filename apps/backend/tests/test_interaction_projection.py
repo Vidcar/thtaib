@@ -7,7 +7,9 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from langchain_core.messages import AIMessage, ToolMessage
+from deepagents.backends import StateBackend
+from deepagents.middleware._overflow_clip import _clip_overflow_tail
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
 
 from workbench_backend.agents.harness import HarnessService
@@ -17,6 +19,44 @@ from workbench_backend.interaction.projection import archive_messages, message_d
 
 
 class InteractionProjectionTests(unittest.TestCase):
+    def test_native_clipped_result_cannot_replace_completed_archive_content(self) -> None:
+        call = AIMessage(id="read-call", content="", tool_calls=[{
+            "id": "read", "name": "read_file", "args": {"file_path": "/original.txt"},
+        }])
+        result = ToolMessage(id="read-result", tool_call_id="read", name="read_file",
+            status="success", content="ORIGINAL-BEGIN\n" + "original line\n" * 1500 + "ORIGINAL-END")
+        original = archive_messages([], [call, result])
+        clipped, replacements = _clip_overflow_tail([call, result], StateBackend(),
+            keep=("tokens", 1), max_input_tokens=8192,
+            token_counter=lambda messages: sum(len(str(message.content)) // 4 for message in messages),
+            large_tool_results_prefix="/large_tool_results")
+        self.assertEqual(len(replacements), 1)
+        self.assertEqual(replacements[0].id, result.id)
+        self.assertNotIn("ORIGINAL-END", replacements[0].content,
+            "The fixture must actually exercise native shortening, not an unchanged message.")
+        self.assertEqual(archive_messages(original, clipped), original)
+        # Native checkpoint replacement is still different from the display row.
+        self.assertNotEqual(message_dict(replacements[0]), original[-1])
+
+    def test_archive_identity_keeps_distinct_results_but_allows_answer_and_user_updates(self) -> None:
+        first = ToolMessage(id="root-result", tool_call_id="local-call", name="read_file",
+            content=[{"type": "text", "text": "same text"}, {"type": "image", "url": "retained.png"}])
+        sibling = first.model_copy(update={"id": "helper-result"})
+        later = first.model_copy(update={"id": "later-run-result"})
+        original = archive_messages([], [HumanMessage(id="user", content="Original"),
+            AIMessage(id="answer", content="Partial"), first, sibling])
+        shortened = first.model_copy(update={"content": "shortened", "status": "error", "name": "changed"})
+        updated = archive_messages(original, [HumanMessage(id="user", content="Edited"),
+            AIMessage(id="answer", content="Completed", additional_kwargs={"reasoning_content": "Thought"}),
+            shortened, sibling.model_copy(update={"content": "also shortened"}), later])
+        self.assertEqual([message["id"] for message in updated],
+            ["user", "answer", "root-result", "helper-result", "later-run-result"])
+        self.assertEqual(updated[0]["content"], "Edited")
+        self.assertEqual(updated[1]["content"], [
+            {"type": "reasoning", "reasoning": "Thought"}, {"type": "text", "text": "Completed"}])
+        self.assertEqual(updated[2:4], original[2:4])
+        self.assertEqual(updated[4], message_dict(later))
+
     def test_measurement_projection_retains_history_without_rebuilding_it_for_each_sample(self):
         service = object.__new__(InteractionService)
         service.store = SimpleNamespace(append_interaction=Mock())
