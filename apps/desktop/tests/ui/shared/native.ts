@@ -73,6 +73,13 @@ export async function withNativeWorkbench(testInfo: TestInfo, inference: "determ
     }).filter((entry): entry is [string, string] => entry[1] !== undefined));
     desktop = await _electron.launch({ executablePath: electronExecutable, args: [desktopRoot], cwd: desktopRoot, env: environment, timeout: 30_000 });
     const page = await desktop.firstWindow();
+    const rendererErrors: Array<{ message: string; stack?: string }> = [];
+    const redact = (value: string) => value.replaceAll(backend!.token, "[redacted]");
+    page.on("pageerror", error => rendererErrors.push({ message: redact(error.message),
+      ...(error.stack ? { stack: redact(error.stack) } : {}) }));
+    if (process.env.WORKBENCH_UI_NEGATIVE_CONTROL === "uncaught-error") {
+      await page.evaluate(() => setTimeout(() => { throw new Error("Deliberate native renderer gate negative control"); }, 0));
+    }
     await page.waitForLoadState("domcontentloaded");
     await expect(page.getByRole("button", { name: inference === "real" ? "Real model conversation" : "Baseline conversation", exact: true })).toBeVisible();
     const identity = await desktop.evaluate(({ app, BrowserWindow }) => {
@@ -103,7 +110,7 @@ export async function withNativeWorkbench(testInfo: TestInfo, inference: "determ
     async function capture(outcome: "passed" | "failed"): Promise<void> {
       const state = await ownedBackend.state();
       const renderedText = await page.locator("body").innerText();
-      const safe = JSON.stringify({ outcome, identity, processChain, artifacts: before, copiedRenderer: copied, authenticatedStatus: bridge.authenticatedStatus, inference,
+      const safe = JSON.stringify({ outcome, identity, processChain, artifacts: before, copiedRenderer: copied, authenticatedStatus: bridge.authenticatedStatus, inference, rendererErrors,
         backend: { pid: ownedBackend.pid, dataRoot: ownedBackend.dataRoot }, state, renderedText,
         limit: "Unpackaged Windows application; copied document differs only in isolated backend connect-src" }, null, 2).replaceAll(ownedBackend.token, "[redacted]");
       const evidence = testInfo.outputPath(`sending-native-${outcome}-${identity.pid}.json`);
@@ -113,6 +120,7 @@ export async function withNativeWorkbench(testInfo: TestInfo, inference: "determ
     }
     try {
       await operation(page, backend);
+      expect(rendererErrors, "The built Windows application must have no uncaught renderer errors").toEqual([]);
       expect(await hash(main)).toBe(before.main); expect(await hash(preload)).toBe(before.preload); expect(await treeHashes(source)).toEqual(before.renderer);
       expect(await treeHashes(renderer)).toEqual(copied);
     } catch (error) {

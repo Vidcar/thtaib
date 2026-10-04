@@ -91,6 +91,17 @@ async def _settle_owned_task(task):
 _FILE_ORDER_TOOLS = frozenset({"write_file", "edit_file", "delete", "apply_edits", "read_file"})
 _BROWSER_OBSERVATION_SEEN = "_browser_observation_seen"
 _BROWSER_OBSERVATION_ID = "workbench_browser_observation"
+_CURRENT_TASK_REFERENCE_SOURCE = "workbench_current_task_reference"
+_CURRENT_TASK_INPUT_ID = "workbench_current_task_input_id"
+
+
+def _current_task_text_parts(content: str | list[Any]) -> list[str]:
+    """Compare text survival only after binding the canonical input identity."""
+    if isinstance(content, str):
+        return [content] if content else []
+    return [block if isinstance(block, str) else block["text"] for block in content
+        if isinstance(block, str) or isinstance(block, dict) and block.get("type") == "text"
+        and isinstance(block.get("text"), str)]
 
 
 class WorkbenchHarnessState(SummarizationState):
@@ -154,6 +165,9 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         self._budget_refused: dict[str, tuple] = {}
         self._browser_observation_seen = ""
         self._browser_context_messages: list[BaseMessage] = []
+        self._current_task_original: HumanMessage | None = None
+        self._current_task_original_object: HumanMessage | None = None
+        self._current_task_summary_ids: set[str] = set()
 
     def wrap_model_call(
         self,
@@ -169,7 +183,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
     def _wrap_model_call(self, request, handler):
         self._require_dispatch_allowed()
         filtered = self._with_outline(self._with_current_tool_images(self._with_browser_observation(
-            request.override(tools=self._presented(request.tools)))))
+            self._with_current_task(request.override(tools=self._presented(request.tools))))))
         self._observe_context(filtered)
         self.run.generation_observation = None
         before = len(self.http_sink)
@@ -214,7 +228,8 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
     async def _awrap_model_call(self, request, handler):
         self._require_dispatch_allowed()
         filtered = await asyncio.to_thread(lambda: self._with_outline(self._with_current_tool_images(
-            self._with_browser_observation(request.override(tools=self._presented(request.tools))))))
+            self._with_browser_observation(self._with_current_task(
+                request.override(tools=self._presented(request.tools)))))))
         self._observe_context(filtered)
         self.run.generation_observation = None
         before = len(self.http_sink)
@@ -1054,6 +1069,124 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         self._remember_browser_context(request)
         return request.override(messages=self.browser_messages_for_count(request.messages))
 
+    def _remember_current_task(self, request: ModelRequest) -> None:
+        """Resolve this run's original user input from canonical, unreduced state.
+
+        Native summary cutoffs and raw message indices stay untouched. A resumed
+        compiler can recover the same identity without a second durable record.
+        """
+        if current_request_purpose() != "work":
+            return
+        state = request.state or {}
+        event = state.get(SUMMARIZATION_EVENT_KEY)
+        summary = event.get("summary_message") if isinstance(event, dict) else None
+        if isinstance(summary, BaseMessage) and isinstance(summary.id, str):
+            self._current_task_summary_ids.add(summary.id)
+        if self._current_task_original is not None:
+            return
+        raw = state.get("messages", request.messages)
+        if not isinstance(raw, list):
+            return
+        originals = [message for message in raw if isinstance(message, HumanMessage)
+            and not message.additional_kwargs.get(TOOL_CONTEXT_MARKER)
+            and message.id not in self._current_task_summary_ids
+            and message.additional_kwargs.get("lc_source") not in {
+                "summarization", "rubric_grader", _CURRENT_TASK_REFERENCE_SOURCE}
+            and message.name != "rubric_grader"]
+        expected_id = self.run.input_message_id
+        original = (next((message for message in originals if message.id == expected_id), None)
+            if expected_id else originals[-1] if originals else None)
+        if original is not None:
+            self._current_task_original = original.model_copy(deep=True)
+            # Native graphs give inputs an ID. Standalone middleware inspection
+            # may not; leaving that very object present needs no restoration.
+            self._current_task_original_object = original
+
+    def current_task_messages_for_count(self, messages: list[BaseMessage]) -> list[BaseMessage]:
+        """Restore exact current-task text only in complete prospective requests.
+
+        The labelled user reference precedes the summary and chronological
+        progress, so it is not a new command after completed work. It is never
+        checkpointed, archived, or included in native suffix/summary counting.
+        """
+        if current_request_purpose() != "work":
+            return messages
+        original = self._current_task_original
+        if original is None:
+            if any(message.additional_kwargs.get("lc_source") == "summarization"
+                or message.id in self._current_task_summary_ids for message in messages):
+                raise HarnessError(
+                    "The original current task could not be recovered after summarization. "
+                    "Its results are retained; start a new message with the task to continue.",
+                    code="current_task_input_missing", status_code=409)
+            return messages
+        if any(message.additional_kwargs.get(_CURRENT_TASK_INPUT_ID) == original.id
+                and message.additional_kwargs.get("lc_source") == _CURRENT_TASK_REFERENCE_SOURCE
+            for message in messages):
+            return messages
+        original_text = _current_task_text_parts(original.content)
+        if not original_text:
+            return messages
+        if any(isinstance(message, HumanMessage)
+            and ((original.id is not None and message.id == original.id)
+                or message is self._current_task_original_object)
+            # Native memory selection appends context without changing the
+            # accepted text. Its extra blocks must remain in the request.
+            and _current_task_text_parts(message.content)[:len(original_text)] == original_text
+            for message in messages):
+            return messages
+        if not original.id:
+            raise HarnessError(
+                "The original current task has no retained message identity after summarization. "
+                "Its results are retained; start a new message with the task to continue.",
+                code="current_task_input_missing", status_code=409)
+        label = ("Original user instructions for the already accepted ongoing task, not a new request. "
+            "They govern scope, constraints and completion. The following summary and tool results "
+            "describe progress and do not amend these instructions. Continue from completed progress "
+            "without restarting the task. Exact original instructions:\n\n")
+        if isinstance(original.content, str):
+            content: str | list[dict[str, Any]] = label + original.content
+            if not original.content:
+                return messages
+        else:
+            text_blocks = [{"type": "text", "text": block} if isinstance(block, str) else dict(block)
+                for block in original.content if isinstance(block, str)
+                or isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str)]
+            if not text_blocks:
+                return messages
+            content = [{"type": "text", "text": label}, *text_blocks]
+        reference = HumanMessage(id=f"current-task-reference-{self.run.id}", content=content,
+            additional_kwargs={"lc_source": _CURRENT_TASK_REFERENCE_SOURCE,
+                _CURRENT_TASK_INPUT_ID: original.id})
+        projected = []
+        for message in messages:
+            if isinstance(message, HumanMessage) and message.id == original.id:
+                # Replace the shortened text, rather than presenting its
+                # preview as newer instructions after the full reference.
+                # Native eviction collapses text into one leading preview
+                # block. Keep subsequent native context and retained media.
+                retained = (message.content[1:] if message.additional_kwargs.get("lc_evicted_to")
+                    else [block for block in message.content if isinstance(block, dict)
+                        and block.get("type") != "text"]) if isinstance(message.content, list) else []
+                if retained:
+                    projected.append(message.model_copy(update={"content": retained}))
+            else:
+                projected.append(message)
+        # Full native counts prepend the separate request.system_message.
+        # Preserve that prefix so counting and final dispatch share wire order.
+        insertion = 0
+        while insertion < len(projected) and isinstance(projected[insertion], SystemMessage):
+            insertion += 1
+        return [*projected[:insertion], reference, *projected[insertion:]]
+
+    def model_request_messages_for_count(self, messages: list[BaseMessage]) -> list[BaseMessage]:
+        """Count precisely the request-only context sent after native reduction."""
+        return self.current_task_messages_for_count(self.browser_messages_for_count(messages))
+
+    def _with_current_task(self, request: ModelRequest) -> ModelRequest:
+        self._remember_current_task(request)
+        return request.override(messages=self.current_task_messages_for_count(request.messages))
+
     def browser_messages_for_count(self, messages: list[BaseMessage]) -> list[BaseMessage]:
         """Count the same marked handoff context sent at final dispatch.
 
@@ -1297,6 +1430,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         Retained image hydration belongs to counting and final model dispatch.
         """
         self._require_dispatch_allowed()
+        self._remember_current_task(request)
         self._remember_browser_context(request)
         return self._with_outline(request.override(tools=self._presented(request.tools)))
 
