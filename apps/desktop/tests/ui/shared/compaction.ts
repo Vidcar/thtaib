@@ -238,6 +238,7 @@ export async function compactionHistory(page: Page, backend: BackendHandle, surf
       expect(messagesOnly(row.archive.slice(0, original.length))).toEqual(messagesOnly(original));
       expect(text(row.archive.at(-1)!)).toContain(seed.marker);
       expect(row.write_count).toBe(1);
+      expect(row.read_count).toBe(seed.expected_read_count);
       historyProofs.push({ stage: "retained fact followup", proof: await assertHistory(page, backend, surface, row) });
     }
   }
