@@ -111,11 +111,19 @@ def select_checks(args: argparse.Namespace, root: Path = ROOT) -> list[Check]:
                                     "scoped approval and Stop govern actual owned effects",
                                     "model load reload and failure remain truthful",
                                     "retained output reopens after restart and source change",
+                                    "Chat rejected and uncertain original submissions preserve drafts",
+                                    "Agent run rejected and uncertain original submissions preserve drafts",
+                                    "Chat accepted lost response and reconnect execute once without reload",
+                                    "Agent run accepted lost response and reconnect execute once without reload",
+                                    "Chat navigation preserves drafts and cancellation cleans owned work",
+                                    "Agent run navigation preserves drafts and cancellation cleans owned work",
+                                    "uncertain native effects pause continuation across observation",
                                 )))
             if args.tier == "delivery":
                 checks.append(Check("desktop-electron", ("pnpm", "run", "test:electron"), desktop,
                                     "desktop delivery: actual isolated built Electron application and native bridge",
-                                    required_cases=("actual Windows desktop uses isolated authenticated backend and native bridge",)))
+                                    required_cases=("actual Windows desktop uses isolated authenticated backend and native bridge",
+                                                    "actual Windows sending recovers both screens and cleans owned commands")))
     if "shared" in args.scopes:
         checks.append(Check("shared-contracts", ("uv", "run", "python", "../../scripts/generate_shared_contracts.py", "--check"),
                             backend, "shared scope: generated contract freshness, alongside both consumer suites"))
@@ -123,6 +131,11 @@ def select_checks(args: argparse.Namespace, root: Path = ROOT) -> list[Check]:
         checks.append(Check("real-model-smoke", ("uv", "run", "python", "-m", "unittest", "tests_integration.test_real_model_smoke"),
                             backend, "explicit delivery request: isolated real runtime plumbing, not model capability or the open desktop",
                             {"WORKBENCH_REAL_MODEL_SMOKE": "required"}, minimum_tests=4))
+        if "desktop" in args.scopes:
+            checks.append(Check("desktop-real-model", ("pnpm", "run", "test:electron"), desktop,
+                                "explicit delivery request: actual built Windows screens and existing local model sending/recovery",
+                                {"WORKBENCH_NATIVE_REAL_MODEL": "required"},
+                                required_cases=("actual Windows real model sending survives lost responses and writes one file",)))
     return checks
 
 

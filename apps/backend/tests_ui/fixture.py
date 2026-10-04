@@ -7,9 +7,11 @@ import json
 import os
 from pathlib import Path
 import socket
+import subprocess
 import sys
 import threading
 import time
+from uuid import uuid4
 from typing import Any
 
 from fastapi import HTTPException
@@ -66,7 +68,12 @@ class FixtureModel(BaseChatModel):
 
 
 class ApplicationFixture:
-    def __init__(self, data_root: Path):
+    def __init__(self, data_root: Path, *, inference: str = "deterministic"):
+        if inference not in {"deterministic", "real"}:
+            raise ValueError("Unknown isolated inference mode")
+        self.inference = inference
+        self.real_server = None
+        self.real_identity = None
         self.root = configure_environment(data_root)
         # Deliberately import only after configuring the import-time app instance.
         from workbench_backend.app import app as initial_app, create_app
@@ -83,8 +90,14 @@ class ApplicationFixture:
         self.fail_shutdown = False
         self.lose_next_ack = False
         self.disconnect_next_stream = False
+        self.reject_next_submit = False
+        self.fail_state_reads = 0
+        self.submit_release = threading.Event()
+        self.submit_release.set()
+        self.submissions: list[dict[str, Any]] = []
+        self.failed_lookup_paths: list[str] = []
         self.negative_control = None
-        self.faults = {"lost_acknowledgements": 0, "stream_disconnects": 0, "draft_losses": 0}
+        self.faults = {"lost_acknowledgements": 0, "stream_disconnects": 0, "draft_losses": 0, "state_lookup_failures": 0}
         self.model_run_ids: list[str] = []
         self.model_process_identities: list[Any] = []
         self.lock = threading.RLock()
@@ -92,6 +105,7 @@ class ApplicationFixture:
         self.seed_data = json.loads(self.seed_path.read_text(encoding="utf-8")) if self.seed_path.exists() else {}
         self._closed = False
         self.cleanup_errors: list[str] = []
+        self.native_model_factory = self.app.state.harness._model_factory
         self.app.state.harness._model_factory = self.model_factory
         fixture = self
 
@@ -116,6 +130,8 @@ class ApplicationFixture:
     def model_factory(self, run, sink):
         with self.lock:
             self.model_run_ids.append(run.id)
+        if self.inference == "real":
+            return self.native_model_factory(run, sink)
         if run.task == "Saved baseline question":
             script = [AIMessage(content="Saved baseline answer")]
         elif self.scenario in {"approval", "retained"}:
@@ -126,6 +142,9 @@ class ApplicationFixture:
         elif self.scenario == "command":
             script = [AIMessage(content="", tool_calls=[{"name": "start_command", "args": {"command": [sys.executable, str(self.root / "project" / "owned-command.py")], "timeout_seconds": 40}, "id": "baseline-command"}]),
                       AIMessage(content="Baseline command completed")]
+        elif self.scenario == "partial_effect":
+            script = [AIMessage(content="", tool_calls=[{"name": "execute", "args": {"command": subprocess.list2cmdline([sys._base_executable, str(self.root / "project" / "partial-command.py")]), "timeout": 2}, "id": "baseline-partial-command"}]),
+                      AIMessage(content="Must not continue after an uncertain effect")]
         else:
             script = [AIMessage(content="Baseline response completed")]
         return FixtureModel(self, run, script)
@@ -144,7 +163,8 @@ class ApplicationFixture:
             self.configure({"scenario": "baseline", "release_model": True, "release_model_load": True})
             self.lose_next_ack = self.disconnect_next_stream = False
             self.negative_control = None
-            self.faults = {"lost_acknowledgements": 0, "stream_disconnects": 0, "draft_losses": 0}
+            self.failed_lookup_paths.clear()
+            self.faults = {"lost_acknowledgements": 0, "stream_disconnects": 0, "draft_losses": 0, "state_lookup_failures": 0}
             return self.state()
 
         @self.app.get("/__test__/state")
@@ -168,6 +188,28 @@ class ApplicationFixture:
         @self.app.middleware("http")
         async def transport_fault(request, call_next):
             from workbench_backend.local_trust import tokens_match
+            authenticated = tokens_match(request.headers.get("X-Workbench-Local-Token", ""), self.app.state.local_trust_token)
+            path = request.url.path
+            command = authenticated and request.method == "POST" and path.endswith("/commands")
+            if command:
+                body = await request.json()
+                if body.get("method") == "run.start":
+                    with self.lock:
+                        self.submissions.append({"thread_id": path.split("/")[-2], "payload": body})
+                    if self.reject_next_submit:
+                        self.reject_next_submit = False
+                        return JSONResponse({"type": "error", "id": body.get("id"), "error": "fixture_rejected", "message": "Baseline task rejected before acceptance"}, status_code=409)
+                    if not await asyncio.to_thread(self.submit_release.wait, 30):
+                        return JSONResponse({"error": "Admission hold exceeded its test deadline"}, status_code=503)
+            state_read = (path.startswith("/v1/agent-interaction/") and path.endswith("/state")) or (path.startswith("/v1/chat/conversations/") and len(path.split("/")) == 5)
+            if self.submissions:
+                original_thread = self.submissions[-1]["thread_id"]
+                state_read = path in {f"/v1/agent-interaction/threads/{original_thread}/state", f"/v1/chat/conversations/{self.seed_data.get('conversation_id')}"}
+            if authenticated and request.method == "GET" and state_read and self.fail_state_reads:
+                self.fail_state_reads -= 1
+                self.faults["state_lookup_failures"] += 1
+                self.failed_lookup_paths.append(path)
+                return JSONResponse({"error": "Baseline state lookup temporarily unavailable"}, status_code=503)
             if self.negative_control == "lose_draft" and request.method == "GET" and self.seed_data and request.url.path == f"/v1/chat/conversations/{self.seed_data['conversation_id']}" and tokens_match(request.headers.get("X-Workbench-Local-Token", ""), self.app.state.local_trust_token):
                 saved = self.app.state.chat.store.get(self.seed_data["conversation_id"])
                 if saved and saved.draft and saved.draft.content:
@@ -177,6 +219,15 @@ class ApplicationFixture:
                     self.faults["draft_losses"] += 1
             response = await call_next(request)
             path = request.url.path
+            if command and body.get("method") == "run.start" and response.status_code < 300 and self.negative_control == "duplicate_execution":
+                # Deliberately violate one-execution acceptance through the real
+                # graph owner. This test-only control never changes production.
+                from workbench_backend.agents.schemas import AgentStartRequest
+                message = body["params"]["input"]["messages"][0]
+                setup = {key: value for key, value in body["params"].get("metadata", {}).get("workbench", {}).items() if key in AgentStartRequest.model_fields}
+                setup.update(task=message["content"], input_message_id=f"negative-{uuid4()}", thread_id=f"negative-{uuid4()}", source_surface="agent-run")
+                self.negative_control = None
+                self.app.state.harness.start(AgentStartRequest.model_validate(setup))
             if self.lose_next_ack and request.method == "POST" and response.status_code < 300 and (path.endswith("/commands") or path.endswith("/start") or path.endswith("/queue")):
                 self.lose_next_ack = False
                 self.faults["lost_acknowledgements"] += 1
@@ -205,7 +256,7 @@ class ApplicationFixture:
 
     def configure(self, body):
         scenario = body.get("scenario", self.scenario)
-        if scenario not in {"baseline", "lost_ack", "approval", "command", "retained", "model"}:
+        if scenario not in {"baseline", "lost_ack", "approval", "command", "retained", "model", "partial_effect"}:
             raise HTTPException(400, "Unknown UI fixture scenario")
         self.scenario = scenario
         if "hold_model" in body:
@@ -214,21 +265,59 @@ class ApplicationFixture:
         if body.get("release_model"):
             self.hold_model = False
             self.release.set()
+        if "hold_submit" in body:
+            self.submit_release.clear() if body["hold_submit"] else self.submit_release.set()
+        if body.get("release_submit"):
+            self.submit_release.set()
+        if "fail_state_reads" in body:
+            self.fail_state_reads = max(0, int(body["fail_state_reads"]))
         if "hold_model_load" in body:
             self.load_release.clear() if body["hold_model_load"] else self.load_release.set()
         if body.get("release_model_load"):
             self.load_release.set()
-        for field in ("lose_next_ack", "disconnect_next_stream", "fail_model_start", "fail_shutdown"):
+        for field in ("lose_next_ack", "disconnect_next_stream", "fail_model_start", "fail_shutdown", "reject_next_submit"):
             if field in body:
                 setattr(self, field, bool(body[field]))
         if "negative_control" in body:
             value = body["negative_control"]
-            if value not in {None, "lose_draft"}:
+            if value not in {None, "lose_draft", "duplicate_execution"}:
                 raise HTTPException(400, "Unknown negative control")
             self.negative_control = value
         if body.get("change_source"):
             (self.root / "project" / "baseline-output.txt").write_text("Changed source after retention", encoding="utf-8")
         return self.state()
+
+    def seed_real(self, project, project_path):
+        from tests_integration.assets import resolve_assets
+        from tests_integration.test_real_model_smoke import RealLlamaServer
+        from workbench_backend.chat.schemas import ChatConversationCreateRequest
+        from workbench_backend.inference.schemas import ConnectedDeploymentRequest
+        from workbench_backend.inference.hashes import sha256_file
+        assets = resolve_assets()
+        self.real_server = RealLlamaServer(assets, self.root / "real-llama-server.log")
+        try:
+            self.real_server.wait_ready()
+        except Exception:
+            self.real_server.close()
+            raise
+        identity = psutil.Process(self.real_server.process.pid)
+        version = subprocess.run([str(assets.llama_server), "--version"], capture_output=True, text=True, timeout=15)
+        if version.returncode:
+            raise RuntimeError("The existing native runtime did not report its version")
+        self.real_identity = {"pid": self.real_server.process.pid, "create_time": identity.create_time(),
+            "runtime_sha256": sha256_file(assets.llama_server),
+            "model_sha256": sha256_file(assets.model), "version": (version.stdout + version.stderr).strip(),
+            "runtime_name": assets.llama_server.name, "model_name": assets.model.name,
+            "inference": "actual local llama.cpp; no scripted model", "startup": {"ctx_size": 8192, "parallel": 1}}
+        manager = self.app.state.manager
+        deployment = manager.attach_connected(ConnectedDeploymentRequest(endpoint=self.real_server.endpoint, display_name="Existing real local model", startup={"ctx_size": 8192}))
+        # Connected servers have no installed bundle. Use their public setup
+        # ownership with authored request overrides, not an orphan model profile.
+        conversation = self.app.state.chat.create(ChatConversationCreateRequest(title="Real model conversation", project_id=project.id, deployment_id=deployment.id, per_request_overrides={"temperature": 0.0, "seed": 7, "max_tokens": 128}, approval_mode="full_access", presented_tools=["write_file"], input_policy={"tool_loading": "always"}))
+        self.seed_data = {"project_id": project.id, "conversation_id": conversation.id, "deployment_id": deployment.id, "profile_id": None,
+            "fixture_root": str(self.root), "project_path": str(project_path), "seed_run_ids": [], "retained_asset_ids": [], "real_model_identity": self.real_identity}
+        self.seed_path.write_text(json.dumps(self.seed_data), encoding="utf-8")
+        return {**self.seed_data, "scenario": self.scenario}
 
     def seed(self, scenario="baseline"):
         from workbench_backend.agents.setup_schemas import ProjectCreateRequest
@@ -248,7 +337,10 @@ class ApplicationFixture:
         project_path = self.root / "project"
         project_path.mkdir(exist_ok=True)
         (project_path / "owned-command.py").write_text("import time\nprint('Baseline owned command running', flush=True)\ntime.sleep(40)\n", encoding="utf-8")
+        (project_path / "partial-command.py").write_text("import threading\nfrom pathlib import Path\nwith Path('partial-marker.txt').open('a') as marker: marker.write('once\\n')\nthreading.Event().wait(120)\n", encoding="utf-8")
         project = self.app.state.setups.create_project(ProjectCreateRequest(name="Baseline project", path=str(project_path)))
+        if self.inference == "real":
+            return self.seed_real(project, project_path)
         gguf = self.root / "baseline-model.gguf"
         writer = GGUFWriter(str(gguf), "llama")
         writer.add_name("Baseline model")
@@ -281,10 +373,11 @@ class ApplicationFixture:
         deployment = manager.create_managed(ManagedDeploymentRequest(bundle_id=bundle.id, profile_id=profile.id))
         if deployment.status.value != "running":
             raise RuntimeError(f"Baseline deterministic inference boundary did not start: {deployment.error}")
-        conversation = self.app.state.chat.create(ChatConversationCreateRequest(title="Baseline conversation", project_id=project.id, deployment_id=deployment.id, profile_id=profile.id, approval_mode="ask", presented_tools=["write_file", "start_command", "command_status", "stop_command"], input_policy={"tool_loading": "always"}))
+        conversation = self.app.state.chat.create(ChatConversationCreateRequest(title="Baseline conversation", project_id=project.id, deployment_id=deployment.id, profile_id=profile.id, approval_mode="ask", presented_tools=["write_file", "execute", "start_command", "command_status", "stop_command"], input_policy={"tool_loading": "always"}))
+        other = self.app.state.chat.create(ChatConversationCreateRequest(title="Other baseline conversation", project_id=project.id, deployment_id=deployment.id, profile_id=profile.id, approval_mode="ask"))
         self.app.state.chat.start(conversation.id, ChatStartRequest(task="Saved baseline question"))
         self.wait_terminal(conversation.id)
-        self.seed_data = {"project_id": project.id, "conversation_id": conversation.id, "deployment_id": deployment.id, "profile_id": profile.id, "bundle_id": bundle.id, "fixture_root": str(self.root), "project_path": str(project_path), "owned_effect_path": str(project_path / "approved.txt"), "retained_asset_ids": [], "seed_run_ids": [run.id for run in self.app.state.app_store.list_runs()]}
+        self.seed_data = {"project_id": project.id, "conversation_id": conversation.id, "other_conversation_id": other.id, "deployment_id": deployment.id, "profile_id": profile.id, "bundle_id": bundle.id, "fixture_root": str(self.root), "project_path": str(project_path), "owned_effect_path": str(project_path / "approved.txt"), "retained_asset_ids": [], "seed_run_ids": [run.id for run in self.app.state.app_store.list_runs()]}
         if scenario == "retained":
             self._retain_seed_output()
         self.seed_path.write_text(json.dumps(self.seed_data), encoding="utf-8")
@@ -339,7 +432,7 @@ class ApplicationFixture:
                 commands.append({"command_id": command.id, "run_id": command.run.id, "pid": command.process.pid, "alive": command.process.poll() is None, "state": command.state, "exit_code": command.exit_code})
         deployments = self.app.state.manager.list_deployments()
         effects = self.app.state.effects.list_effects()
-        return {"pid": os.getpid(), "data_root": str(self.root), "seed": self.seed_data, "scenario": self.scenario, "model_factory_run_ids": list(self.model_run_ids), "model_processes": self.model_process_evidence(), "cleanup_errors": list(self.cleanup_errors), "run_ids": [run.id for run in tested_runs], "input_ids": [run.input_message_id for run in tested_runs], "run_count": len(tested_runs), "runs": [{"id": run.id, "status": run.status.value, "input_message_id": run.input_message_id, "tool_invocations": run.tool_invocations, "stop_reason": run.stop_reason} for run in tested_runs], "commands": commands, "effects": [effect.model_dump(mode="json") for effect in effects], "deployments": [{"id": deployment.id, "status": deployment.status.value, "pid": deployment.pid, "process_alive": bool(deployment.pid and psutil.pid_exists(deployment.pid)), "error": deployment.error} for deployment in deployments], "faults": dict(self.faults), "approved_file_exists": (self.root / "project" / "approved.txt").exists()}
+        return {"pid": os.getpid(), "data_root": str(self.root), "seed": self.seed_data, "scenario": self.scenario, "submissions": list(self.submissions), "failed_lookup_paths": list(self.failed_lookup_paths), "real_model_identity": self.real_identity, "model_factory_run_ids": list(self.model_run_ids), "model_processes": self.model_process_evidence(), "cleanup_errors": list(self.cleanup_errors), "run_ids": [run.id for run in tested_runs], "input_ids": [run.input_message_id for run in tested_runs], "run_count": len(tested_runs), "runs": [{"id": run.id, "status": run.status.value, "input_message_id": run.input_message_id, "tool_invocations": run.tool_invocations, "stop_reason": run.stop_reason} for run in tested_runs], "commands": commands, "effects": [effect.model_dump(mode="json") for effect in effects], "deployments": [{"id": deployment.id, "status": deployment.status.value, "pid": deployment.pid, "process_alive": bool(deployment.pid and psutil.pid_exists(deployment.pid)), "error": deployment.error} for deployment in deployments], "faults": dict(self.faults), "approved_file_exists": (self.root / "project" / "approved.txt").exists()}
 
     def model_process_evidence(self):
         from workbench_backend.inference.process import classify_identity
@@ -360,6 +453,7 @@ class ApplicationFixture:
             return
         self.release.set()
         self.load_release.set()
+        self.submit_release.set()
         errors: list[Exception] = []
 
         def attempt(label, operation):
@@ -373,6 +467,8 @@ class ApplicationFixture:
 
         attempt("Agent workers", self.app.state.harness.close)
         attempt("Owned commands", self.app.state.managed_commands.shutdown)
+        if self.real_server is not None:
+            attempt("Owned real local model", self.real_server.close)
         deployments = attempt("Model inventory", self.app.state.manager.list_deployments) or []
         for deployment in deployments:
             if deployment.scope.value == "managed" and deployment.pid:

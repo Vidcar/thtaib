@@ -724,6 +724,25 @@ def _persist_admitted_run(service, admitted):
         service._cancels[run.id] = cancel
         service._decision_ready[run.id] = threading.Event()
         service._pending_decisions[run.id] = None
-        service._persist_and_notify(run)
+        try:
+            service._persist_and_notify(run)
+        except Exception:
+            try:
+                accepted = service.store.get_execution_run(run.id)
+            except Exception:
+                # Storage is still unavailable. Reconcile the unowned record
+                # once it can be read; never start a worker as recovery.
+                service._startup_reconciled = False
+                raise
+            if accepted is not None:
+                run.error = "The initial run activity could not be saved. Work was not started."
+                service._finish(run, AgentRunStatus.failed, "interaction_persistence_failed")
+            else:
+                service._runs.pop(run.id, None)
+                service._cancels.pop(run.id, None)
+                service._decision_ready.pop(run.id, None)
+                service._pending_decisions.pop(run.id, None)
+                service._rewind_drop_from.pop(run.id, None)
+            raise
 
     return run

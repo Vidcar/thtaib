@@ -4,7 +4,7 @@ import path from "node:path";
 const evidenceRoot = path.resolve(import.meta.dirname, "../../.scratch/executable-baseline/playwright-ui");
 export default defineConfig({
   testDir: "./tests/ui",
-  testMatch: "baseline.spec.ts",
+  testMatch: ["baseline.spec.ts", "sending.spec.ts"],
   fullyParallel: false,
   workers: 1,
   retries: 0,

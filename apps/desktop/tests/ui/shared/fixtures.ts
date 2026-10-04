@@ -1,7 +1,23 @@
 import { test as base, expect, type Page } from "@playwright/test";
 import { startBackend, type BackendHandle } from "./backend";
 
-export const test = base.extend<{ backend: BackendHandle; openWorkbench: () => Promise<void> }>({
+export const test = base.extend<{ backend: BackendHandle; openWorkbench: () => Promise<void>; rendererHealth: void }>({
+  rendererHealth: [async ({ page, backend }, use, testInfo) => {
+    const errors: Array<{ message: string; stack?: string }> = [];
+    const redact = (text: string) => text.replaceAll(backend.token, "[redacted]");
+    page.on("pageerror", error => errors.push({ message: redact(error.message), stack: error.stack ? redact(error.stack) : undefined }));
+    if (process.env.WORKBENCH_UI_NEGATIVE_CONTROL === "uncaught-error") {
+      await page.addInitScript(() => {
+        window.addEventListener("load", () => setTimeout(() => { throw new Error("Deliberate renderer gate negative control"); }, 0));
+      });
+    }
+    try {
+      await use();
+    } finally {
+      await testInfo.attach("uncaught-renderer-errors", { body: JSON.stringify({ errors }, null, 2), contentType: "application/json" });
+      expect(errors, "The rendered application must have no uncaught browser errors").toEqual([]);
+    }
+  }, { auto: true }],
   backend: async ({}, use, testInfo) => {
     const backend = await startBackend();
     try {

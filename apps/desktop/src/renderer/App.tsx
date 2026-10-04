@@ -66,7 +66,7 @@ export function App() {
   const [agentReview, setAgentReview] = useState<{ id?: string; request: number }>({ request: 0 });
   const [knowledgeReview, setKnowledgeReview] = useState<{ id?: string; request: number }>({ request: 0 });
   const [modelReview, setModelReview] = useState<{ id?: string; request: number }>({ request: 0 });
-  useEffect(() => { if (["models", "agents", "knowledge"].includes(tab)) setVisitedEditors(current => new Set([...current, tab])); }, [tab]);
+  useEffect(() => { if (["models", "agents", "knowledge", "agent-run"].includes(tab)) setVisitedEditors(current => new Set([...current, tab])); }, [tab]);
   const [workspaceLaunch, setWorkspaceLaunch] = useState<ChatWorkspaceLaunch | null>(null);
   const [historyRevision, setHistoryRevision] = useState(0);
   const [projectRevision, setProjectRevision] = useState(0);
@@ -337,8 +337,8 @@ export function App() {
       />
       <main className="app-main">
         <div className="persistent-chat" data-active={tab === "chat"} aria-hidden={tab !== "chat"} inert={tab !== "chat"}>{renderTab("chat")}</div>
-        {(["models", "agents", "knowledge"] as WorkbenchTab[]).map(editor => visitedEditors.has(editor) || tab === editor ? <div key={editor} className={editor === "models" ? "persistent-editor models-editor-host" : "persistent-editor"} hidden={tab !== editor} inert={tab !== editor}>{renderTab(editor)}</div> : null)}
-        {tab !== "chat" && !["models", "agents", "knowledge"].includes(tab) ? renderTab(tab) : null}
+        {(["models", "agents", "knowledge", "agent-run"] as WorkbenchTab[]).map(editor => visitedEditors.has(editor) || tab === editor ? <div key={editor} className={editor === "models" ? "persistent-editor models-editor-host" : "persistent-editor"} hidden={tab !== editor} inert={tab !== editor}>{renderTab(editor)}</div> : null)}
+        {tab !== "chat" && !["models", "agents", "knowledge", "agent-run"].includes(tab) ? renderTab(tab) : null}
       </main>
     </div>
   );

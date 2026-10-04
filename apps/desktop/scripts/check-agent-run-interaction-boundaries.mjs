@@ -96,6 +96,7 @@ function makeHarness() {
     cancelBarrier: heldCancel,
     streamRuns: new Map(),
     commandHold: null,
+    commandMode: null,
   };
   const server = createServer((req, res) => {
     let body = "";
@@ -183,8 +184,13 @@ function makeHarness() {
         const message = payload.params?.input?.messages?.[0];
         const task = typeof message?.content === "string" ? message.content : threadId;
         if (state.commandHold) await state.commandHold.promise;
+        if (state.commandMode === "reject") {
+          json(res, 400, { type: "error", id: payload.id, error: "invalid_request", message: "Task rejected before acceptance" });
+          return;
+        }
         state.streamRuns.set(threadId, run(runId, "completed", task, message?.id ?? null));
-        json(res, 200, { type: "success", id: payload.id ?? "cmd", result: {} });
+        if (state.commandMode?.startsWith("accepted-loss")) json(res, 503, { type: "error", id: payload.id, error: "unknown_error", message: "Accepted task acknowledgement interrupted" });
+        else json(res, 200, { type: "success", id: payload.id ?? "cmd", result: {} });
         return;
       }
       const cancelMatch = url.pathname.match(/^\/v1\/agent-runs\/([^/]+)\/cancel$/);
@@ -419,6 +425,36 @@ try {
   assert.deepEqual(handled, [...handledBeforeStale, "saved_b"], "obsolete notification is never acknowledged as the newer selection");
   assert.equal(harness.state.commands.length, commandsBeforeStale, "reopening and switching saved tasks issues no work commands");
   await act(async () => renderer.unmount());
+
+  for (const mode of ["reject", "accepted-loss", "accepted-loss-newer-draft"]) {
+    harness.state.commandMode = mode;
+    harness.state.rejectRegistration = false;
+    const before = harness.state.commands.length;
+    const commandHold = mode.endsWith("newer-draft") ? deferred() : null;
+    harness.state.commandHold = commandHold;
+    await act(async () => { renderer = create(React.createElement(AgentRunPanel)); });
+    await waitFor(() => assert.ok(textarea(renderer)), `${mode}: task editor`);
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Original task draft" } }));
+    await waitFor(() => assert.equal(startForm(renderer).findAllByType("button").find(item => textOf(item).includes("Run task")).props.disabled, false), `${mode}: ready`);
+    await act(async () => startForm(renderer).props.onSubmit({ preventDefault() {} }));
+    await waitFor(() => assert.equal(harness.state.commands.length, before + 1), `${mode}: one original command`);
+    if (commandHold) {
+      await act(async () => textarea(renderer).props.onChange({ target: { value: "Newer task draft" } }));
+      commandHold.resolve();
+      harness.state.commandHold = null;
+    }
+    if (mode === "reject") {
+      await waitFor(() => assert.match(allText(renderer), /Task rejected before acceptance/), "rejected task reports its actual denial");
+      assert.equal(textarea(renderer).props.value, "Original task draft", "rejected native submit retains its draft");
+      await waitFor(() => assert.equal(startForm(renderer).findAllByType("button").find(item => textOf(item).includes("Run task")).props.disabled, false), "rejected pending identity retires so another attempt is available");
+    } else {
+      await waitFor(() => assert.equal(textarea(renderer).props.value, commandHold ? "Newer task draft" : ""), `${mode}: confirmed admission clears only unchanged draft`);
+      await waitFor(() => assert.match(allText(renderer), /Completed/), `${mode}: result observation restored`);
+      assert.doesNotMatch(allText(renderer), /Accepted task acknowledgement interrupted/, "accepted native work suppresses its stale acknowledgement error");
+    }
+    assert.equal(harness.state.commands.length, before + 1, "recovery observation never executes another command");
+    await act(async () => renderer.unmount());
+  }
 } finally {
   for (const barrier of harness.state.registrationBarriers.values()) barrier.resolve();
   await vite.close();

@@ -15,6 +15,7 @@ def main():
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--port", type=int, choices=[0], default=0)
     parser.add_argument("--ready-file", type=Path, required=True)
+    parser.add_argument("--inference", choices=["deterministic", "real"], default="deterministic")
     args = parser.parse_args()
     root = configure_environment(args.data_root)
     ready = args.ready_file.resolve()
@@ -23,7 +24,7 @@ def main():
     from tests_ui.fixture import ApplicationFixture
     import uvicorn
 
-    fixture = ApplicationFixture(root)
+    fixture = ApplicationFixture(root, inference=args.inference)
     listener = socket.socket()
     try:
         listener.bind(("127.0.0.1", args.port))

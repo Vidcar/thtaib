@@ -144,6 +144,95 @@ class UIFixtureTests(unittest.TestCase):
         self.assertEqual(state["faults"]["lost_acknowledgements"], 1)
         self.assertIn("Baseline response completed", [message["content"] for message in self.view(seed)["transcript"]])
 
+    def test_pre_accept_rejection_records_original_payload_without_executing(self):
+        self.seed()
+        binding = self.post("/v1/agent-interaction/threads", {"source_surface": "agent"})
+        self.post("/__test__/scenario", {"reject_next_submit": True})
+        command = {"id": "rejected-command", "method": "run.start", "params": {
+            "input": {"messages": [{"id": "rejected-input", "type": "human", "content": "Keep the rejected authored task"}]},
+            "metadata": {"workbench": {"deployment_id": self.fixture.seed_data["deployment_id"]}}, "multitaskStrategy": "reject"}}
+        response = self.client.post(f"/v1/agent-interaction/threads/{binding['thread_id']}/commands", json=command, headers=self.headers)
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["id"], command["id"])
+        self.assertEqual(response.json()["error"], "fixture_rejected")
+        self.assertEqual(self.fixture.state()["run_count"], 0)
+        self.assertEqual(self.fixture.state()["submissions"], [{"thread_id": binding["thread_id"], "payload": command}])
+
+    def test_transient_state_failure_does_not_change_authoritative_binding(self):
+        seed = self.seed()
+        binding = self.post("/v1/agent-interaction/threads", {"source_surface": "chat", "conversation_id": seed["conversation_id"]})
+        route = f"/v1/agent-interaction/threads/{binding['thread_id']}/state"
+        before = self.client.get(route, headers=self.headers).json()
+        self.post("/__test__/scenario", {"fail_state_reads": 1})
+        self.assertEqual(self.client.get(route, headers=self.headers).status_code, 503)
+        after = self.client.get(route, headers=self.headers)
+        self.assertEqual(after.status_code, 200)
+        self.assertEqual(after.json()["values"], before["values"])
+        self.assertEqual(self.fixture.state()["run_count"], 0)
+
+    def test_failed_chat_lookup_targets_product_read_and_keeps_control_evidence(self):
+        seed = self.seed()
+        self.post("/__test__/scenario", {"fail_state_reads": 1})
+        state = self.client.get("/__test__/state", headers=self.headers)
+        self.assertEqual(state.status_code, 200)
+        failed = self.client.get(f"/v1/chat/conversations/{seed['conversation_id']}", headers=self.headers)
+        self.assertEqual(failed.status_code, 503)
+        self.assertEqual(self.fixture.state()["faults"]["state_lookup_failures"], 1)
+        self.assertEqual(self.fixture.state()["failed_lookup_paths"], [f"/v1/chat/conversations/{seed['conversation_id']}"])
+        self.assertEqual(self.view(seed)["current_run"]["status"], "completed")
+
+    def test_duplicate_negative_control_executes_two_actual_graphs(self):
+        self.seed()
+        binding = self.post("/v1/agent-interaction/threads", {"source_surface": "agent"})
+        self.post("/__test__/scenario", {"negative_control": "duplicate_execution"})
+        command = {"id": "duplicate-control", "method": "run.start", "params": {
+            "input": {"messages": [{"id": "one-original-input", "type": "human", "content": "Expose a duplicated graph"}]},
+            "metadata": {"workbench": {"deployment_id": self.fixture.seed_data["deployment_id"]}}, "multitaskStrategy": "reject"}}
+        self.post(f"/v1/agent-interaction/threads/{binding['thread_id']}/commands", command)
+        self.wait(lambda: len(self.fixture.state()["runs"]) == 2 and all(run["status"] == "completed" for run in self.fixture.state()["runs"]), "two deliberately duplicated real graph executions")
+        state = self.fixture.state()
+        self.assertEqual(state["run_count"], 2)
+        for run_id in state["run_ids"]:
+            self.assertEqual(state["model_factory_run_ids"].count(run_id), 1)
+
+    def test_required_real_inference_missing_assets_never_uses_fake_fallback(self):
+        from tests_integration.assets import SmokeAssetsUnavailable
+        other_root = self.root / "required-real-case"
+        real_fixture = ApplicationFixture(other_root, inference="real")
+        with TestClient(real_fixture.app):
+            try:
+                with patch("tests_integration.assets.resolve_assets", side_effect=SmokeAssetsUnavailable("required fixture unavailable")):
+                    with self.assertRaisesRegex(SmokeAssetsUnavailable, "required fixture unavailable"):
+                        real_fixture.seed()
+                self.assertEqual(real_fixture.inference, "real")
+                self.assertEqual(real_fixture.state()["run_count"], 0)
+                self.assertIsNone(real_fixture.real_server)
+                self.assertFalse((other_root / "baseline-model.gguf").exists())
+            finally:
+                real_fixture.close()
+
+    def test_held_native_admission_releases_without_replacing_payload(self):
+        self.seed()
+        binding = self.post("/v1/agent-interaction/threads", {"source_surface": "agent"})
+        self.post("/__test__/scenario", {"hold_submit": True})
+        command = {"id": "held-command", "method": "run.start", "params": {
+            "input": {"messages": [{"id": "held-input", "type": "human", "content": "Frozen original held task"}]},
+            "metadata": {"workbench": {"deployment_id": self.fixture.seed_data["deployment_id"]}}, "multitaskStrategy": "reject"}}
+        results = []
+        worker = threading.Thread(target=lambda: results.append(self.client.post(f"/v1/agent-interaction/threads/{binding['thread_id']}/commands", json=command, headers=self.headers)))
+        worker.start()
+        try:
+            self.wait(lambda: len(self.fixture.state()["submissions"]) == 1, "actual held command ingress")
+            self.assertEqual(self.fixture.state()["run_count"], 0)
+        finally:
+            self.fixture.submit_release.set()
+            worker.join(timeout=10)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(results[0].status_code, 200, results[0].text)
+        self.wait(lambda: self.fixture.state()["runs"][0]["status"] == "completed", "held command completion")
+        self.assertEqual(self.fixture.state()["input_ids"], ["held-input"])
+        self.assertEqual(self.fixture.state()["submissions"][0]["payload"], command)
+
     def test_stream_fault_closes_only_observation_and_keeps_native_headers(self):
         seed = self.seed()
         binding = self.post("/v1/agent-interaction/threads", {

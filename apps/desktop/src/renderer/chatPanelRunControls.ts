@@ -1,5 +1,6 @@
 import type { Dispatch, SetStateAction } from "react";
 import { api } from "./api";
+import { cancelAcceptedInteraction } from "./interactionSubmission";
 import type { ChatRailPage } from "./ChatDock";
 import type { AgentRun, ChatConversation, WorkbenchTab } from "./types";
 
@@ -74,16 +75,10 @@ export function stopCurrentWork(deps: {
   if (!conversation.current_run) {
     return;
   }
-  const cancelledRunId = conversation.current_run.id;
-  void api.cancelAgentRun(cancelledRunId)
-    .then((next) => {
-      updateConversationForRun({ ...conversation, current_run: next, current_run_id: next.id }, owner, cancelledRunId);
-    })
-    .catch((error: unknown) => {
-      if (isCurrentOwner(owner)) {
-        fail(error);
-      }
-    });
+  const cancelledRun = conversation.current_run;
+  cancelAcceptedInteraction(cancelledRun, () => isCurrentOwner(owner), api.cancelAgentRun,
+    next => updateConversationForRun({ ...conversation, current_run: next, current_run_id: next.id }, owner, cancelledRun.id), fail);
+
 }
 
 export function recoverRun(run: AgentRun, deps: {

@@ -43,6 +43,7 @@ import { conversationTitle, displayedTranscript, formatWhen } from "./display";
 import { EmptyState } from "./EmptyState";
 import { errorMessage } from "./errors";
 import { InteractionStream, useWorkbenchProjection, visibleApprovalInterrupt, type WorkbenchStream } from "./InteractionStream";
+import { useInteractionSubmission, SubmissionRecoveryNotice, type InteractionSubmissionController } from "./interactionSubmission";
 import { InterruptApproval } from "./InterruptApproval";
 import { Notice } from "./Notice";
 import {
@@ -100,6 +101,7 @@ interface PendingChatSubmit {
   review?: { enabled: boolean; criteria: string; max_revisions: 2 };
   rewind_source_run_id?: string;
   rewind_mode?: "retry" | "edit";
+  observation_only?: boolean;
 }
 
 function rewindFailureNotice(pending: PendingChatSubmit, accepted: boolean, fallback: string): string {
@@ -155,138 +157,81 @@ function ChatInteractionStream(props: {
     noteRewindResult,
   } = props;
   const owner = { conversationId: conversation.id, threadId, generation: selectionGeneration };
-  const reconciledSubmissionErrors = useRef(new Set<string>());
-  const submissionErrorOwner = useRef<string | null>(null);
-  const submissionFailure = useRef<{ inputId: string; message: string; accepted?: boolean } | null>(null);
   const [observationEpoch, setObservationEpoch] = useState(0);
   const queueActive = conversation.queue?.some(item => item.status === "queued" || item.status === "dispatching") ?? false;
   const queuePresent = Boolean(conversation.queue?.length);
   const queueHasRun = conversation.queue?.some(item => item.run_id || Boolean(conversation.current_run?.input_message_id && item.input_message_id === conversation.current_run.input_message_id)) ?? false;
   const observedQueue = useRef({ active: queueActive, present: queuePresent, hasRun: queueHasRun });
-  const currentSubmissionView = useRef({ conversation, pendingSubmit, observationEpoch });
-  currentSubmissionView.current = { conversation, pendingSubmit, observationEpoch };
-  if (pendingSubmit && submissionErrorOwner.current !== pendingSubmit.id) {
-    submissionErrorOwner.current = pendingSubmit.id;
-    reconciledSubmissionErrors.current.clear();
-    submissionFailure.current = null;
-  }
-  useEffect(() => {
-    if (pendingSubmit || !submissionFailure.current?.accepted) return;
-    // The SDK can abandon its deferred subscription when the command response
-    // fails. Rehydrate confirmed accepted work without resubmitting its input.
-    submissionFailure.current = null;
-    setObservationEpoch(value => value + 1);
-  }, [pendingSubmit]);
+  const controller = useInteractionSubmission<PendingChatSubmit, ChatConversation>({
+    pending: pendingSubmit ? (() => {
+      const { id, task, conversation_id: _conversationId, thread_id: _threadId,
+        selection_generation: _generation, draft_revision: _draftRevision,
+        submitted_draft_revision: submittedDraftRevision, observation_only: observationOnly, ...workbench } = pendingSubmit;
+      return { id, threadId, ownerKey: JSON.stringify(owner), observationOnly, source: pendingSubmit,
+        input: { messages: [{ type: "human", content: task, id }] },
+        options: { multitaskStrategy: "reject" as const, metadata: { workbench: { ...workbench, draft_revision: submittedDraftRevision } } } };
+    })() : null,
+    ownerKey: JSON.stringify(owner),
+    isCurrentOwner: () => isCurrentOwner(owner),
+    read: () => api.chatConversation(conversation.id),
+    hasAccepted: chatHasAcceptedInputMessage,
+    runInView: next => next.current_run,
+    projectedView: (run, submitted) => submitted.rewind_source_run_id ? null : {
+      ...conversation, current_run: run, current_run_id: run.id,
+      run_ids: conversation.run_ids.includes(run.id) ? conversation.run_ids : [...conversation.run_ids, run.id],
+    },
+    onAccepted: (submitted, next) => {
+      noteRewindResult(submitted, true);
+      updateConversation(next, owner);
+      clearSubmittedDraft(submitted);
+      clearPendingSubmit(submitted);
+      refreshDeployments();
+      setMessage("");
+    },
+    onRejected: (submitted, error) => {
+      noteRewindResult(submitted, false);
+      clearPendingSubmit(submitted);
+      setMessage(rewindFailureNotice(submitted, false, errorMessage(error)));
+    },
+    onFailure: error => { if (isCurrentOwner(owner)) setMessage(errorMessage(error)); },
+    refreshObservation: () => setObservationEpoch(value => value + 1),
+  });
   useEffect(() => {
     const previous = observedQueue.current;
     observedQueue.current = { active: queueActive, present: queuePresent, hasRun: queueHasRun };
     if (pendingSubmit || (conversation.current_run && isAgentRunLive(conversation.current_run.status))) return;
     if (previous.active !== queueActive && (previous.active || previous.present) && (queueActive || !previous.hasRun)) {
-      // A waiting input can be removed or paused without producing a run
-      // lifecycle event. Retire its SDK wait, or observe a resumed queue.
       setObservationEpoch(value => value + 1);
     }
   }, [queueActive, queuePresent, queueHasRun, pendingSubmit, conversation.current_run]);
   return (
-    <InteractionStream
-      key={observationEpoch}
-      threadId={threadId}
-      onError={(error) => {
-        if (isCurrentOwner(owner)) {
-          const errorText = errorMessage(error);
-          if (reconciledSubmissionErrors.current.has(errorText)) return;
-          if (
-            pendingSubmit &&
-            pendingSubmit.conversation_id === owner.conversationId &&
-            pendingSubmit.thread_id === owner.threadId &&
-            pendingSubmit.selection_generation === owner.generation
-          ) {
-            reconciledSubmissionErrors.current.add(errorText);
-            submissionFailure.current = { inputId: pendingSubmit.id, message: errorText };
-            void api.chatConversation(pendingSubmit.conversation_id)
-              .then((next) => {
-                if (!isCurrentOwner(owner)) {
-                  return;
-                }
-                updateConversation(next, owner);
-                clearPendingSubmit(pendingSubmit);
-                if (chatHasAcceptedInputMessage(next, pendingSubmit.id)) {
-                  submissionFailure.current = { inputId: pendingSubmit.id, message: errorText, accepted: true };
-                  noteRewindResult(pendingSubmit, true);
-                  clearSubmittedDraft(pendingSubmit);
-                  refreshDeployments();
-                  setMessage("");
-                  return;
-                }
-                noteRewindResult(pendingSubmit, false);
-                setMessage(rewindFailureNotice(pendingSubmit, false, errorMessage(error)));
-              })
-              .catch(() => {
-                if (isCurrentOwner(owner)) {
-                  setMessage("Connection interrupted. Checking whether the message was accepted.");
-                }
-              });
-            return;
-          }
-          setMessage(errorMessage(error));
-        }
-      }}
-    >
-      {(stream) => (
-        <ChatInteractionStreamContent
-          detailedStreams={props.detailedStreams}
-          renderMessageFooter={props.renderMessageFooter}
-          renderAnswerActions={props.renderAnswerActions}
-          stream={stream}
-          owner={owner}
-          conversation={conversation}
-          pendingSubmit={pendingSubmit}
-          submissionFailure={submissionFailure}
-          onSubmissionError={(submitted, error, runObserved) => {
-            const stillOwned = () => isCurrentOwner(owner) && submissionErrorOwner.current === submitted.id
-              && currentSubmissionView.current.observationEpoch === observationEpoch;
-            if (!stillOwned()) return;
-            const current = currentSubmissionView.current;
-            // Admission can be confirmed before the command response arrives.
-            // The SDK reports a late command rejection through onError rather
-            // than rejecting submit(), so keep its exact input attribution.
-            if (current.pendingSubmit || (!runObserved && !chatHasAcceptedInputMessage(current.conversation, submitted.id))) return;
-            const errorText = errorMessage(error);
-            reconciledSubmissionErrors.current.add(errorText);
-            if (runObserved) {
-              // A warm SDK stream can observe the accepted run before its
-              // command response. Distinguish that late response failure from
-              // a real failed run without replacing the working observer.
-              void api.chatConversation(submitted.conversation_id).then(next => {
-                if (!stillOwned()) return;
-                const failed = next.current_run?.input_message_id === submitted.id && next.current_run.status === "failed";
-                const accepted = chatHasAcceptedInputMessage(next, submitted.id);
-                noteRewindResult(submitted, accepted);
-                setMessage(failed || !accepted ? rewindFailureNotice(submitted, accepted, errorText) : "");
-              }).catch(() => { if (stillOwned()) setMessage(errorText); });
-              return;
-            }
-            submissionFailure.current = null;
-            setMessage("");
-            setObservationEpoch(value => value + 1);
-          }}
-          clearPendingSubmit={clearPendingSubmit}
-          updateConversation={updateConversation}
-          updateConversationIfCurrentRun={updateConversationIfCurrentRun}
-          updateConversationForRun={updateConversationForRun}
-          clearSubmittedDraft={clearSubmittedDraft}
-          refreshDeployments={refreshDeployments}
-          setMessage={setMessage}
-          isCurrentOwner={isCurrentOwner}
-          onHelperOpen={props.onHelperOpen}
-          onHelperActivity={props.onHelperActivity}
-          historicalRuns={props.historicalRuns}
-          onRecoverRun={props.onRecoverRun}
-          noteRewindResult={noteRewindResult}
-          onConfigureSetup={props.onConfigureSetup}
-        />
-      )}
-    </InteractionStream>
+    <>
+      <SubmissionRecoveryNotice controller={controller} />
+      <InteractionStream key={observationEpoch} threadId={threadId} onError={controller.onError}>
+        {(stream) => (
+          <ChatInteractionStreamContent
+            detailedStreams={props.detailedStreams}
+            renderMessageFooter={props.renderMessageFooter}
+            renderAnswerActions={props.renderAnswerActions}
+            stream={stream}
+            owner={owner}
+            conversation={conversation}
+            pendingSubmit={pendingSubmit}
+            controller={controller}
+            updateConversation={updateConversation}
+            updateConversationIfCurrentRun={updateConversationIfCurrentRun}
+            updateConversationForRun={updateConversationForRun}
+            setMessage={setMessage}
+            isCurrentOwner={isCurrentOwner}
+            onHelperOpen={props.onHelperOpen}
+            onHelperActivity={props.onHelperActivity}
+            historicalRuns={props.historicalRuns}
+            onRecoverRun={props.onRecoverRun}
+            onConfigureSetup={props.onConfigureSetup}
+          />
+        )}
+      </InteractionStream>
+    </>
   );
 }
 
@@ -304,14 +249,10 @@ function ChatInteractionStreamContent(props: {
   owner: SelectionOwner;
   conversation: ChatConversation;
   pendingSubmit: PendingChatSubmit | null;
-  submissionFailure: RefObject<{ inputId: string; message: string; accepted?: boolean } | null>;
-  onSubmissionError: (submitted: PendingChatSubmit, error: unknown, runObserved: boolean) => void;
-  clearPendingSubmit: (pending: PendingChatSubmit) => void;
+  controller: InteractionSubmissionController;
   updateConversation: (conversation: ChatConversation, owner: SelectionOwner) => void;
   updateConversationIfCurrentRun: (conversation: ChatConversation, owner: SelectionOwner, expectedRunId: string | null) => void;
   updateConversationForRun: (conversation: ChatConversation, owner: SelectionOwner, runId: string) => void;
-  clearSubmittedDraft: (pending: PendingChatSubmit) => void;
-  refreshDeployments: () => void;
   setMessage: (message: string) => void;
   isCurrentOwner: (owner: SelectionOwner) => boolean;
   onHelperOpen: (runId: string, toolCallId: string) => void;
@@ -319,23 +260,18 @@ function ChatInteractionStreamContent(props: {
   historicalRuns: AgentRun[];
   onRecoverRun?: (run: AgentRun) => void;
   onConfigureSetup?: (setup: CapabilitySetupRequest) => void;
-  noteRewindResult: (pending: PendingChatSubmit, accepted: boolean) => void;
 }) {
   const {
     stream,
     owner,
     conversation,
     pendingSubmit,
-    submissionFailure,
-    clearPendingSubmit,
+    controller,
     updateConversation,
     updateConversationIfCurrentRun,
     updateConversationForRun,
-    clearSubmittedDraft,
-    refreshDeployments,
     setMessage,
     isCurrentOwner,
-    noteRewindResult,
   } = props;
   const projection = useWorkbenchProjection(stream);
   const run = projection.run;
@@ -387,12 +323,6 @@ function ChatInteractionStreamContent(props: {
   const projectionSignature = useRef("");
   const ownershipLookupKey = useRef("");
   const terminalRefreshKey = useRef("");
-  const submittedIds = useRef(new Set<string>());
-  const observerMounted = useRef(true);
-  useEffect(() => {
-    observerMounted.current = true;
-    return () => { observerMounted.current = false; };
-  }, []);
 
   useEffect(() => {
     if (!run || projectionRunOwned || projectionMatchesPendingSubmit || projectionBlockedByPendingCancel) {
@@ -443,26 +373,7 @@ function ChatInteractionStreamContent(props: {
       return;
     }
     projectionSignature.current = signature;
-    if (pendingSubmit && projectionMatchesPendingSubmit && pendingSubmit.rewind_source_run_id) {
-      const submitted = pendingSubmit;
-      // The server cut has to land before pendingSubmit clears. Clearing it cancels the reconcile fetch.
-      void api.chatConversation(conversation.id).then((next) => {
-        if (!isCurrentOwner(owner) || !chatHasAcceptedInputMessage(next, submitted.id)) return;
-        noteRewindResult(submitted, true);
-        updateConversation(next, owner);
-        clearSubmittedDraft(submitted);
-        clearPendingSubmit(submitted);
-        refreshDeployments();
-      }).catch((error: unknown) => {
-        if (isCurrentOwner(owner)) setMessage(errorMessage(error));
-      });
-      return;
-    }
-    if (pendingSubmit && projectionMatchesPendingSubmit) {
-      clearSubmittedDraft(pendingSubmit);
-      clearPendingSubmit(pendingSubmit);
-      refreshDeployments();
-    }
+    controller.observe(run);
     updateConversation({
       ...conversation,
       current_run: run,
@@ -470,7 +381,7 @@ function ChatInteractionStreamContent(props: {
       run_ids: run && !conversation.run_ids.includes(run.id) ? [...conversation.run_ids, run.id] : conversation.run_ids,
       updated_at: new Date().toISOString(),
     }, owner);
-  }, [clearPendingSubmit, clearSubmittedDraft, conversation, isCurrentOwner, noteRewindResult, owner, pendingSubmit, projectionMatchesPendingSubmit, projectionRunOwned, refreshDeployments, run, setMessage, updateConversation]);
+  }, [controller, conversation, isCurrentOwner, owner, projectionRunOwned, run, updateConversation]);
 
   useEffect(() => {
     if (!run || !projectionRunOwned || isAgentRunLive(run.status)) {
@@ -493,108 +404,8 @@ function ChatInteractionStreamContent(props: {
   }, [conversation.id, isCurrentOwner, owner, projectionRunOwned, run?.id, run?.status, setMessage, updateConversationForRun]);
 
   useEffect(() => {
-    if (!pendingSubmit) {
-      return;
-    }
-    if (
-      pendingSubmit.conversation_id !== owner.conversationId ||
-      pendingSubmit.thread_id !== owner.threadId ||
-      pendingSubmit.selection_generation !== owner.generation ||
-      !isCurrentOwner(owner)
-    ) {
-      return;
-    }
-    if (submittedIds.current.has(pendingSubmit.id)) {
-      return;
-    }
-    submittedIds.current.add(pendingSubmit.id);
-    const {
-      id: messageId,
-      task: inputTask,
-      conversation_id: _conversationId,
-      thread_id: _threadId,
-      selection_generation: _selectionGeneration,
-      draft_revision: _draftRevision,
-      submitted_draft_revision: submittedDraftRevision,
-      ...workbench
-    } = pendingSubmit;
-    void stream
-      .submit(
-        { messages: [{ type: "human", content: inputTask, id: messageId }] },
-        { multitaskStrategy: "reject", metadata: { workbench: { ...workbench, draft_revision: submittedDraftRevision } },
-          onError: error => {
-            if (observerMounted.current) props.onSubmissionError(pendingSubmit, error,
-              verifiedProjection.current?.run?.input_message_id === pendingSubmit.id);
-          } },
-      )
-      .then(() => refreshDeployments())
-      .catch((error: unknown) => {
-        if (!isCurrentOwner(owner)) {
-          return;
-        }
-        submissionFailure.current = { inputId: pendingSubmit.id, message: errorMessage(error) };
-        void api.chatConversation(pendingSubmit.conversation_id)
-          .then((next) => {
-            if (!isCurrentOwner(owner)) {
-              return;
-            }
-            const acceptedInput = chatHasAcceptedInputMessage(next, pendingSubmit.id);
-            if (acceptedInput) noteRewindResult(pendingSubmit, true);
-            updateConversation(next, owner);
-            clearPendingSubmit(pendingSubmit);
-            if (acceptedInput) {
-              submissionFailure.current = { inputId: pendingSubmit.id, message: errorMessage(error), accepted: true };
-              clearSubmittedDraft(pendingSubmit);
-              setMessage("");
-              return;
-            }
-            noteRewindResult(pendingSubmit, false);
-            setMessage(rewindFailureNotice(pendingSubmit, false, errorMessage(error)));
-          })
-          .catch(() => {
-            if (isCurrentOwner(owner)) {
-              setMessage("Connection interrupted. Checking whether the message was accepted.");
-            }
-          });
-      });
-  }, [clearPendingSubmit, clearSubmittedDraft, isCurrentOwner, owner, pendingSubmit, setMessage, stream, submissionFailure, updateConversation]);
-
-  useEffect(() => {
-    if (!pendingSubmit || !isCurrentOwner(owner)) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const reconcile = async () => {
-      try {
-        const next = await api.chatConversation(pendingSubmit.conversation_id);
-        if (cancelled || !isCurrentOwner(owner)) return;
-        if (chatHasAcceptedInputMessage(next, pendingSubmit.id)) {
-          if (submissionFailure.current?.inputId === pendingSubmit.id) submissionFailure.current.accepted = true;
-          noteRewindResult(pendingSubmit, true);
-          updateConversationIfCurrentRun(next, owner, conversation.current_run_id ?? null);
-          clearSubmittedDraft(pendingSubmit);
-          clearPendingSubmit(pendingSubmit);
-          refreshDeployments();
-          setMessage("");
-          return;
-        }
-        if (submissionFailure.current?.inputId === pendingSubmit.id) {
-          updateConversationIfCurrentRun(next, owner, conversation.current_run_id ?? null);
-          clearPendingSubmit(pendingSubmit);
-          setMessage(submissionFailure.current.message);
-          return;
-        }
-      } catch {
-        // The interaction stream still owns submission errors and reconnects.
-      }
-      if (!cancelled) timer = setTimeout(() => void reconcile(), 5000);
-    };
-    timer = setTimeout(() => void reconcile(), 1000);
-    return () => {
-      cancelled = true;
-      if (timer !== undefined) clearTimeout(timer);
-    };
-  }, [pendingSubmit, owner.conversationId, owner.threadId, owner.generation, conversation.current_run_id,
-    isCurrentOwner, noteRewindResult, updateConversationIfCurrentRun, clearSubmittedDraft, clearPendingSubmit, refreshDeployments, setMessage, submissionFailure]);
+    controller.submit(stream);
+  }, [controller, pendingSubmit, stream]);
 
   return (
     <>
@@ -960,7 +771,20 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const queuedSubmissionIds = useRef(new Map<string, {
     id: string; intent: Record<string, unknown>; draftRevision: number; submittedDraftRevision: number | null;
   }>());
-  const [pendingSubmit, setPendingSubmit] = useState<PendingChatSubmit | null>(null);
+  const unresolvedSubmissions = useRef(new Map<string, PendingChatSubmit>());
+  const [pendingSubmit, setPendingSubmitState] = useState<PendingChatSubmit | null>(null);
+  const pendingSubmitRef = useRef<PendingChatSubmit | null>(null);
+  pendingSubmitRef.current = pendingSubmit;
+  const setPendingSubmit = useCallback((pending: PendingChatSubmit | null) => {
+    const previous = pendingSubmitRef.current;
+    if (!pending && previous && draftRevision.current !== previous.draft_revision) {
+      const saved = unresolvedSubmissions.current.get(previous.conversation_id);
+      if (saved?.id === previous.id) unresolvedSubmissions.current.set(previous.conversation_id, { ...saved, draft_revision: -1 });
+    }
+    if (pending) unresolvedSubmissions.current.set(pending.conversation_id, structuredClone(pending));
+    pendingSubmitRef.current = pending;
+    setPendingSubmitState(pending);
+  }, []);
   const [pendingStop, setPendingStop] = useState<PendingStopRequest | null>(null);
   const [interactionThreadId, setInteractionThreadId] = useState<string | null>(null);
   const [selectionLoading, setSelectionLoading] = useState<ChatConversation | null>(null);
@@ -1095,7 +919,8 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }, [props.activeTab, refreshDeployments]);
 
   const clearPendingSubmit = useCallback((pending: PendingChatSubmit): void => {
-    setPendingSubmit((current) => (current?.id === pending.id ? null : current));
+    if (unresolvedSubmissions.current.get(pending.conversation_id)?.id === pending.id) unresolvedSubmissions.current.delete(pending.conversation_id);
+    setPendingSubmitState((current) => (current?.id === pending.id ? null : current));
     setPendingStop((current) => (current?.id === pending.id ? null : current));
   }, []);
 
@@ -1119,6 +944,19 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     setMessageSkillIds([]);
     setShortcutIds([]);
   }, [isCurrentOwner]);
+
+  useLayoutEffect(() => {
+    if (!conversation || !interactionThreadId || selectionLoading || pendingSubmit) return;
+    const saved = unresolvedSubmissions.current.get(conversation.id);
+    if (!saved || !isCurrentOwner({ conversationId: conversation.id, threadId: interactionThreadId, generation: boundGeneration })) return;
+    // Selecting another chat releases its observer, not its immutable request.
+    // Reopening only observes that request; a fresh Send cannot acquire a new ID.
+    const unchanged = saved.draft_revision !== -1 && saved.submitted_draft_revision != null
+      && conversation.draft?.revision === saved.submitted_draft_revision && task === saved.task
+      && sameDraftValue(attachmentIds, saved.attachment_ids ?? []);
+    setPendingSubmitState({ ...saved, thread_id: interactionThreadId, selection_generation: boundGeneration,
+      draft_revision: unchanged ? draftRevision.current : -1, observation_only: true });
+  }, [conversation?.id, interactionThreadId, selectionLoading, pendingSubmit, boundGeneration, task, attachmentIds, isCurrentOwner]);
 
   function readCatalogue<T>(label: string, read: () => Promise<T>, apply: (value: T) => void, replace = true): Promise<void> {
     if (!catalogueActive.current) return Promise.resolve();
@@ -1578,6 +1416,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }
 
   function removeConversation(id: string): void {
+    unresolvedSubmissions.current.delete(id);
     removeConversationAction(id, { historyMutations, setConversations, activeOwner, selectionLoading, conversation, startFresh });
   }
 

@@ -88,6 +88,42 @@ async function checkIndependentLists(Sidebar, failedList) {
   } finally { await fixture.close(); }
 }
 
+async function checkInterruptedJsonRecovery(Sidebar) {
+  const fixture = new CatalogueFixture(Sidebar);
+  fixture.responses.chats = () => ({ ok: true, status: 200, json: async () => { throw new DOMException("Response interrupted", "AbortError"); } });
+  fixture.responses.projects = () => json([]);
+  try {
+    await fixture.mount();
+    assert.equal(fixture.ready.at(-1), false, "an interrupted successful response cannot establish catalogue readiness");
+    assert.match(fixture.text(), /Chats: Response interrupted/, "body interruption remains a failed read");
+    assert.doesNotMatch(fixture.text(), /No chats yet/);
+    assert.equal(fixture.clock.timers.size, 1, "the failed body retains its retry owner");
+    fixture.responses.chats = () => json([chat("body-recovered-chat")]);
+    await fixture.clock.advance(1000);
+    assert.equal(fixture.ready.at(-1), true);
+    assert.match(fixture.text(), /body-recovered-chat/);
+    assert.doesNotMatch(fixture.text(), /Response interrupted/);
+    assert.equal(fixture.clock.timers.size, 0);
+  } finally { await fixture.close(); }
+}
+
+async function checkResponseParsing(request, ApiError) {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = globalThis.window;
+  globalThis.window = { workbench: { backendUrl: "http://catalogue.test" } };
+  try {
+    const interrupted = new DOMException("Response interrupted", "AbortError");
+    globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => { throw interrupted; } });
+    await assert.rejects(request("/v1/deployments"), failure => failure === interrupted, "a successful status cannot turn body failure into usable data");
+    globalThis.fetch = async () => ({ ok: false, status: 409, json: async () => { throw new SyntaxError("No JSON error body"); } });
+    await assert.rejects(request("/v1/deployments"), failure => failure instanceof ApiError && failure.status === 409, "an unreadable error body preserves HTTP rejection attribution");
+    globalThis.fetch = async () => json({ detail: { code: "model_unavailable", message: "Model unavailable" } }, 409);
+    await assert.rejects(request("/v1/deployments"), failure => failure instanceof ApiError && failure.status === 409 && failure.code === "model_unavailable" && failure.message === "Model unavailable");
+    globalThis.fetch = async () => json([]);
+    assert.deepEqual(await request("/v1/deployments"), [], "a genuine successful empty list remains usable");
+  } finally { globalThis.fetch = originalFetch; globalThis.window = originalWindow; }
+}
+
 async function checkActionRecovery(Sidebar) {
   const fixture = new CatalogueFixture(Sidebar);
   const conversation = chat("archive-target");
@@ -298,12 +334,15 @@ function textOf(node) {
 
 try {
   const { WorkbenchSidebar } = await vite.ssrLoadModule("/src/renderer/WorkbenchSidebar.tsx");
+  const { request, ApiError } = await vite.ssrLoadModule("/src/renderer/api.ts");
   // Finish the loader's background optimizer before replacing process timers.
   // Otherwise its delayed logging can be mistaken for a catalogue retry.
   await vite.close();
+  await checkResponseParsing(request, ApiError);
   await checkExtendedFailure(WorkbenchSidebar);
   await checkIndependentLists(WorkbenchSidebar, "chats");
   await checkIndependentLists(WorkbenchSidebar, "projects");
+  await checkInterruptedJsonRecovery(WorkbenchSidebar);
   await checkActionRecovery(WorkbenchSidebar);
   for (const owner of ["archived", "history", "project"]) {
     await checkTimerReplacement(WorkbenchSidebar, owner);
@@ -313,7 +352,7 @@ try {
     }
   }
   await checkUnmount(WorkbenchSidebar);
-  console.log("Startup catalogue checks passed: extended failure, capped backoff, independent recovery, owner replacement and disposal.");
+  console.log("Startup catalogue checks passed: response interruption, extended failure, capped backoff, independent recovery, owner replacement and disposal.");
 } finally {
   await vite.close();
 }
