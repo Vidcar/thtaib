@@ -32,6 +32,21 @@ def free_port() -> int:
         return int(listener.getsockname()[1])
 
 
+# Recovered verbatim from the failed three-range trial's durable submission and
+# saved seed. This separate fixture never substitutes the later one-read task.
+INSTRUCTION_RETENTION_TASK = (
+    "Remember this exact fact: COMPACTION-FACT-JUPITER-7391. First call write_file exactly once with file_path "
+    "/compaction-effect.txt and content exactly one compaction history effect. Then call read_file three times "
+    "with file_path /compaction-source.txt, limit 500, and offsets 0, then 500, then 1000. Call only one tool "
+    "in each assistant response and wait for its result before the next call. Read only these three ranges. "
+    "If a result is clipped, keep going to the next requested range. Do not reread a range, do not repeat the "
+    "write, and do not read conversation_history files. After all three reads, reply briefly with COMPACTION-FACT-JUPITER-7391."
+)
+INSTRUCTION_RETENTION_TASK_SHA256 = "7300beba4d465b03749b5466dbff49e58f4e1926d3fecf7e10dd2ea2ca6cfc31"
+INSTRUCTION_RETENTION_SOURCE_SHA256 = "ac3c21676569968ffbe4bd89a7b24cfcaca71be69bdac9fb59a05743c1a15c33"
+COMPACTION_SCENARIOS = frozenset({"compaction_history", "instruction_retention"})
+
+
 class FixtureModel(BaseChatModel):
     """Replace only model inference; native graph/tools/interrupts execute normally."""
 
@@ -39,6 +54,7 @@ class FixtureModel(BaseChatModel):
     _run: Any = PrivateAttr()
     _script: list[AIMessage] = PrivateAttr()
     _index: int = PrivateAttr(default=0)
+    _instruction_tools: list[Any] = PrivateAttr(default_factory=list)
 
     def __init__(self, fixture, run, script):
         super().__init__()
@@ -49,12 +65,14 @@ class FixtureModel(BaseChatModel):
         return "deterministic-ui-fixture"
 
     def bind_tools(self, tools, **kwargs):
+        if self._fixture.scenario == "instruction_retention":
+            self._instruction_tools = list(tools)
         return self
 
     def project_context_payload(self, messages, **kwargs):
         from workbench_backend.inference.request_projection import project_context_payload
         payload = project_context_payload(messages, **kwargs)
-        if self._fixture.scenario == "compaction_history":
+        if self._fixture.scenario in COMPACTION_SCENARIOS:
             from workbench_backend.agents.context import estimate_payload
             # This is the same projection and estimated fallback the stock
             # token-counter closure already uses; it is never a native count.
@@ -62,7 +80,18 @@ class FixtureModel(BaseChatModel):
         return payload
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-        if self._fixture.scenario == "compaction_history":
+        if self._fixture.scenario == "instruction_retention":
+            from workbench_backend.inference.request_projection import project_context_payload
+            from workbench_backend.inference.telemetry import current_request_purpose
+            purpose = current_request_purpose()
+            payload = project_context_payload(messages, tools=self._instruction_tools if purpose == "work" else None)
+            if purpose == "work" and self._fixture.negative_control == "instruction_missing_text" and self._fixture.instruction_after_compaction(self._run.id):
+                # A deficient deterministic model-input boundary is a deliberate
+                # gate control. It never changes graph state or actual inference.
+                payload["messages"] = [message for message in payload["messages"]
+                    if not self._fixture._task_occurrences(message.get("content"), self._run.task)]
+            self._fixture.record_instruction_input(self._run, payload, boundary="deterministic_inference", native_messages=messages)
+        if self._fixture.scenario in COMPACTION_SCENARIOS:
             from workbench_backend.agents.context import count_context_tokens
             from workbench_backend.inference.telemetry import current_request_purpose
             purpose = current_request_purpose()
@@ -76,6 +105,13 @@ class FixtureModel(BaseChatModel):
                 self._fixture.compaction_calls_path.write_text(
                     json.dumps(self._fixture.compaction_model_calls), encoding="utf-8")
             if purpose == "summary":
+                if self._fixture.scenario == "instruction_retention":
+                    # Deliberately lossy native summary: retain progress but
+                    # change the requested limit and omit the no-repeat rule.
+                    content = ("INTERNAL-INSTRUCTION-RETENTION-SUMMARY. Remember COMPACTION-FACT-JUPITER-7391. "
+                        "The write completed. Read the remaining ranges at offsets 500 and 1000 with limit 50, "
+                        "then reply with the fact.")
+                    return ChatResult(generations=[ChatGeneration(message=AIMessage(content=content))])
                 data = self._fixture.seed_data["compaction"]
                 return ChatResult(generations=[ChatGeneration(message=AIMessage(content=
                     data["internal_summary_marker"] + ". Remember " + data["marker"]
@@ -137,6 +173,10 @@ class ApplicationFixture:
         self.compaction_input_counts: list[dict[str, Any]] = (json.loads(self.compaction_counts_path.read_text(encoding="utf-8"))
             if self.compaction_counts_path.exists() else [])
         self.compaction_count_capture_errors: list[dict[str, Any]] = []
+        self.instruction_inputs_path = self.root / "instruction-inputs.json"
+        self.instruction_inputs: list[dict[str, Any]] = (json.loads(self.instruction_inputs_path.read_text(encoding="utf-8"))
+            if self.instruction_inputs_path.exists() else [])
+        self.instruction_input_capture_errors: list[dict[str, Any]] = []
         self.model_process_identities: list[Any] = []
         self.lock = threading.RLock()
         self.seed_path = self.root / "ui-seed.json"
@@ -150,11 +190,13 @@ class ApplicationFixture:
         self.app.state.harness._model_factory = self.model_factory
         native_observer = self.app.state.harness._interaction_observer
         def observe_native(run, event, **kwargs):
-            if self.scenario == "compaction_history" and event and event.get("method") == "values":
+            if self.scenario in COMPACTION_SCENARIOS and event and event.get("method") == "values":
                 params = event.get("params", {})
                 if not params.get("namespace"):
                     data = params.get("data", {})
                     with self.lock:
+                        if self.scenario == "instruction_retention":
+                            self.remember_instruction_input(run, data.get("messages", []), origin="native_values")
                         captured = self.compaction_native["tool_results"].setdefault(run.id, {})
                         for message in data.get("messages", []):
                             value = message.model_dump(mode="json") if hasattr(message, "model_dump") else message
@@ -164,6 +206,12 @@ class ApplicationFixture:
                         summary = data.get("_summarization_event")
                         if summary and type(summary.get("cutoff_index")) is int:
                             observed = {"run_id": run.id, "cutoff_index": summary["cutoff_index"]}
+                            if self.scenario == "instruction_retention":
+                                active_id = (self.compaction_native.get("inputs", {}).get(run.id) or {}).get("id")
+                                active_index = next((index for index, message in enumerate(data.get("messages", []))
+                                    if (message.get("id") if isinstance(message, dict) else message.id) == active_id), None)
+                                observed.update(input_message_id=active_id, input_index=active_index,
+                                    native_input_removed=active_index is not None and active_index < summary["cutoff_index"])
                             if observed not in self.compaction_native["cutoffs"]:
                                 self.compaction_native["cutoffs"].append(observed)
                         self.compaction_native_path.write_text(json.dumps(self.compaction_native), encoding="utf-8")
@@ -195,9 +243,33 @@ class ApplicationFixture:
             self.model_run_ids.append(run.id)
         if self.inference == "real":
             model = self.native_model_factory(run, sink)
-            if self.scenario == "compaction_history":
+            if self.scenario in COMPACTION_SCENARIOS:
                 self.observe_existing_native_counts(model, run)
+            if self.scenario == "instruction_retention":
+                self.observe_final_native_input(model, run)
             return model
+        if self.scenario == "instruction_retention" and run.task != "Saved baseline question":
+            data = self.seed_data["instruction_retention"]
+            if run.task == data["followup_task"]:
+                script = [AIMessage(content=data["marker"])]
+            else:
+                script = [AIMessage(content="Creating the instruction retention marker", tool_calls=[{
+                    "name": "write_file", "args": {"file_path": data["write_path"], "content": data["write_content"]},
+                    "id": run.id + "-instruction-write"}])]
+                script.extend(AIMessage(content=f"Reading original range {offset}", tool_calls=[{
+                    "name": "read_file", "args": {"file_path": data["read_path"], "offset": offset,
+                        "limit": 50 if offset == 1000 and self.negative_control == "instruction_changed_arguments" else 500},
+                    "id": run.id + f"-instruction-read-{offset}"}]) for offset in (0, 500, 1000))
+                if self.negative_control == "instruction_batched_calls":
+                    reads = script[-2:]
+                    script[-2:] = [AIMessage(content="Batching the final two reads deliberately",
+                        tool_calls=[call for message in reads for call in message.tool_calls])]
+                if self.negative_control == "instruction_repeated_action":
+                    script.append(AIMessage(content="Repeating the write deliberately", tool_calls=[{
+                        "name": "write_file", "args": {"file_path": data["write_path"], "content": data["write_content"]},
+                        "id": run.id + "-instruction-repeat-write"}]))
+                script.append(AIMessage(content="Instruction retention completed. " + data["marker"]))
+            return FixtureModel(self, run, script)
         if self.scenario == "compaction_history" and run.task != "Saved baseline question":
             data = self.seed_data["compaction"]
             if run.task == data["followup_task"]:
@@ -267,11 +339,105 @@ class ApplicationFixture:
                     "tools_sha256": hashlib.sha256(json.dumps(tools, sort_keys=True,
                         ensure_ascii=False, default=str).encode()).hexdigest() if tools else None})
                 self.compaction_counts_path.write_text(json.dumps(self.compaction_input_counts), encoding="utf-8")
+            if self.scenario == "instruction_retention":
+                self.record_instruction_input(run, payload, boundary="count", count=count, basis=basis)
         except Exception as exc:
             # An evidence write failure must not alter inference. The gate
             # rejects incomplete capture through this separate diagnostic.
             with self.lock:
                 self.compaction_count_capture_errors.append({"run_id": run.id, "error_kind": type(exc).__name__})
+
+    def observe_final_native_input(self, model, run):
+        """Capture the existing final payload after its own guard; add no calls."""
+        original = model._get_request_payload
+        def payload(*args, **kwargs):
+            result = original(*args, **kwargs)
+            try:
+                native = model._convert_input(args[0]).to_messages() if args else []
+                self.record_instruction_input(run, result, boundary="final_request", native_messages=native)
+            except Exception as exc:
+                with self.lock:
+                    self.instruction_input_capture_errors.append({"run_id": run.id, "error_kind": type(exc).__name__})
+            return result
+        object.__setattr__(model, "_get_request_payload", payload)
+
+    def instruction_after_compaction(self, run_id):
+        return any(item["run_id"] == run_id for item in self.compaction_native["cutoffs"])
+
+    def remember_instruction_input(self, run, messages, *, origin):
+        """Capture the original native author/ID before reduction; never match text."""
+        existing = self.compaction_native.setdefault("inputs", {})
+        if run.id in existing:
+            return
+        originals = []
+        for message in messages:
+            value = message.model_dump(mode="json") if hasattr(message, "model_dump") else message
+            meta = value.get("additional_kwargs", {})
+            if (value.get("type") == "human" and value.get("id")
+                    and not meta.get("workbench_tool_context")
+                    and meta.get("lc_source") not in {"summarization", "rubric_grader", "workbench_current_task_reference"}
+                    and value.get("name") != "rubric_grader"):
+                originals.append(value)
+        original = (next((message for message in originals if message["id"] == run.input_message_id), None)
+            if run.input_message_id else originals[-1] if originals else None)
+        if original is not None:
+            existing[run.id] = {"id": original["id"], "content": original["content"], "origin": origin}
+            self.compaction_native_path.write_text(json.dumps(self.compaction_native), encoding="utf-8")
+
+    @staticmethod
+    def _task_occurrences(content, task):
+        if isinstance(content, str):
+            return content.count(task)
+        if isinstance(content, list):
+            return sum(ApplicationFixture._task_occurrences(block.get("text"), task)
+                for block in content if isinstance(block, dict) and block.get("type") in {"text", "input_text"})
+        return 0
+
+    def record_instruction_input(self, run, payload, *, boundary, count=None, basis=None, native_messages=None):
+        try:
+            from workbench_backend.inference.telemetry import current_request_purpose
+            copied = json.loads(json.dumps(payload, ensure_ascii=False, default=str))
+            messages = copied.get("messages", [])
+            task_indices = [index for index, message in enumerate(messages)
+                if self._task_occurrences(message.get("content"), run.task)]
+            digest = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
+            with self.lock:
+                if native_messages:
+                    self.remember_instruction_input(run, native_messages, origin=boundary)
+                source_id = (self.compaction_native.get("inputs", {}).get(run.id) or {}).get("id") or run.input_message_id
+                matching = [item for item in self.compaction_input_counts
+                    if item["run_id"] == run.id and item["payload_sha256"] == digest]
+                self.instruction_inputs.append({"ordinal": len(self.instruction_inputs) + 1,
+                    "run_id": run.id, "input_message_id": source_id,
+                    "purpose": current_request_purpose(), "boundary": boundary,
+                    "after_compaction": self.instruction_after_compaction(run.id),
+                    "native_input_removed": any(item["run_id"] == run.id and item.get("native_input_removed")
+                        for item in self.compaction_native["cutoffs"]),
+                    "payload_sha256": digest,
+                    "tools_sha256": hashlib.sha256(json.dumps(payload["tools"], sort_keys=True,
+                        ensure_ascii=False, default=str).encode()).hexdigest() if payload.get("tools") else None,
+                    "messages": messages, "task_occurrences": sum(self._task_occurrences(message.get("content"), run.task) for message in messages),
+                    "user_task_occurrences": sum(self._task_occurrences(message.get("content"), run.task) for message in messages if message.get("role") == "user"),
+                    "task_message_indices": task_indices,
+                    "task_reference_indices": [index for index, message in enumerate(native_messages or [])
+                        if message.additional_kwargs.get("lc_source") == "workbench_current_task_reference"],
+                    "native_message_ids": [message.id for message in native_messages or []],
+                    "task_source_ids": [message.id for message in native_messages or []
+                        if self._task_occurrences(message.content, run.task)],
+                    "task_reference_ids": [message.id for message in native_messages or []
+                        if message.additional_kwargs.get("lc_source") == "workbench_current_task_reference"],
+                    "task_reference_input_ids": [message.additional_kwargs.get("workbench_current_task_input_id")
+                        for message in native_messages or []
+                        if message.additional_kwargs.get("lc_source") == "workbench_current_task_reference"],
+                    "matching_count_ordinals": [item["ordinal"] for item in matching],
+                    "count_ordinal": matching[-1]["ordinal"] if boundary == "count" and matching else None,
+                    "input_tokens": count if boundary == "count" else matching[-1]["input_tokens"] if matching else None,
+                    "basis": basis if boundary == "count" else matching[-1]["basis"] if matching else "unavailable"})
+                self.instruction_inputs_path.write_text(json.dumps(self.instruction_inputs), encoding="utf-8")
+        except Exception as exc:
+            # Capture is passive. An incomplete evidence gate must reject it.
+            with self.lock:
+                self.instruction_input_capture_errors.append({"run_id": run.id, "error_kind": type(exc).__name__})
 
     def _install_controls(self):
         @self.app.post("/__test__/seed")
@@ -406,13 +572,15 @@ class ApplicationFixture:
 
     def configure(self, body):
         scenario = body.get("scenario", self.scenario)
-        if scenario not in {"baseline", "lost_ack", "approval", "command", "retained", "model", "partial_effect", "parallel_helpers", "compaction_history"}:
+        if scenario not in {"baseline", "lost_ack", "approval", "command", "retained", "model", "partial_effect", "parallel_helpers", "compaction_history", "instruction_retention"}:
             raise HTTPException(400, "Unknown UI fixture scenario")
         self.scenario = scenario
         if scenario == "parallel_helpers" and self.seed_data:
             self.prepare_parallel_helpers()
         if scenario == "compaction_history" and self.seed_data:
             self.prepare_compaction_history()
+        if scenario == "instruction_retention" and self.seed_data:
+            self.prepare_instruction_retention()
         if "hold_model" in body:
             self.hold_model = bool(body["hold_model"])
             self.release.clear() if self.hold_model else self.release.set()
@@ -434,8 +602,11 @@ class ApplicationFixture:
                 setattr(self, field, bool(body[field]))
         if "negative_control" in body:
             value = body["negative_control"]
-            if value not in {None, "lose_draft", "duplicate_execution", "compaction_overwritten_history", "compaction_visible_summary", "compaction_duplicate_execution"}:
+            if value not in {None, "lose_draft", "duplicate_execution", "compaction_overwritten_history", "compaction_visible_summary", "compaction_duplicate_execution",
+                    "instruction_missing_text", "instruction_changed_arguments", "instruction_repeated_action", "instruction_batched_calls"}:
                 raise HTTPException(400, "Unknown negative control")
+            if self.inference == "real" and value in {"instruction_missing_text", "instruction_changed_arguments", "instruction_repeated_action", "instruction_batched_calls"}:
+                raise HTTPException(400, "Instruction controls require deterministic inference")
             self.negative_control = value
         if body.get("change_source"):
             (self.root / "project" / "baseline-output.txt").write_text("Changed source after retention", encoding="utf-8")
@@ -487,6 +658,47 @@ class ApplicationFixture:
         from workbench_backend.agents.setup_schemas import AgentInputPolicy
         conversation = self.app.state.chat.store.get(self.seed_data["conversation_id"])
         data = self.seed_data["compaction"]
+        selection = {"presented_tools": data["tools"], "approval_mode": "full_access",
+            "input_policy": AgentInputPolicy(tool_loading="always"), "per_request_overrides": data["request_settings"]}
+        self.app.state.chat.store.put(conversation.model_copy(update={**selection,
+            "setup_overrides": conversation.setup_overrides.model_copy(update=selection)}))
+
+    def prepare_instruction_retention(self):
+        """Author the recovered original input; native compaction owns progress."""
+        if "instruction_retention" not in self.seed_data:
+            task_hash = hashlib.sha256(INSTRUCTION_RETENTION_TASK.encode()).hexdigest()
+            if task_hash != INSTRUCTION_RETENTION_TASK_SHA256:
+                raise ValueError("Recovered instruction task changed")
+            marker = "COMPACTION-FACT-JUPITER-7391"
+            data = {"marker": marker, "internal_summary_marker": "INTERNAL-INSTRUCTION-RETENTION-SUMMARY",
+                "read_path": "/compaction-source.txt", "write_path": "/compaction-effect.txt",
+                "write_content": "one compaction history effect", "expected_read_count": 3,
+                "tool_start_marker": "ORIGINAL-COMPACTION-RANGE-0-START", "tool_end_marker": "ORIGINAL-COMPACTION-RANGE-0-END",
+                "tools": ["read_file", "write_file"], "request_settings": {"temperature": 0.0, "seed": 7, "max_tokens": 512},
+                "task": INSTRUCTION_RETENTION_TASK, "task_sha256": task_hash,
+                "followup_task": "Reply with only the exact COMPACTION-FACT code I originally asked you to remember. Do not call any tools.",
+                "recovered_trial": {"run_id": "agent_d519f7ec4b14", "task_sha256": task_hash,
+                    "source_sha256": INSTRUCTION_RETENTION_SOURCE_SHA256,
+                    "evidence": ".scratch/task03-compaction/broader-model-failure-recovery.json"}}
+            lines = [f"line {index:04d}: a b c d e f g h i j k l" for index in range(1500)]
+            for offset in (0, 500, 1000):
+                lines[offset] = f"ORIGINAL-COMPACTION-RANGE-{offset // 500}-START {marker}"
+                lines[offset + 499] = f"ORIGINAL-COMPACTION-RANGE-{offset // 500}-END"
+            source = "\n".join(lines) + "\n"
+            data["source_sha256"] = hashlib.sha256(source.encode()).hexdigest()
+            if data["source_sha256"] != INSTRUCTION_RETENTION_SOURCE_SHA256:
+                raise ValueError("Recovered instruction source changed")
+            data["expected_calls"] = [{"name": "write_file", "args": {"file_path": data["write_path"], "content": data["write_content"]}},
+                *[{"name": "read_file", "args": {"file_path": data["read_path"], "offset": offset, "limit": 500}} for offset in (0, 500, 1000)]]
+            source_path = self.root / "project" / data["read_path"].lstrip("/")
+            source_path.write_text(source, encoding="utf-8")
+            data["source_file_sha256"] = hashlib.sha256(source_path.read_bytes()).hexdigest()
+            self.seed_data["instruction_retention"] = data
+            self.seed_data.update(instruction_retention_task=data["task"], instruction_retention_followup_task=data["followup_task"])
+            self.seed_path.write_text(json.dumps(self.seed_data), encoding="utf-8")
+        from workbench_backend.agents.setup_schemas import AgentInputPolicy
+        conversation = self.app.state.chat.store.get(self.seed_data["conversation_id"])
+        data = self.seed_data["instruction_retention"]
         selection = {"presented_tools": data["tools"], "approval_mode": "full_access",
             "input_policy": AgentInputPolicy(tool_loading="always"), "per_request_overrides": data["request_settings"]}
         self.app.state.chat.store.put(conversation.model_copy(update={**selection,
@@ -558,6 +770,8 @@ class ApplicationFixture:
         self.seed_path.write_text(json.dumps(self.seed_data), encoding="utf-8")
         if self.scenario == "compaction_history":
             self.prepare_compaction_history()
+        if self.scenario == "instruction_retention":
+            self.prepare_instruction_retention()
         return {**self.seed_data, "scenario": self.scenario}
 
     def seed(self, scenario="baseline"):
@@ -623,6 +837,8 @@ class ApplicationFixture:
             self._retain_seed_output()
         if scenario == "compaction_history":
             self.prepare_compaction_history()
+        if scenario == "instruction_retention":
+            self.prepare_instruction_retention()
         self.seed_path.write_text(json.dumps(self.seed_data), encoding="utf-8")
         return {**self.seed_data, "scenario": self.scenario}
 
@@ -665,9 +881,9 @@ class ApplicationFixture:
             time.sleep(.02)
         raise TimeoutError("Baseline history seed did not finish")
 
-    def compaction_evidence(self, tested_runs):
+    def compaction_evidence(self, tested_runs, *, key="compaction"):
         """Read native checkpoints and display records; never execute a graph."""
-        if "compaction" not in self.seed_data:
+        if key not in self.seed_data:
             return {"rows": []}
         from workbench_backend.agents.harness_backend import build_run_backend
         from workbench_backend.state.checkpointer import conversation_state
@@ -701,7 +917,7 @@ class ApplicationFixture:
                 raw = result.content or b""
                 offloads.append({"path": path, "readable": result.error is None,
                     "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest(),
-                    "has_marker": self.seed_data["compaction"]["marker"].encode() in raw,
+                    "has_marker": self.seed_data[key]["marker"].encode() in raw,
                     "has_read_results": b"ORIGINAL-COMPACTION-RANGE-" in raw})
             related_ids = {item.id for item in related}
             model_calls = ([{**sample.model_dump(mode="json"), "run_id": item.id}
@@ -710,8 +926,8 @@ class ApplicationFixture:
             outcomes = [outcome.model_dump(mode="json") for item in related for outcome in item.tool_outcomes.values()]
             writes = [call for item in related for call in item.tool_invocations if call["name"] == "write_file"]
             reads = [call for item in related for call in item.tool_invocations if call["name"] == "read_file"]
-            effect = self.root / "project" / self.seed_data["compaction"]["write_path"].lstrip("/")
-            data = self.seed_data["compaction"]
+            effect = self.root / "project" / self.seed_data[key]["write_path"].lstrip("/")
+            data = self.seed_data[key]
             with self.lock:
                 original_tool_results = [dict(message) for item in related
                     for message in self.compaction_native["tool_results"].get(item.id, {}).values()]
@@ -733,6 +949,18 @@ class ApplicationFixture:
                 "housekeeping_context": {key: value.model_dump(mode="json") for key, value in run.housekeeping_context.items()},
                 "archive_sha256": hashlib.sha256(json.dumps(archive, sort_keys=True).encode()).hexdigest(),
                 "canonical_sha256": hashlib.sha256(json.dumps(canonical, sort_keys=True).encode()).hexdigest()})
+            if key == "instruction_retention":
+                with self.lock:
+                    inputs = [dict(item) for item in self.instruction_inputs if item["run_id"] in related_ids]
+                    errors = [dict(item) for item in self.instruction_input_capture_errors if item["run_id"] in related_ids]
+                native_input = self.compaction_native.get("inputs", {}).get(run.id) or {}
+                rows[-1].update(accepted_task=run.task, accepted_task_sha256=hashlib.sha256(run.task.encode()).hexdigest(),
+                    accepted_input_id=native_input.get("id") or run.input_message_id, original_native_input=dict(native_input),
+                    calls=[{"id": call.get("id"), "name": call["name"], "args": call.get("args", {})}
+                        for item in related for call in item.tool_invocations],
+                    work_inputs=[item for item in inputs if item["purpose"] == "work" and item["boundary"] != "count"],
+                    counted_inputs=[item for item in inputs if item["boundary"] == "count"],
+                    input_capture_errors=errors)
         return {"rows": rows}
 
     def state(self):
@@ -760,7 +988,9 @@ class ApplicationFixture:
                 commands.append({"command_id": command.id, "run_id": command.run.id, "pid": command.process.pid, "alive": command.process.poll() is None, "state": command.state, "exit_code": command.exit_code})
         deployments = self.app.state.manager.list_deployments()
         effects = self.app.state.effects.list_effects()
-        return {**helper_evidence, "compaction": self.compaction_evidence(tested_runs), "pid": os.getpid(), "data_root": str(self.root), "seed": self.seed_data, "scenario": self.scenario, "submissions": list(self.submissions), "failed_lookup_paths": list(self.failed_lookup_paths), "real_model_identity": self.real_identity, "model_factory_run_ids": list(self.model_run_ids), "model_processes": self.model_process_evidence(), "cleanup_errors": list(self.cleanup_errors), "run_ids": [run.id for run in tested_runs], "input_ids": [run.input_message_id for run in tested_runs], "run_count": len(tested_runs), "runs": [{"id": run.id, "status": run.status.value, "input_message_id": run.input_message_id, "tool_invocations": run.tool_invocations, "stop_reason": run.stop_reason} for run in tested_runs], "commands": commands, "effects": [effect.model_dump(mode="json") for effect in effects], "deployments": [{"id": deployment.id, "status": deployment.status.value, "pid": deployment.pid, "process_alive": bool(deployment.pid and psutil.pid_exists(deployment.pid)), "error": deployment.error} for deployment in deployments], "faults": dict(self.faults), "approved_file_exists": (self.root / "project" / "approved.txt").exists()}
+        return {**helper_evidence, "compaction": self.compaction_evidence(tested_runs),
+            "instruction_retention": self.compaction_evidence(tested_runs, key="instruction_retention"),
+            "pid": os.getpid(), "data_root": str(self.root), "seed": self.seed_data, "scenario": self.scenario, "submissions": list(self.submissions), "failed_lookup_paths": list(self.failed_lookup_paths), "real_model_identity": self.real_identity, "model_factory_run_ids": list(self.model_run_ids), "model_processes": self.model_process_evidence(), "cleanup_errors": list(self.cleanup_errors), "run_ids": [run.id for run in tested_runs], "input_ids": [run.input_message_id for run in tested_runs], "run_count": len(tested_runs), "runs": [{"id": run.id, "status": run.status.value, "input_message_id": run.input_message_id, "tool_invocations": run.tool_invocations, "stop_reason": run.stop_reason} for run in tested_runs], "commands": commands, "effects": [effect.model_dump(mode="json") for effect in effects], "deployments": [{"id": deployment.id, "status": deployment.status.value, "pid": deployment.pid, "process_alive": bool(deployment.pid and psutil.pid_exists(deployment.pid)), "error": deployment.error} for deployment in deployments], "faults": dict(self.faults), "approved_file_exists": (self.root / "project" / "approved.txt").exists()}
 
     def model_process_evidence(self):
         from workbench_backend.inference.process import classify_identity

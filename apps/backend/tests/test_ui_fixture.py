@@ -559,6 +559,228 @@ class UIFixtureTests(unittest.TestCase):
         self.assertEqual(record["basis"], "estimated")
         self.assertEqual(record["input_tokens"], estimate_payload(payload))
 
+    def test_instruction_fixture_preserves_recovered_three_range_task_and_settings_in_both_modes(self):
+        import hashlib
+        from tests_ui.fixture import INSTRUCTION_RETENTION_TASK_SHA256, INSTRUCTION_RETENTION_SOURCE_SHA256
+        seed = self.seed()
+        model_runs = list(self.fixture.model_run_ids)
+        with patch.object(self.fixture, "inference", "real"):
+            self.fixture.prepare_instruction_retention()
+        data = self.fixture.seed_data["instruction_retention"]
+        self.assertEqual(hashlib.sha256(data["task"].encode()).hexdigest(), INSTRUCTION_RETENTION_TASK_SHA256)
+        self.assertEqual(data["task_sha256"], INSTRUCTION_RETENTION_TASK_SHA256)
+        self.assertEqual(data["request_settings"], {"temperature": 0.0, "seed": 7, "max_tokens": 512})
+        self.assertEqual(data["expected_read_count"], 3)
+        self.assertIn("offsets 0, then 500, then 1000", data["task"])
+        self.assertIn("Do not reread a range, do not repeat the write", data["task"])
+        source_path = Path(seed["project_path"]) / data["read_path"].lstrip("/")
+        self.assertEqual(hashlib.sha256(source_path.read_text(encoding="utf-8").encode()).hexdigest(), INSTRUCTION_RETENTION_SOURCE_SHA256)
+        self.assertEqual(self.fixture.model_run_ids, model_runs, "Authoring inputs must not dispatch inference")
+        self.assertNotIn("compaction", self.fixture.seed_data, "The previous compaction fixture remains separate")
+        self.fixture.prepare_instruction_retention()
+        self.assertEqual(self.fixture.seed_data["instruction_retention"], data)
+
+    def instruction_case(self, control=None):
+        seed = self.seed("instruction_retention")
+        binding = self.post("/v1/agent-interaction/threads", {
+            "source_surface": "chat", "conversation_id": seed["conversation_id"],
+        })
+        data = seed["instruction_retention"]
+        if control:
+            self.post("/__test__/scenario", {"negative_control": control})
+        self.post(f"/v1/chat/conversations/{seed['conversation_id']}/start", {
+            "task": data["task"], "input_message_id": "original-instruction-retention-input",
+            "presented_tools": data["tools"], "approval_mode": "full_access",
+            "per_request_overrides": data["request_settings"],
+        })
+        self.wait(lambda: self.view(seed)["current_run"]["status"] in {"completed", "failed"}, "instruction retention completion")
+        self.assertEqual(self.view(seed)["current_run"]["status"], "completed", self.view(seed)["current_run"].get("error"))
+        row, = self.fixture.state()["instruction_retention"]["rows"]
+        self.assertEqual(row["thread_id"], binding["thread_id"])
+        return seed, row
+
+    def test_instruction_fixture_lossy_summaries_keep_exact_work_input_and_independent_results(self):
+        seed, row = self.instruction_case()
+        data = seed["instruction_retention"]
+        self.assertEqual(row["accepted_task"], data["task"])
+        self.assertEqual(row["accepted_task_sha256"], data["task_sha256"])
+        self.assertEqual(row["accepted_input_id"], "original-instruction-retention-input")
+        self.assertEqual([{key: call[key] for key in ("name", "args")} for call in row["calls"]], data["expected_calls"])
+        self.assertEqual((row["write_count"], row["read_count"]), (1, 3))
+        self.assertGreaterEqual(row["native_summary_count"], 2)
+        self.assertEqual(row["input_capture_errors"], [])
+        self.assertEqual(row["native_input_capture_errors"], [])
+        self.assertTrue(row["work_inputs"])
+        counted_by_ordinal = {record["count_ordinal"]: record for record in row["counted_inputs"]}
+        for record in row["work_inputs"]:
+            self.assertEqual(record["task_occurrences"], 1)
+            self.assertEqual(record["user_task_occurrences"], 1)
+            self.assertEqual(record["input_message_id"], row["accepted_input_id"])
+            self.assertRegex(record["payload_sha256"], r"^[a-f0-9]{64}$")
+            self.assertTrue(record["matching_count_ordinals"], "Actual deterministic work input must match its complete counted payload")
+            for ordinal in record["matching_count_ordinals"]:
+                counted = counted_by_ordinal[ordinal]
+                self.assertEqual(counted["payload_sha256"], record["payload_sha256"])
+                self.assertEqual(counted["input_tokens"], record["input_tokens"])
+                self.assertEqual(counted["basis"], record["basis"])
+        retained = [record for record in row["work_inputs"] if record["task_reference_ids"]]
+        self.assertTrue(retained, "At least one actual work input must use the retained current-task reference")
+        for record in retained:
+            self.assertEqual(record["task_reference_input_ids"], [row["accepted_input_id"]])
+            first_user = next(index for index, message in enumerate(record["messages"]) if message["role"] == "user")
+            self.assertEqual(record["task_message_indices"], [first_user])
+        summarized = [record for record in row["counted_inputs"]
+            if "INTERNAL-INSTRUCTION-RETENTION-SUMMARY" in str(record["messages"])]
+        self.assertTrue(summarized)
+        self.assertTrue(any("with limit 50" in str(record["messages"]) for record in summarized))
+        original = {message["id"]: message for message in row["original_tool_results"]}
+        for archived in (message for message in row["archive"] if message["type"] == "tool"):
+            self.assertEqual(archived["content"], original[archived["id"]]["content"])
+            self.assertEqual(archived["tool_call_id"], original[archived["id"]]["tool_call_id"])
+        self.assertEqual(row["write_content"], data["write_content"])
+        self.assertNotIn(data["internal_summary_marker"], str(row["archive"]))
+        self.fixture.close()
+        self.client.__exit__(None, None, None)
+        restarted = ApplicationFixture(self.root)
+        with TestClient(restarted.app) as client:
+            try:
+                headers = {"X-Workbench-Local-Token": restarted.app.state.local_trust_token}
+                reopened = client.post("/__test__/seed", json={"scenario": "instruction_retention"}, headers=headers)
+                self.assertEqual(reopened.status_code, 200, reopened.text)
+                saved, = restarted.state()["instruction_retention"]["rows"]
+                self.assertEqual(saved["archive"], row["archive"])
+                self.assertEqual(saved["original_tool_results"], row["original_tool_results"])
+                self.assertEqual(saved["work_inputs"], row["work_inputs"])
+                self.assertEqual(saved["calls"], row["calls"])
+            finally:
+                restarted.close()
+
+    def test_instruction_missing_text_control_changes_consumed_input_without_corrupting_archive(self):
+        seed, row = self.instruction_case("instruction_missing_text")
+        missing = [record for record in row["work_inputs"] if record["after_compaction"] and record["task_occurrences"] == 0]
+        self.assertTrue(missing, "The missing-text control must violate actual consumed work input")
+        self.assertEqual(row["archive"][2]["content"], seed["instruction_retention"]["task"])
+        self.assertEqual([{key: call[key] for key in ("name", "args")} for call in row["calls"]], seed["instruction_retention"]["expected_calls"])
+
+    def test_instruction_changed_argument_control_executes_real_third_read_with_wrong_limit(self):
+        seed, row = self.instruction_case("instruction_changed_arguments")
+        actual = [{key: call[key] for key in ("name", "args")} for call in row["calls"]]
+        expected = seed["instruction_retention"]["expected_calls"]
+        self.assertEqual(actual[:-1], expected[:-1])
+        self.assertEqual(actual[-1], {"name": "read_file", "args": {**expected[-1]["args"], "limit": 50}})
+        self.assertTrue(all(record["user_task_occurrences"] == 1 for record in row["work_inputs"]))
+
+    def test_instruction_repeat_control_issues_fresh_extra_write_call(self):
+        seed, row = self.instruction_case("instruction_repeated_action")
+        actual = [{key: call[key] for key in ("name", "args")} for call in row["calls"]]
+        self.assertEqual(actual[:-1], seed["instruction_retention"]["expected_calls"])
+        self.assertEqual(actual[-1], actual[0])
+        self.assertNotEqual(row["calls"][-1]["id"], row["calls"][0]["id"])
+        self.assertEqual((row["write_count"], row["read_count"]), (2, 3))
+
+    def test_instruction_batched_calls_control_preserves_flat_trace_and_exposes_two_call_response(self):
+        seed, row = self.instruction_case("instruction_batched_calls")
+        actual = [{key: call[key] for key in ("name", "args")} for call in row["calls"]]
+        self.assertEqual(actual, seed["instruction_retention"]["expected_calls"])
+        self.assertEqual((row["write_count"], row["read_count"]), (1, 3))
+        batched = [message for message in row["archive"]
+            if message["type"] == "ai" and len(message.get("tool_calls", [])) > 1]
+        self.assertEqual(len(batched), 1)
+        self.assertEqual([{key: call[key] for key in ("name", "args")} for call in batched[0]["tool_calls"]], actual[-2:])
+        call_ids = {call["id"] for call in batched[0]["tool_calls"]}
+        results = [message for message in row["original_tool_results"] if message.get("tool_call_id") in call_ids]
+        self.assertEqual({message["tool_call_id"] for message in results}, call_ids)
+        self.assertTrue(all(message["status"] == "success" for message in results))
+
+    def test_instruction_native_final_input_observer_preserves_guard_counter_and_payload(self):
+        import hashlib
+        import json
+        from langchain_core.messages import HumanMessage
+        from workbench_backend.inference.request_projection import project_context_payload
+        self.fixture.scenario = "instruction_retention"
+        task = "The exact accepted task"
+        run = SimpleNamespace(id="observed-final-input", input_message_id="accepted-task-id", task=task)
+        messages = [HumanMessage(content=task, id=run.input_message_id)]
+        payload = project_context_payload(messages)
+        native_payload = Mock(return_value=payload)
+        model = SimpleNamespace(_get_request_payload=native_payload,
+            _convert_input=lambda value: SimpleNamespace(to_messages=lambda: value))
+        self.fixture.record_input_count(run, payload, 741, basis="native")
+        self.fixture.observe_final_native_input(model, run)
+        self.assertIs(model._get_request_payload(messages), payload)
+        native_payload.assert_called_once_with(messages)
+        counted, captured = self.fixture.instruction_inputs
+        self.assertEqual(captured["boundary"], "final_request")
+        self.assertEqual(captured["payload_sha256"], counted["payload_sha256"])
+        self.assertEqual(captured["payload_sha256"], hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest())
+        self.assertEqual(captured["matching_count_ordinals"], [1])
+        self.assertEqual(counted["count_ordinal"], 1)
+        self.assertEqual(captured["basis"], counted["basis"])
+        self.assertEqual(captured["input_tokens"], 741)
+        self.assertEqual(captured["task_source_ids"], [run.input_message_id])
+        failure = RuntimeError("original guard rejected input")
+        native_payload.side_effect = failure
+        with self.assertRaises(RuntimeError) as caught:
+            model._get_request_payload(messages)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(len(self.fixture.instruction_inputs), 2)
+        with patch.object(self.fixture, "inference", "real"):
+            for control in ("instruction_missing_text", "instruction_changed_arguments", "instruction_repeated_action", "instruction_batched_calls"):
+                with self.assertRaisesRegex(Exception, "Instruction controls require deterministic inference"):
+                    self.fixture.configure({"negative_control": control})
+
+    def test_instruction_idless_direct_agent_records_native_authored_input_identity(self):
+        seed = self.seed("instruction_retention")
+        data = seed["instruction_retention"]
+        started = self.post("/v1/agent-runs", {"task": data["task"],
+            "thread_id": "native-idless-instruction-thread", "source_surface": "agent-run",
+            "deployment_id": seed["deployment_id"], "project_path": seed["project_path"],
+            "presented_tools": data["tools"], "approval_mode": "full_access",
+            "input_policy": {"tool_loading": "always"}, "per_request_overrides": data["request_settings"]})
+        def terminal():
+            response = self.client.get(f"/v1/agent-runs/{started['id']}", headers=self.headers)
+            value = response.json()
+            return value if value.get("status") in {"completed", "failed"} else None
+        completed = self.wait(terminal, "IDless direct Agent completion")
+        self.assertEqual(completed["status"], "completed", completed.get("error"))
+        self.assertIsNone(self.fixture.app.state.harness.get_run(started["id"]).input_message_id)
+        self.post("/v1/agent-interaction/threads", {"source_surface": "agent", "run_id": started["id"]})
+        row, = self.fixture.state()["instruction_retention"]["rows"]
+        self.assertTrue(row["accepted_input_id"])
+        original = next(message for message in row["archive"] if message["id"] == row["accepted_input_id"])
+        self.assertEqual(original["type"], "human")
+        self.assertEqual(original["content"], data["task"])
+        self.assertEqual(row["original_native_input"]["content"], data["task"])
+        self.assertTrue(all(record["input_message_id"] == row["accepted_input_id"] for record in row["work_inputs"]))
+        self.assertTrue(any(record["task_reference_input_ids"] == [row["accepted_input_id"]] for record in row["work_inputs"]))
+
+    def test_instruction_deterministic_final_input_includes_actual_bound_tools_and_summary_does_not(self):
+        from langchain_core.messages import AIMessage, HumanMessage
+        from langchain_core.tools import StructuredTool
+        from tests_ui.fixture import FixtureModel
+        from workbench_backend.inference.request_projection import project_context_payload
+        from workbench_backend.inference.telemetry import request_purpose
+        self.fixture.scenario = "instruction_retention"
+        run = SimpleNamespace(id="bound-tools-instruction-input", input_message_id="bound-input", task="The authored bound-tool task")
+        def bounded_read(file_path: str, offset: int = 0, limit: int = 500) -> str:
+            """Read an authored range."""
+            return "unused"
+        tools = [StructuredTool.from_function(bounded_read, name="read_file")]
+        model = FixtureModel(self.fixture, run, [AIMessage(content="Completed")])
+        self.assertIs(model.bind_tools(tools), model)
+        messages = [HumanMessage(content=run.task, id=run.input_message_id)]
+        self.fixture.record_input_count(run, project_context_payload(messages, tools=tools), 321, basis="estimated")
+        model._generate(messages)
+        work = self.fixture.instruction_inputs[-1]
+        self.assertTrue(work["tools_sha256"])
+        self.assertEqual(work["matching_count_ordinals"], [1])
+        self.assertEqual(work["input_tokens"], 321)
+        with request_purpose("summary"):
+            model._generate(messages)
+        summary = self.fixture.instruction_inputs[-1]
+        self.assertEqual(summary["purpose"], "summary")
+        self.assertIsNone(summary["tools_sha256"])
+
 
 if __name__ == "__main__":
     unittest.main()

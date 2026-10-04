@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { BackendHandle } from "./backend";
 import { navigateModels, openSurface, send, type SendingSurface } from "./sending";
 
-interface Message {
+export interface Message {
   id: string; type: string; content: string | Array<{ type: string; text?: string }>;
   tool_call_id?: string; name?: string; tool_calls?: Array<{ id: string; name: string; args: unknown }>;
 }
@@ -12,7 +12,7 @@ interface CompactionSeed {
   tools: string[]; request_settings: Record<string, unknown>; expected_read_count: number;
   write_path: string; write_content: string; tool_start_marker: string; tool_end_marker: string;
 }
-interface CompactionRow {
+export interface CompactionRow {
   thread_id: string; source_surface: string; run_id: string;
   archive: Message[]; canonical: Message[]; cutoff_index: number; native_summary_count: number;
   offload_readable: boolean; read_count: number; write_count: number;
@@ -27,10 +27,10 @@ interface CompactionState {
   faults: { stream_disconnects: number }; compaction: { rows: CompactionRow[] };
   pending_interrupts: Array<{ run_id: string }>;
 }
-const text = (message: Message) => typeof message.content === "string" ? message.content
+export const text = (message: Message) => typeof message.content === "string" ? message.content
   : message.content.filter(block => block.type === "text").map(block => block.text ?? "").join("");
 const transcript = (page: Page, surface: SendingSurface) => page.locator(surface === "Chat" ? ".persistent-chat .message-feed" : ".workflow-surface .message-feed");
-const messagesOnly = (messages: Message[]) => messages.map(message => ({
+export const messagesOnly = (messages: Message[]) => messages.map(message => ({
   id: message.id, type: message.type, content: message.content,
   ...(message.tool_calls?.length ? { tool_calls: message.tool_calls } : {}),
   ...(message.tool_call_id ? { tool_call_id: message.tool_call_id } : {}),
@@ -55,7 +55,7 @@ async function readPublic(page: Page, backend: BackendHandle, thread: string): P
 
 /** Exact public IDs/content and actual rendered source text are separate checks.
  * Tool results render under their matching assistant call, rather than a second bubble. */
-async function assertHistory(page: Page, backend: BackendHandle, surface: SendingSurface, row: CompactionRow, expected = row.archive) {
+export async function assertHistory(page: Page, backend: BackendHandle, surface: SendingSurface, row: CompactionRow, expected = row.archive) {
   const published = await readPublic(page, backend, row.thread_id);
   expect(messagesOnly(published)).toEqual(messagesOnly(expected));
   const bubbles = expected.filter(message => message.type !== "tool" && message.type !== "system"
@@ -83,7 +83,7 @@ async function assertHistory(page: Page, backend: BackendHandle, surface: Sendin
   };
 }
 
-async function openAttentionAgent(page: Page, runId: string, kind: "Completed" | "Approval needed" = "Completed"): Promise<void> {
+export async function openAttentionAgent(page: Page, runId: string, kind: "Completed" | "Approval needed" = "Completed"): Promise<void> {
   await page.getByRole("button", { name: /^Attention,/ }).click();
   const attention = page.getByRole("region", { name: "Attention", exact: true });
   await expect(attention).toBeVisible();
@@ -107,7 +107,7 @@ async function openAttentionAgent(page: Page, runId: string, kind: "Completed" |
   expect(opened, "Open this retained run through its actual Attention identity").toBe(true);
 }
 
-async function enableCompletionNotice(page: Page, backend: BackendHandle): Promise<void> {
+export async function enableCompletionNotice(page: Page, backend: BackendHandle): Promise<void> {
   // Completed Agent runs are offered by the existing opt-in notification owner.
   // This notice is opened once, after reload/restart; Open then dismisses it.
   await page.getByRole("button", { name: "Settings", exact: true }).click();
@@ -124,7 +124,7 @@ async function enableCompletionNotice(page: Page, backend: BackendHandle): Promi
   }).toBe(true);
 }
 
-function assertNativeReduction(row: CompactionRow, real: boolean) {
+export function assertNativeReduction(row: CompactionRow, real: boolean) {
   expect(row.native_input_capture_errors, "Counter observation must retain complete evidence").toEqual([]);
   const counts = [...row.native_input_counts].sort((left, right) => left.ordinal - right.ordinal);
   const reductions: Array<{ before: number; after: number; before_ordinal: number; summary_ordinal: number; after_ordinal: number;

@@ -371,7 +371,7 @@ def _compile_deep_agent(service, parts, run, http_sink, fixture_bank, *, inspect
         model=summary_model, backend=backend or StateBackend(),
         token_counter=token_counter_for_model(model, response_format=provider_format,
             message_projection=workbench_middleware.tool_image_messages_for_count,
-            request_message_projection=workbench_middleware.browser_messages_for_count,
+            request_message_projection=workbench_middleware.model_request_messages_for_count,
             extra_tools=structured_tools, tools_projection=count_tools_projection,
             request_settings={"tool_choice": "required"} if structured_tools else None),
     )

@@ -3,6 +3,7 @@ import { withNativeWorkbench } from "./ui/shared/native";
 import { acceptedLostResponse, assertRealFile, openSurface, reconnectAcceptedWork, send, type SendingState } from "./ui/shared/sending";
 import { parallelHelperApprovals, prepareParallelHelpers } from "./ui/shared/helperApprovals";
 import { compactionHistory } from "./ui/shared/compaction";
+import { instructionRetention } from "./ui/shared/instructionRetention";
 
 test("actual Windows real model sending survives lost responses and writes one file", async ({}, testInfo) => {
   expect(process.env.WORKBENCH_NATIVE_REAL_MODEL).toBe("required");
@@ -35,6 +36,29 @@ test("actual Windows real model sending survives lost responses and writes one f
     expect(identity.runtime_sha256).toMatch(/^[a-f0-9]{64}$/i); expect(identity.model_sha256).toMatch(/^[a-f0-9]{64}$/i);
     expect(identity.inference).toContain("no scripted model");
   });
+});
+
+test("actual Windows real model current task instructions preserve the original three-read workflow", async ({}, testInfo) => {
+  test.setTimeout(900_000);
+  expect(process.env.WORKBENCH_NATIVE_REAL_MODEL).toBe("required");
+  expect(process.env.WORKBENCH_HELPER_MODEL_PATH, "Use the existing local 4B model").toBeTruthy();
+  const previousModel = process.env.WORKBENCH_SMOKE_MODEL_PATH;
+  process.env.WORKBENCH_SMOKE_MODEL_PATH = process.env.WORKBENCH_HELPER_MODEL_PATH;
+  try {
+    for (const surface of ["Chat", "Agent run"] as const) {
+      await withNativeWorkbench(testInfo, "real", async (page, backend) => {
+        const identity = backend.seed.real_model_identity as { model_name: string; model_sha256: string; runtime_sha256: string; inference: string };
+        expect(identity.model_name).toMatch(/qwen3\.5.*4b/i);
+        expect(identity.model_sha256).toMatch(/^[a-f0-9]{64}$/i);
+        expect(identity.runtime_sha256).toMatch(/^[a-f0-9]{64}$/i);
+        expect(identity.inference).toContain("no scripted model");
+        await instructionRetention(page, backend, surface, testInfo, true);
+      }, { scenario: "instruction_retention" });
+    }
+  } finally {
+    if (previousModel === undefined) delete process.env.WORKBENCH_SMOKE_MODEL_PATH;
+    else process.env.WORKBENCH_SMOKE_MODEL_PATH = previousModel;
+  }
 });
 
 test("actual Windows real model parallel helpers approve one write and reject the other", async ({}, testInfo) => {
